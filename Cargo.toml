@@ -1,0 +1,72 @@
+[package]
+name = "ch32v3-hal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ch32v3 = { version = "0.1.7", features = [
+    "ch32v30x",
+    "rt",
+], path = "../ch32-rs-nightlies/ch32v3" }
+fugit = "0.3.7"
+
+qingke = { version = "0.1.5", path = "../qingke", features = [
+    "critical-section-impl",
+] }
+qingke-rt = { version = "0.1.5", path = "../qingke/qingke-rt", features = [
+    "highcode",
+] }
+embedded-hal = { version = "1.0.0", package = "embedded-hal" }
+critical-section = { version = "1.1.2", features = ["restore-state-u8"] }
+defmt = { version = "0.3.5", optional = true }
+embassy-sync = { version = "0.5.0", optional = true }
+embassy-futures = { version = "0.1.1", optional = true }
+aligned = "0.4.1"
+embassy-time-driver = { version = "0.1.0", features = [
+    "tick-hz-1_000_000",
+], optional = true }
+embassy-time = { version = "0.3.0", features = [
+    "tick-hz-1_000_000",
+], optional = true }
+nb = "1.1.0"
+embedded-hal-nb = "1.0.0"
+bitfield = "0.14.0"
+heapless = "0.8.0"
+
+
+[features]
+default = ["ch32v307vct6", "embassy"]
+embassy = [
+    "dep:embassy-sync",
+    "dep:embassy-futures",
+    "dep:embassy-time-driver",
+    "dep:embassy-time",
+]
+
+# 128KB FLASH, 32KB RAM
+ch32v305fbP6 = []
+ch32v305gbu6 = []
+ch32v305rbt6 = []
+# 256KB FLASH, 64KB RAM
+ch32v307rct6 = []
+ch32v307wcu6 = []
+ch32v307vct6 = []
+
+[profile.release]
+strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
+lto = true
+opt-level = "z" # Optimize for size.
+
+[dev-dependencies]
+panic-halt = "0.2.0"
+embassy-executor = { version = "0.5.0", features = [
+    "nightly",
+    "integrated-timers",
+    "arch-riscv32",
+    "executor-thread",
+] }
+display-interface-spi = "0.5.0"
+mipidsi = "0.7.1"
+embedded-graphics = "0.8.1"
+
+embedded-hal-bus = "0.1.0"
