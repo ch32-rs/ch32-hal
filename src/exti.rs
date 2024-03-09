@@ -47,19 +47,6 @@ impl Iterator for BitIter {
     }
 }
 
-#[no_mangle]
-unsafe extern "C" fn EXTI7_0() {
-    on_irq();
-}
-#[no_mangle]
-unsafe extern "C" fn EXTI15_8() {
-    on_irq();
-}
-#[no_mangle]
-unsafe extern "C" fn EXTI25_16() {
-    on_irq();
-}
-
 /// EXTI input driver
 pub struct ExtiInput<'d> {
     pin: Input<'d>,
@@ -223,37 +210,75 @@ macro_rules! impl_exti {
     };
 }
 
-impl_exti!(EXTI0, 0);
-impl_exti!(EXTI1, 1);
-impl_exti!(EXTI2, 2);
-impl_exti!(EXTI3, 3);
-impl_exti!(EXTI4, 4);
-impl_exti!(EXTI5, 5);
-impl_exti!(EXTI6, 6);
-impl_exti!(EXTI7, 7);
-impl_exti!(EXTI8, 8);
-impl_exti!(EXTI9, 9);
-impl_exti!(EXTI10, 10);
-impl_exti!(EXTI11, 11);
-impl_exti!(EXTI12, 12);
-impl_exti!(EXTI13, 13);
-impl_exti!(EXTI14, 14);
-impl_exti!(EXTI15, 15);
+mod _exti_8lines {
+    use super::*;
 
-// TODO: make this optional
-impl_exti!(EXTI16, 16);
-impl_exti!(EXTI17, 17);
-impl_exti!(EXTI18, 18);
-impl_exti!(EXTI19, 19);
-impl_exti!(EXTI20, 20);
-impl_exti!(EXTI21, 21);
-impl_exti!(EXTI22, 22);
-impl_exti!(EXTI23, 23);
+    impl_exti!(EXTI0, 0);
+    impl_exti!(EXTI1, 1);
+    impl_exti!(EXTI2, 2);
+    impl_exti!(EXTI3, 3);
+    impl_exti!(EXTI4, 4);
+    impl_exti!(EXTI5, 5);
+    impl_exti!(EXTI6, 6);
+    impl_exti!(EXTI7, 7);
+}
 
+#[cfg(not(any(ch32x0, ch643)))]
+mod _exti_16lines {
+    use super::*;
 
+    impl_exti!(EXTI8, 8);
+    impl_exti!(EXTI9, 9);
+    impl_exti!(EXTI10, 10);
+    impl_exti!(EXTI11, 11);
+    impl_exti!(EXTI12, 12);
+    impl_exti!(EXTI13, 13);
+    impl_exti!(EXTI14, 14);
+    impl_exti!(EXTI15, 15);
+}
+
+#[cfg(any(ch32x0, ch643))]
+mod _exti_24lines {
+    use super::*;
+
+    impl_exti!(EXTI16, 16);
+    impl_exti!(EXTI17, 17);
+    impl_exti!(EXTI18, 18);
+    impl_exti!(EXTI19, 19);
+    impl_exti!(EXTI20, 20);
+    impl_exti!(EXTI21, 21);
+    impl_exti!(EXTI22, 22);
+    impl_exti!(EXTI23, 23);
+}
+
+/*
+EXTI0
+EXTI1
+EXTI2
+EXTI3
+EXTI4
+EXTI9_5
+EXTI15_10
+EXTI7_0
+EXTI15_8
+EXTI25_16
+*/
+
+#[no_mangle]
+unsafe extern "C" fn EXTI7_0() {
+    on_irq();
+}
+#[no_mangle]
+unsafe extern "C" fn EXTI15_8() {
+    on_irq();
+}
+#[no_mangle]
+unsafe extern "C" fn EXTI25_16() {
+    on_irq();
+}
 
 /// safety: must be called only once
-#[cfg(feature = "gpio_x0")]
+#[cfg(gpio_x0)]
 pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     use crate::pac::Interrupt;
 
@@ -262,7 +287,7 @@ pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     qingke::pfic::enable_interrupt(Interrupt::EXTI25_16 as u8);
 }
 
-#[cfg(not(feature = "gpio_x0"))]
+#[cfg(gpio_v3)]
 pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     use crate::pac::Interrupt;
 
