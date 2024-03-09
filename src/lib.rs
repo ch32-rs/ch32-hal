@@ -1,44 +1,57 @@
 #![no_std]
+#![allow(static_mut_refs)]
 
-pub use ch32v3::ch32v30x as pac;
+pub use ch32_metapac as pac;
 
-// pub mod rt;
+mod traits;
 
 pub mod rcc;
 
 pub mod debug;
-pub mod delay;
+//pub mod delay;
 
 mod peripheral;
 pub use peripheral::*;
-pub use peripherals::Peripherals;
+//pub use _peripherals::Peripherals;
 pub mod interrupt;
-pub mod peripherals;
-pub mod prelude;
+// pub mod _peripherals;
+//pub mod prelude;
 
-pub mod dma;
+pub use crate::_generated::{peripherals, Peripherals};
 
-pub mod adc;
+//pub mod dma;
+
+//pub mod adc;
 pub mod exti;
 pub mod gpio;
-pub mod i2c;
-pub mod pioc;
+//pub mod i2c;
+//pub mod pioc;
 pub mod signature;
-pub mod spi;
-pub mod timer;
-pub mod usart;
-
-mod traits;
+//pub mod spi;
+//pub mod timer;
+//pub mod usart;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;
+
+// This must go last, so that it sees all the impl_foo! macros defined earlier.
+pub(crate) mod _generated {
+    #![allow(dead_code)]
+    #![allow(unused_imports)]
+    #![allow(non_snake_case)]
+    #![allow(missing_docs)]
+
+    include!("./_peripherals.rs");
+
+    include!(concat!(env!("OUT_DIR"), "/_generated.rs"));
+}
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Config {}
 
 pub fn init(config: Config) -> Peripherals {
-    rcc::init();
+    // rcc::init();
 
     unsafe {
         gpio::init();
@@ -48,7 +61,7 @@ pub fn init(config: Config) -> Peripherals {
         exti::init(cs);
     });
 
-    peripherals::Peripherals::take()
+    Peripherals::take()
 }
 
 #[macro_export]

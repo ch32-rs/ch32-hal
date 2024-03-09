@@ -1,6 +1,6 @@
 pub use qingke::interrupt::Priority;
 
-use crate::pac::interrupt::Interrupt as InterruptEnum;
+use crate::pac::Interrupt as InterruptEnum;
 
 mod sealed {
     pub trait Interrupt {}

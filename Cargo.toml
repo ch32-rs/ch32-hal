@@ -4,10 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ch32v3 = { version = "0.1.7", features = [
-    "ch32v30x",
+ch32-metapac = { version = "0.0.3", features = [
+    "memory-x",
     "rt",
-], path = "../ch32-rs-nightlies/ch32v3" }
+], path = "../ch32-data/build/ch32-metapac" }
+
+
+#ch32v3 = { version = "0.1.7", features = [
+#    "ch32v30x",
+#    "rt",
+#], path = "../ch32-rs-nightlies/ch32v3" }
 fugit = "0.3.7"
 
 qingke = { version = "0.1.5", path = "../qingke", features = [
@@ -17,7 +23,7 @@ qingke-rt = { version = "0.1.5", path = "../qingke/qingke-rt", features = [
     "highcode",
 ] }
 embedded-hal = { version = "1.0.0", package = "embedded-hal" }
-critical-section = { version = "1.1.2", features = ["restore-state-u8"] }
+critical-section = { version = "1.1.2" }
 defmt = { version = "0.3.5", optional = true }
 embassy-sync = { version = "0.5.0", optional = true }
 embassy-futures = { version = "0.1.1", optional = true }
@@ -33,24 +39,13 @@ embedded-hal-nb = "1.0.0"
 bitfield = "0.14.0"
 heapless = "0.8.0"
 
+[build-dependencies]
+ch32-metapac = { version = "0.0.3", default-features = false, features = [
+    "metadata",
+], path = "../ch32-data/build/ch32-metapac" }
+proc-macro2 = "1.0.78"
+quote = "1.0"
 
-[features]
-default = ["ch32v307vct6", "embassy"]
-embassy = [
-    "dep:embassy-sync",
-    "dep:embassy-futures",
-    "dep:embassy-time-driver",
-    "dep:embassy-time",
-]
-
-# 128KB FLASH, 32KB RAM
-ch32v305fbP6 = []
-ch32v305gbu6 = []
-ch32v305rbt6 = []
-# 256KB FLASH, 64KB RAM
-ch32v307rct6 = []
-ch32v307wcu6 = []
-ch32v307vct6 = []
 
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
@@ -70,3 +65,24 @@ mipidsi = "0.7.1"
 embedded-graphics = "0.8.1"
 
 embedded-hal-bus = "0.1.0"
+
+
+[features]
+default = ["ch32v307vct6", "embassy"]
+embassy = [
+    "dep:embassy-sync",
+    "dep:embassy-futures",
+    "dep:embassy-time-driver",
+    "dep:embassy-time",
+]
+
+ch32v307vct6 = ["ch32-metapac/ch32v307vct6"]
+ch32x033f8p6 = ["ch32-metapac/ch32x033f8p6"]
+ch32x034f8p6 = ["ch32-metapac/ch32x034f8p6"]
+ch32x034f8u6 = ["ch32-metapac/ch32x034f8u6"]
+ch32x035c8t6 = ["ch32-metapac/ch32x035c8t6"]
+ch32x035f7p6 = ["ch32-metapac/ch32x035f7p6"]
+ch32x035f8u6 = ["ch32-metapac/ch32x035f8u6"]
+ch32x035g8r6 = ["ch32-metapac/ch32x035g8r6"]
+ch32x035g8u6 = ["ch32-metapac/ch32x035g8u6"]
+ch32x035r8t6 = ["ch32-metapac/ch32x035r8t6"]

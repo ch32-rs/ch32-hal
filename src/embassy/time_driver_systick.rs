@@ -6,6 +6,7 @@ use core::{mem, ptr};
 
 use critical_section::{CriticalSection, Mutex};
 use embassy_time_driver::{AlarmHandle, Driver};
+use pac::systick::vals;
 use qingke::interrupt::Priority;
 use qingke_rt::highcode;
 
@@ -49,7 +50,7 @@ embassy_time_driver::time_driver_impl!(static DRIVER: SystickDriver = SystickDri
 
 impl SystickDriver {
     fn init(&'static self) {
-        let rb = unsafe { &*pac::SYSTICK::PTR };
+        let rb = &crate::pac::SYSTICK;
         let hclk = crate::rcc::clocks().hclk.to_Hz() as u64;
 
         let cnt_per_second = hclk; // not HCLK/8
@@ -58,31 +59,26 @@ impl SystickDriver {
         self.period.store(cnt_per_tick as u32, Ordering::Relaxed);
 
         // UNDOCUMENTED:  Avoid initial interrupt
-        rb.cmp().write(|w| unsafe { w.bits(u64::MAX - 1) });
+        rb.cmp().write(|w| *w = u64::MAX - 1);
         critical_section::with(|_| {
-            rb.sr().write(|w| w.cntif().bit(false)); // clear
+            rb.sr().write(|w| w.set_cntif(false)); // clear
 
             // Configration: Upcount, No reload, HCLK as clock source
-            rb.ctlr().modify(|_, w| {
-                w.init()
-                    .set_bit()
-                    .mode()
-                    .upcount()
-                    .stre()
-                    .clear_bit()
-                    .stclk()
-                    .hclk()
-                    .ste()
-                    .set_bit()
+            rb.ctlr().modify(|w| {
+                w.set_init(true);
+                w.set_mode(vals::Mode::UPCOUNT);
+                w.set_stre(false);
+                w.set_stclk(vals::Stclk::HCLK);
+                w.set_ste(true);
             });
         })
     }
 
     #[inline(always)]
     fn on_interrupt(&self) {
-        let rb = unsafe { &*pac::SYSTICK::PTR };
-        rb.ctlr().modify(|_, w| w.stie().clear_bit()); // disable interrupt
-        rb.sr().write(|w| w.cntif().bit(false)); // clear IF
+        let rb = &crate::pac::SYSTICK;
+        rb.ctlr().modify(|w| w.set_stie(false)); // disable interrupt
+        rb.sr().write(|w| w.set_cntif(false)); // clear IF
 
         critical_section::with(|cs| {
             self.trigger_alarm(cs);
@@ -111,8 +107,8 @@ impl SystickDriver {
 
 impl Driver for SystickDriver {
     fn now(&self) -> u64 {
-        let rb = unsafe { &*pac::SYSTICK::PTR };
-        rb.cnt().read().bits() / (self.period.load(Ordering::Relaxed) as u64)
+        let rb = &crate::pac::SYSTICK;
+        rb.cnt().read() / (self.period.load(Ordering::Relaxed) as u64)
     }
     unsafe fn allocate_alarm(&self) -> Option<AlarmHandle> {
         let id = self.alarm_count.fetch_update(Ordering::AcqRel, Ordering::Acquire, |x| {
@@ -138,30 +134,27 @@ impl Driver for SystickDriver {
     }
     fn set_alarm(&self, alarm: AlarmHandle, timestamp: u64) -> bool {
         critical_section::with(|cs| {
+            let rb = &crate::pac::SYSTICK;
+
             let _n = alarm.id();
 
             let alarm = self.get_alarm(cs, alarm);
             alarm.timestamp.set(timestamp);
 
-            let rb = unsafe { &*pac::SYSTICK::PTR };
-
             let t = self.now();
             if timestamp <= t {
                 // If alarm timestamp has passed the alarm will not fire.
                 // Disarm the alarm and return `false` to indicate that.
-                rb.ctlr().modify(|_, w| w.stie().clear_bit());
+                rb.ctlr().modify(|w| w.set_stie(false));
 
                 alarm.timestamp.set(u64::MAX);
 
                 return false;
             }
 
-            let safe_timestamp = timestamp
-                .saturating_add(1)
-                .saturating_mul(self.period.load(Ordering::Relaxed) as u64);
-
-            rb.cmp().write(|w| unsafe { w.bits(safe_timestamp) });
-            rb.ctlr().modify(|_, w| w.stie().set_bit());
+            let safe_timestamp = timestamp.saturating_add(1) * (self.period.load(Ordering::Relaxed) as u64);
+            rb.cmp().write_value(safe_timestamp);
+            rb.ctlr().modify(|w| w.set_stie(true));
 
             true
         })

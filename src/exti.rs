@@ -5,22 +5,22 @@ use core::task::{Context, Poll};
 
 use embassy_sync::waitqueue::AtomicWaker;
 
-use crate::gpio::{AnyPin, Input, Level, Pin as GpioPin};
-use crate::{impl_peripheral, pac, peripherals, Peripheral};
+use crate::gpio::{AnyPin, Input, Level, Pin as GpioPin, Pull};
+use crate::{impl_peripheral, into_ref, peripherals, Peripheral};
 
 const EXTI_COUNT: usize = 24;
 const NEW_AW: AtomicWaker = AtomicWaker::new();
 static EXTI_WAKERS: [AtomicWaker; EXTI_COUNT] = [NEW_AW; EXTI_COUNT];
 
 pub unsafe fn on_irq() {
-    let exti = unsafe { &*pac::EXTI::PTR };
+    let exti = &crate::pac::EXTI;
 
-    let bits = exti.intfr().read().bits();
+    let bits = exti.intfr().read();
 
-    // We don't handle or change any EXTI lines above 16.
-    let bits = bits & 0x0000FFFF;
+    // We don't handle or change any EXTI lines above 24.
+    let bits = bits.0 & 0x00FFFFFF;
 
-    exti.intenr().modify(|r, w| unsafe { w.bits(r.bits() & !bits) });
+    exti.intenr().modify(|w| w.0 = w.0 & !bits);
 
     // Wake the tasks
     for pin in BitIter(bits) {
@@ -28,7 +28,7 @@ pub unsafe fn on_irq() {
     }
 
     // Clear pending - Clears the EXTI's line pending bits.
-    exti.intfr().write(|w| w.bits(bits)); // write 1 to clear
+    exti.intfr().write(|w| w.0 = bits);
 }
 
 struct BitIter(u32);
@@ -48,44 +48,38 @@ impl Iterator for BitIter {
 }
 
 #[no_mangle]
-unsafe extern "C" fn EXTI0() {
+unsafe extern "C" fn EXTI7_0() {
     on_irq();
 }
 #[no_mangle]
-unsafe extern "C" fn EXTI1() {
+unsafe extern "C" fn EXTI15_8() {
     on_irq();
 }
 #[no_mangle]
-unsafe extern "C" fn EXTI2() {
-    on_irq();
-}
-#[no_mangle]
-unsafe extern "C" fn EXTI3() {
-    on_irq();
-}
-#[no_mangle]
-unsafe extern "C" fn EXTI4() {
-    on_irq();
-}
-#[no_mangle]
-unsafe extern "C" fn EXTI9_5() {
-    on_irq();
-}
-#[no_mangle]
-unsafe extern "C" fn EXTI15_10() {
+unsafe extern "C" fn EXTI25_16() {
     on_irq();
 }
 
 /// EXTI input driver
-pub struct ExtiInput<'d, T: GpioPin> {
-    pin: Input<'d, T>,
+pub struct ExtiInput<'d> {
+    pin: Input<'d>,
 }
 
-impl<'d, T: GpioPin> Unpin for ExtiInput<'d, T> {}
+impl<'d> Unpin for ExtiInput<'d> {}
 
-impl<'d, T: GpioPin> ExtiInput<'d, T> {
-    pub fn new(pin: Input<'d, T>, _ch: impl Peripheral<P = T::ExtiChannel> + 'd) -> Self {
-        Self { pin }
+impl<'d> ExtiInput<'d> {
+    pub fn new<T: GpioPin>(
+        pin: impl Peripheral<P = T> + 'd,
+        ch: impl Peripheral<P = T::ExtiChannel> + 'd,
+        pull: Pull,
+    ) -> Self {
+        into_ref!(pin, ch);
+        // Needed if using AnyPin+AnyChannel.
+        assert_eq!(pin.pin(), ch.number());
+
+        Self {
+            pin: Input::new(pin, pull),
+        }
     }
 
     pub fn is_high(&self) -> bool {
@@ -139,29 +133,25 @@ struct ExtiInputFuture<'a> {
 impl<'a> ExtiInputFuture<'a> {
     fn new(pin: u8, port: u8, rising: bool, falling: bool) -> Self {
         critical_section::with(|_| {
-            let exti = unsafe { &*pac::EXTI::PTR };
-            let afio = unsafe { &*pac::AFIO::PTR };
+            let exti = &crate::pac::EXTI;
+            let afio = &crate::pac::AFIO;
 
             let port = port as u32;
 
             // AFIO_EXTICRx
             if pin < 16 {
                 let shift = pin * 2;
-                afio.exticr1()
-                    .modify(|r, w| unsafe { w.bits(r.bits() & !(0b11 << shift) | port << shift) });
+                afio.exticr1().modify(|w| w.0 = w.0 & !(0b11 << shift) | port << shift);
             } else {
                 let shift = (pin - 16) * 2;
-                afio.exticr2()
-                    .modify(|r, w| unsafe { w.bits(r.bits() & !(0b11 << shift) | port << shift) });
+                afio.exticr2().modify(|w| w.0 = w.0 & !(0b11 << shift) | port << shift);
             }
 
             // See-also: 7.4.3
-            exti.intenr().modify(|r, w| unsafe { w.bits(r.bits() | 1 << pin) });
+            exti.intenr().modify(|w| w.0 = w.0 | 1 << pin);
 
-            exti.rtenr()
-                .modify(|r, w| unsafe { w.bits(r.bits() | (rising as u32) << pin) });
-            exti.ftenr()
-                .modify(|r, w| unsafe { w.bits(r.bits() | (falling as u32) << pin) });
+            exti.rtenr().modify(|w| w.0 = w.0 | (rising as u32) << pin);
+            exti.ftenr().modify(|w| w.0 = w.0 | (falling as u32) << pin);
         });
 
         Self {
@@ -174,9 +164,9 @@ impl<'a> ExtiInputFuture<'a> {
 impl<'a> Drop for ExtiInputFuture<'a> {
     fn drop(&mut self) {
         critical_section::with(|_| {
+            let exti = &crate::pac::EXTI;
             let pin = self.pin;
-            let exti = unsafe { &*pac::EXTI::PTR };
-            exti.intenr().modify(|r, w| unsafe { w.bits(r.bits() & !(1 << pin)) });
+            exti.intenr().modify(|w| w.0 = w.0 & !(1 << pin));
         });
     }
 }
@@ -185,11 +175,11 @@ impl<'a> Future for ExtiInputFuture<'a> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let exti = unsafe { &*pac::EXTI::PTR };
+        let exti = &crate::pac::EXTI;
 
         EXTI_WAKERS[self.pin as usize].register(cx.waker());
 
-        if exti.intenr().read().bits() & (1 << self.pin) == 0 {
+        if exti.intenr().read().mr(self.pin as _) == false {
             // intenr cleared by on_irq, then we can assume it is triggered
             Poll::Ready(())
         } else {
@@ -203,7 +193,7 @@ pub(crate) mod sealed {
 }
 
 pub trait Channel: sealed::Channel + Sized {
-    fn number(&self) -> usize;
+    fn number(&self) -> u8;
     fn degrade(self) -> AnyChannel {
         AnyChannel {
             number: self.number() as u8,
@@ -217,8 +207,8 @@ pub struct AnyChannel {
 impl_peripheral!(AnyChannel);
 impl sealed::Channel for AnyChannel {}
 impl Channel for AnyChannel {
-    fn number(&self) -> usize {
-        self.number as usize
+    fn number(&self) -> u8 {
+        self.number
     }
 }
 
@@ -226,8 +216,8 @@ macro_rules! impl_exti {
     ($type:ident, $number:expr) => {
         impl sealed::Channel for peripherals::$type {}
         impl Channel for peripherals::$type {
-            fn number(&self) -> usize {
-                $number as usize
+            fn number(&self) -> u8 {
+                $number
             }
         }
     };
@@ -250,9 +240,32 @@ impl_exti!(EXTI13, 13);
 impl_exti!(EXTI14, 14);
 impl_exti!(EXTI15, 15);
 
+// TODO: make this optional
+impl_exti!(EXTI16, 16);
+impl_exti!(EXTI17, 17);
+impl_exti!(EXTI18, 18);
+impl_exti!(EXTI19, 19);
+impl_exti!(EXTI20, 20);
+impl_exti!(EXTI21, 21);
+impl_exti!(EXTI22, 22);
+impl_exti!(EXTI23, 23);
+
+
+
 /// safety: must be called only once
+#[cfg(feature = "gpio_x0")]
 pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     use crate::pac::Interrupt;
+
+    qingke::pfic::enable_interrupt(Interrupt::EXTI7_0 as u8);
+    qingke::pfic::enable_interrupt(Interrupt::EXTI15_8 as u8);
+    qingke::pfic::enable_interrupt(Interrupt::EXTI25_16 as u8);
+}
+
+#[cfg(not(feature = "gpio_x0"))]
+pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
+    use crate::pac::Interrupt;
+
     qingke::pfic::enable_interrupt(Interrupt::EXTI0 as u8);
     qingke::pfic::enable_interrupt(Interrupt::EXTI1 as u8);
     qingke::pfic::enable_interrupt(Interrupt::EXTI2 as u8);
