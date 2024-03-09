@@ -3,6 +3,9 @@
 
 pub use ch32_metapac as pac;
 
+// This must go FIRST so that all the other modules see its macros.
+include!(concat!(env!("OUT_DIR"), "/_macros.rs"));
+
 mod traits;
 
 pub mod rcc;
@@ -41,7 +44,7 @@ pub(crate) mod _generated {
     #![allow(non_snake_case)]
     #![allow(missing_docs)]
 
-    include!("./_peripherals.rs");
+    //    include!("./_peripherals.rs");
 
     include!(concat!(env!("OUT_DIR"), "/_generated.rs"));
 }
@@ -54,7 +57,7 @@ pub fn init(config: Config) -> Peripherals {
     // rcc::init();
 
     unsafe {
-        gpio::init();
+        init_gpio();
     }
 
     ::critical_section::with(|cs| unsafe {

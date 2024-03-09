@@ -8,7 +8,7 @@ use hal::gpio::{AnyPin, Level, Output, Pin};
 use hal::println;
 use {ch32v3_hal as hal, panic_halt as _};
 
-#[embassy_executor::task(pool_size = 2)]
+#[embassy_executor::task(pool_size = 3)]
 async fn blink(pin: AnyPin, interval_ms: u64) {
     let mut led = Output::new(pin, Level::Low, Default::default());
 
@@ -29,7 +29,7 @@ async fn main(spawner: Spawner) -> ! {
     // GPIO
     spawner.spawn(blink(p.PA15.degrade(), 1000)).unwrap();
     spawner.spawn(blink(p.PB4.degrade(), 100)).unwrap();
-
+    spawner.spawn(blink(p.PB8.degrade(), 100)).unwrap();
     loop {
         Timer::after_millis(2000).await;
         println!("tick in main");

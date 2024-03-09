@@ -68,7 +68,8 @@ embedded-hal-bus = "0.1.0"
 
 
 [features]
-default = ["ch32v307vct6", "embassy"]
+# default = ["ch32v307vct6", "embassy"]
+default = ["ch32v203g6u6", "embassy"]
 embassy = [
     "dep:embassy-sync",
     "dep:embassy-futures",
@@ -76,6 +77,7 @@ embassy = [
     "dep:embassy-time",
 ]
 
+ch32v203g6u6 = ["ch32-metapac/ch32v203g6u6"]
 ch32v307vct6 = ["ch32-metapac/ch32v307vct6"]
 ch32x033f8p6 = ["ch32-metapac/ch32x033f8p6"]
 ch32x034f8p6 = ["ch32-metapac/ch32x034f8p6"]

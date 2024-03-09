@@ -4,8 +4,15 @@
 
 use qingke::riscv;
 
+#[cfg(not(ch32v0))]
 const DEBUG_DATA0_ADDRESS: *mut u32 = 0xE000_0380 as *mut u32;
+#[cfg(not(ch32v0))]
 const DEBUG_DATA1_ADDRESS: *mut u32 = 0xE000_0384 as *mut u32;
+
+#[cfg(ch32v0)]
+const DEBUG_DATA0_ADDRESS: *mut u32 = 0xE00000F4 as *mut u32;
+#[cfg(ch32v0)]
+const DEBUG_DATA1_ADDRESS: *mut u32 = 0xE00000F8 as *mut u32;
 
 pub struct SDIPrint;
 
