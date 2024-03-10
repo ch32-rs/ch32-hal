@@ -6,8 +6,8 @@ pub use ch32_metapac as pac;
 // This must go FIRST so that all the other modules see its macros.
 include!(concat!(env!("OUT_DIR"), "/_macros.rs"));
 
-mod traits;
 pub mod time;
+mod traits;
 
 pub mod rcc;
 
@@ -48,14 +48,15 @@ pub(crate) mod _generated {
     include!(concat!(env!("OUT_DIR"), "/_generated.rs"));
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Default)]
 pub struct Config {
     pub clock: rcc::Config,
 }
 
 pub fn init(config: Config) -> Peripherals {
-    rcc::init(config.clock);
+    unsafe {
+        rcc::init(config.clock);
+    }
 
     ::critical_section::with(|cs| unsafe {
         gpio::init(cs);

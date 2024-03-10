@@ -34,7 +34,6 @@ pub fn clocks() -> &'static Clocks {
 
 pub mod v3;
 
-
 #[cfg(not(ch32v208))]
 pub const LSI_FREQ: Hertz = Hertz(40_000);
 #[cfg(ch32v208)]
@@ -52,8 +51,6 @@ pub struct LseConfig {
     pub mode: LseMode,
 }
 
-
-
 pub enum RtcClockSource {
     LSE,
     LSI,
@@ -66,7 +63,6 @@ pub struct LsConfig {
     pub lsi: bool,
     pub lse: Option<LseConfig>,
 }
-
 
 impl LsConfig {
     pub const fn default_lse() -> Self {
@@ -109,9 +105,8 @@ impl LsConfig {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
-pub struct Config {}
+pub use v3::Config;
 
-pub fn init(_config: Config) {
-
+pub unsafe fn init(config: Config) {
+    v3::init(config)
 }
