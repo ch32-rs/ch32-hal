@@ -13,6 +13,8 @@
 
 use core::convert::Infallible;
 
+use critical_section::CriticalSection;
+
 use self::sealed::Pin as _;
 use crate::{exti, impl_peripheral, into_ref, pac, peripherals, Peripheral, PeripheralRef};
 
@@ -21,11 +23,11 @@ use crate::{exti, impl_peripheral, into_ref, pac, peripherals, Peripheral, Perip
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Speed {
     /// 10MHz
-    #[default]
     Medium = 0b01,
     /// 2MHz
     Low = 0b10,
     /// 50MHz
+    #[default]
     High = 0b11,
 }
 
@@ -107,7 +109,10 @@ impl<'d> Flex<'d> {
     /// Put the pin into input mode.
     #[inline]
     pub fn set_as_input(&mut self, pull: Pull) {
-        critical_section::with(|_| self.pin.set_cnf_mode(pull.to_cnf(), 0b00));
+        critical_section::with(|_| {
+            self.pin.set_cnf_mode(pull.to_cnf(), 0b00);
+            self.pin.set_pull(pull);
+        });
     }
 
     /// Put the pin into output mode.
@@ -134,12 +139,12 @@ impl<'d> Flex<'d> {
 
     #[inline]
     pub fn is_high(&self) -> bool {
-        !self.is_low()
+        self.pin.block().indr().read().idr(self.pin.pin() as usize)
     }
 
     #[inline]
     pub fn is_low(&self) -> bool {
-        self.pin.block().indr().read().idr(1 << self.pin.pin())
+        !self.is_high()
     }
 
     #[inline]
@@ -149,13 +154,13 @@ impl<'d> Flex<'d> {
 
     #[inline]
     pub fn is_set_high(&self) -> bool {
-        !self.is_set_low()
+        self.pin.block().outdr().read().odr(self.pin.pin() as usize)
     }
 
     /// Is the output pin set as low?
     #[inline]
     pub fn is_set_low(&self) -> bool {
-        self.pin.block().outdr().read().odr(1 << self.pin.pin())
+        !self.is_set_high()
     }
 
     /// What level output is set to
@@ -566,7 +571,7 @@ impl AnyPin {
 
     #[inline]
     fn _port(&self) -> u8 {
-        self.pin_port / 16
+        self.pin_port / 32
     }
 }
 
@@ -602,6 +607,15 @@ foreach_pin!(
         }
     };
 );
+
+/// Enable the GPIO peripheral clock.
+
+pub(crate) unsafe fn init(_cs: CriticalSection) {
+    #[cfg(afio)]
+    <crate::peripherals::AFIO as crate::peripheral::sealed::RccPeripheral>::enable_and_reset_with_cs(_cs);
+
+    crate::_generated::init_gpio();
+}
 
 // eh impls
 
