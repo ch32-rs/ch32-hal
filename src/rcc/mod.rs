@@ -31,3 +31,12 @@ pub struct Clocks {
 pub fn clocks() -> &'static Clocks {
     unsafe { &CLOCKS }
 }
+
+// mod v3;
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+pub struct Config {}
+
+pub fn init(_config: Config) {
+
+}
