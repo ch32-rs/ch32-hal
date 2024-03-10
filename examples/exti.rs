@@ -4,10 +4,10 @@
 
 use ch32v3_hal as hal;
 use embassy_executor::Spawner;
-use embassy_time::{Delay, Duration, Instant, Timer};
+use embassy_time::{Duration, Timer};
 use hal::exti::ExtiInput;
-use hal::gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed};
-use hal::{peripherals, println};
+use hal::gpio::{AnyPin, Level, Output, Pin, Pull, Speed};
+use hal::println;
 
 #[embassy_executor::task]
 async fn blink(pin: AnyPin) {
@@ -29,11 +29,8 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut ei = ExtiInput::new(p.PB3, p.EXTI3, Pull::Up); // YD-CH32V307VCT6 USER button
 
-    //ei.wait_for_falling_edge().await;
-
-    ei.wait_for_any_edge().await;
-
-    println!("await ok");
+    println!("Press USER button to start the blink task");
+    ei.wait_for_falling_edge().await;
 
     // GPIO
     spawner.spawn(blink(p.PA15.degrade())).unwrap();
