@@ -32,7 +32,7 @@ pub mod gpio;
 pub mod signature;
 //pub mod spi;
 //pub mod timer;
-//pub mod usart;
+// pub mod usart;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;
@@ -49,10 +49,12 @@ pub(crate) mod _generated {
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct Config {}
+pub struct Config {
+    pub clock: rcc::Config,
+}
 
 pub fn init(config: Config) -> Peripherals {
-    // rcc::init();
+    rcc::init(config.clock);
 
     ::critical_section::with(|cs| unsafe {
         gpio::init(cs);

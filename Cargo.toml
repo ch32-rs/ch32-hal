@@ -9,10 +9,7 @@ ch32-metapac = { version = "0.0.3", features = [
     "rt",
 ], path = "../ch32-data/build/ch32-metapac" }
 
-#ch32v3 = { version = "0.1.7", features = [
-#    "ch32v30x",
-#    "rt",
-#], path = "../ch32-rs-nightlies/ch32v3" }
+
 fugit = "0.3.7"
 
 qingke = { version = "0.1.5", path = "../qingke", features = [

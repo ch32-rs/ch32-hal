@@ -6,7 +6,7 @@ use core::task::{Context, Poll};
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::gpio::{AnyPin, Input, Level, Pin as GpioPin, Pull};
-use crate::{impl_peripheral, into_ref, peripherals, println, Peripheral};
+use crate::{impl_peripheral, into_ref, peripherals, Peripheral};
 
 const EXTI_COUNT: usize = 24;
 const NEW_AW: AtomicWaker = AtomicWaker::new();
