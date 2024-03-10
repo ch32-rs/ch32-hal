@@ -3,14 +3,14 @@ name = "ch32-hal"
 version = "0.1.0"
 edition = "2021"
 authors = ["Andelf <andelf@gmail.com>"]
-repository = "https://github.com/andelf/ch32-hal"
+repository = "https://github.com/ch32-rs/ch32-hal"
 documentation = "https://docs.rs/ch32-hal"
-homepage = "https://github.com/andelf/ch32-hal"
-categories = []
-description = ""
-keywords = []
+homepage = "https://github.com/andech32-rslf/ch32-hal"
+categories = ["embedded", "no-std", "hardware-support"]
+description = "HAL for the WCH's RISC-V family of microcontrollers"
+keywords = ["ch32v", "risc-v", "hal"]
 readme = "README.md"
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 # ch32-metapac = { version = "0.0.4", features = ["memory-x", "rt"] }
@@ -46,13 +46,14 @@ proc-macro2 = "1.0.78"
 quote = "1.0"
 
 [features]
-default = ["embassy"]
+default = ["ch32v307vct6", "embassy"]
 embassy = [
     "dep:embassy-sync",
     "dep:embassy-futures",
     "dep:embassy-time-driver",
     "dep:embassy-time",
 ]
+defmt = ["dep:defmt"]
 
 ch32v203g6u6 = ["ch32-metapac/ch32v203g6u6"]
 ch32v307vct6 = ["ch32-metapac/ch32v307vct6"]
