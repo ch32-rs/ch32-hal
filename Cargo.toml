@@ -4,20 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ch32-metapac = { version = "0.0.3", features = [
-    "memory-x",
-    "rt",
-], path = "../ch32-data/build/ch32-metapac" }
-
+ch32-metapac = { version = "0.0.4", features = ["memory-x", "rt"] }
 
 fugit = "0.3.7"
 
-qingke = { version = "0.1.5", path = "../qingke", features = [
-    "critical-section-impl",
-] }
-qingke-rt = { version = "0.1.5", path = "../qingke/qingke-rt", features = [
-    "highcode",
-] }
+qingke = { version = "0.1.5", features = ["critical-section-impl"] }
+qingke-rt = { version = "0.1.5", features = ["highcode"] }
+#qingke-rt = { version = "0.1.5", path = "../qingke/qingke-rt", features = [
+#    "highcode",
+#] }
 embedded-hal = { version = "1.0.0", package = "embedded-hal" }
 critical-section = { version = "1.1.2" }
 defmt = { version = "0.3.5", optional = true }
@@ -36,9 +31,9 @@ bitfield = "0.14.0"
 heapless = "0.8.0"
 
 [build-dependencies]
-ch32-metapac = { version = "0.0.3", default-features = false, features = [
+ch32-metapac = { version = "0.0.4", default-features = false, features = [
     "metadata",
-], path = "../ch32-data/build/ch32-metapac" }
+] }
 proc-macro2 = "1.0.78"
 quote = "1.0"
 
