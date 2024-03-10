@@ -51,7 +51,7 @@ embassy_time_driver::time_driver_impl!(static DRIVER: SystickDriver = SystickDri
 impl SystickDriver {
     fn init(&'static self) {
         let rb = &crate::pac::SYSTICK;
-        let hclk = crate::rcc::clocks().hclk.to_Hz() as u64;
+        let hclk = crate::rcc::clocks().hclk.0 as u64;
 
         let cnt_per_second = hclk; // not HCLK/8
         let cnt_per_tick = cnt_per_second / embassy_time_driver::TICK_HZ;

@@ -7,6 +7,7 @@ pub use ch32_metapac as pac;
 include!(concat!(env!("OUT_DIR"), "/_macros.rs"));
 
 mod traits;
+pub mod time;
 
 pub mod rcc;
 

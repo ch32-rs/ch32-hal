@@ -22,7 +22,6 @@ async fn blink(pin: AnyPin, interval_ms: u64) {
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(spawner: Spawner) -> ! {
-    hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
     hal::embassy::init();
 
@@ -32,6 +31,5 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(blink(p.PB8.degrade(), 100)).unwrap();
     loop {
         Timer::after_millis(2000).await;
-        println!("tick in main");
     }
 }

@@ -1,12 +1,12 @@
-use fugit::HertzU32 as Hertz;
+use crate::time::Hertz;
 
-// const HSI_FREQUENCY: Hertz = Hertz::from_raw(48_000_000);
+// const HSI_FREQUENCY: Hertz = Hertz(48_000_000);
 
-const LSI_FREQUENCY: Hertz = Hertz::from_raw(40_000);
+// const LSI_FREQUENCY: Hertz = Hertz(40_000);
 // CH32FV208 use 32.768KHz LSI
 
 // Power on default: HPRE = 0b0101 = Div6
-const DEFAULT_FREQUENCY: Hertz = Hertz::from_raw(8_000_000);
+const DEFAULT_FREQUENCY: Hertz = Hertz(8_000_000);
 
 static mut CLOCKS: Clocks = Clocks {
     // Power on default
@@ -32,7 +32,82 @@ pub fn clocks() -> &'static Clocks {
     unsafe { &CLOCKS }
 }
 
-// mod v3;
+pub mod v3;
+
+
+#[cfg(not(ch32v208))]
+pub const LSI_FREQ: Hertz = Hertz(40_000);
+#[cfg(ch32v208)]
+pub const LSI_FREQ: Hertz = Hertz(32_768);
+
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub enum LseMode {
+    Oscillator, // (LseDrive),
+    Bypass,
+}
+
+pub struct LseConfig {
+    pub frequency: Hertz,
+    pub mode: LseMode,
+}
+
+
+
+pub enum RtcClockSource {
+    LSE,
+    LSI,
+    HSE_DIV_128,
+    DISABLE,
+}
+
+pub struct LsConfig {
+    pub rtc: RtcClockSource,
+    pub lsi: bool,
+    pub lse: Option<LseConfig>,
+}
+
+
+impl LsConfig {
+    pub const fn default_lse() -> Self {
+        Self {
+            rtc: RtcClockSource::LSE,
+            lse: Some(LseConfig {
+                frequency: Hertz(32_768),
+                mode: LseMode::Oscillator, // (LseDrive::MediumHigh),
+            }),
+            lsi: false,
+        }
+    }
+
+    pub const fn default_lsi() -> Self {
+        Self {
+            rtc: RtcClockSource::LSI,
+            lsi: true,
+            lse: None,
+        }
+    }
+
+    pub const fn off() -> Self {
+        Self {
+            rtc: RtcClockSource::DISABLE,
+            lsi: false,
+            lse: None,
+        }
+    }
+}
+
+impl Default for LsConfig {
+    fn default() -> Self {
+        Self::default_lsi()
+    }
+}
+
+impl LsConfig {
+    pub(crate) fn init(&self) -> Option<Hertz> {
+        todo!()
+    }
+}
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct Config {}
