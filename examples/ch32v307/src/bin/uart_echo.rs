@@ -7,7 +7,7 @@ use embassy_time::{Duration, Timer};
 use hal::gpio::{AnyPin, Level, Output, Pin};
 use hal::usart::{Uart, UartTx};
 use hal::{println, usart};
-use {ch32v3_hal as hal, panic_halt as _};
+use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(spawner: Spawner) -> ! {

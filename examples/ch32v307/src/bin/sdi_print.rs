@@ -4,7 +4,7 @@
 //! SDI debug print
 
 use hal::println;
-use {ch32v3_hal as hal, panic_halt as _};
+use {ch32_hal as hal, panic_halt as _};
 
 #[qingke_rt::entry]
 fn main() -> ! {

@@ -8,7 +8,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use hal::gpio::{Input, Level, Output, Pull, Speed};
 use hal::println;
-use {ch32v3_hal as hal, panic_halt as _};
+use {ch32_hal as hal, panic_halt as _};
 
 static BLINK_INTERVAL: AtomicU32 = AtomicU32::new(500);
 

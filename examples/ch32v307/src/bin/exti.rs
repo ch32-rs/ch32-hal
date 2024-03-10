@@ -2,7 +2,7 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use ch32v3_hal as hal;
+use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use hal::exti::ExtiInput;

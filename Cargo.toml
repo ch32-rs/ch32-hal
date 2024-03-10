@@ -1,7 +1,16 @@
 [package]
-name = "ch32v3-hal"
+name = "ch32-hal"
 version = "0.1.0"
 edition = "2021"
+authors = ["Andelf <andelf@gmail.com>"]
+repository = "https://github.com/andelf/ch32-hal"
+documentation = "https://docs.rs/ch32-hal"
+homepage = "https://github.com/andelf/ch32-hal"
+categories = []
+description = ""
+keywords = []
+readme = "README.md"
+license = "MIT/Apache-2.0"
 
 [dependencies]
 # ch32-metapac = { version = "0.0.4", features = ["memory-x", "rt"] }
@@ -20,7 +29,6 @@ critical-section = { version = "1.1.2" }
 defmt = { version = "0.3.5", optional = true }
 embassy-sync = { version = "0.5.0", optional = true }
 embassy-futures = { version = "0.1.1", optional = true }
-aligned = "0.4.1"
 embassy-time-driver = { version = "0.1.0", features = [
     "tick-hz-1_000_000",
 ], optional = true }
@@ -29,8 +37,6 @@ embassy-time = { version = "0.3.0", features = [
 ], optional = true }
 nb = "1.1.0"
 embedded-hal-nb = "1.0.0"
-bitfield = "0.14.0"
-heapless = "0.8.0"
 
 [build-dependencies]
 ch32-metapac = { version = "0.0.4", default-features = false, features = [
@@ -39,28 +45,8 @@ ch32-metapac = { version = "0.0.4", default-features = false, features = [
 proc-macro2 = "1.0.78"
 quote = "1.0"
 
-[profile.release]
-strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
-lto = true
-opt-level = "z" # Optimize for size.
-
-[dev-dependencies]
-panic-halt = "0.2.0"
-embassy-executor = { version = "0.5.0", features = [
-    "nightly",
-    "integrated-timers",
-    "arch-riscv32",
-    "executor-thread",
-] }
-display-interface-spi = "0.5.0"
-mipidsi = "0.7.1"
-embedded-graphics = "0.8.1"
-
-embedded-hal-bus = "0.1.0"
-
 [features]
-default = ["ch32v307vct6", "embassy"]
-# default = ["ch32v203g6u6", "embassy"]
+default = ["embassy"]
 embassy = [
     "dep:embassy-sync",
     "dep:embassy-futures",

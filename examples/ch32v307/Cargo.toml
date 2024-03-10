@@ -1,0 +1,32 @@
+[package]
+name = "ch32v307-examples"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+embassy-executor = { version = "0.5.0", features = [
+    "nightly",
+    "integrated-timers",
+    "arch-riscv32",
+    "executor-thread",
+] }
+
+qingke-rt = { version = "0.1.5", features = ["highcode"] }
+
+ch32-hal = { path = "../../", features = ["ch32v307vct6"] }
+
+panic-halt = "0.2.0"
+
+embassy-time = { version = "0.3.0", features = ["tick-hz-1_000_000"] }
+
+display-interface-spi = "0.5.0"
+mipidsi = "0.7.1"
+embedded-graphics = "0.8.1"
+embedded-hal-bus = "0.1.0"
+qingke = { version = "0.1.7", features = ["critical-section-impl"] }
+
+
+[profile.release]
+strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
+lto = true
+opt-level = "z" # Optimize for size.
