@@ -44,8 +44,6 @@ pub(crate) mod _generated {
     #![allow(non_snake_case)]
     #![allow(missing_docs)]
 
-    //    include!("./_peripherals.rs");
-
     include!(concat!(env!("OUT_DIR"), "/_generated.rs"));
 }
 
@@ -56,9 +54,9 @@ pub struct Config {}
 pub fn init(config: Config) -> Peripherals {
     // rcc::init();
 
-    unsafe {
-        init_gpio();
-    }
+    ::critical_section::with(|cs| unsafe {
+        gpio::init(cs);
+    });
 
     ::critical_section::with(|cs| unsafe {
         exti::init(cs);

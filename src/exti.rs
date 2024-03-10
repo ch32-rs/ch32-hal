@@ -6,7 +6,7 @@ use core::task::{Context, Poll};
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::gpio::{AnyPin, Input, Level, Pin as GpioPin, Pull};
-use crate::{impl_peripheral, into_ref, peripherals, Peripheral};
+use crate::{impl_peripheral, into_ref, peripherals, println, Peripheral};
 
 const EXTI_COUNT: usize = 24;
 const NEW_AW: AtomicWaker = AtomicWaker::new();
@@ -123,22 +123,26 @@ impl<'a> ExtiInputFuture<'a> {
             let exti = &crate::pac::EXTI;
             let afio = &crate::pac::AFIO;
 
-            let port = port as u32;
+            let port = port as u8;
+            let pin = pin as usize;
 
-            // AFIO_EXTICRx
-            if pin < 16 {
-                let shift = pin * 2;
-                afio.exticr1().modify(|w| w.0 = w.0 & !(0b11 << shift) | port << shift);
-            } else {
-                let shift = (pin - 16) * 2;
-                afio.exticr2().modify(|w| w.0 = w.0 & !(0b11 << shift) | port << shift);
+            #[cfg(afio_v3)]
+            {
+                // AFIO_EXTICRx
+                // stride: 4, len: 4, 16 lines
+                afio.exticr(pin / 4).modify(|w| w.set_exti(pin % 4, port));
+            }
+            #[cfg(not(afio_v3))]
+            {
+                // stride: 2, len: 15, 24 lines
+                afio.exticr(pin / 16).modify(|w| w.set_exti(pin % 16, port));
             }
 
             // See-also: 7.4.3
-            exti.intenr().modify(|w| w.0 = w.0 | 1 << pin);
+            exti.intenr().modify(|w| w.set_mr(pin, true)); // enable interrupt
 
-            exti.rtenr().modify(|w| w.0 = w.0 | (rising as u32) << pin);
-            exti.ftenr().modify(|w| w.0 = w.0 | (falling as u32) << pin);
+            exti.rtenr().modify(|w| w.set_tr(pin, rising));
+            exti.ftenr().modify(|w| w.set_tr(pin, falling));
         });
 
         Self {
@@ -264,23 +268,23 @@ EXTI15_8
 EXTI25_16
 */
 
-#[no_mangle]
-unsafe extern "C" fn EXTI7_0() {
-    on_irq();
-}
-#[no_mangle]
-unsafe extern "C" fn EXTI15_8() {
-    on_irq();
-}
-#[no_mangle]
-unsafe extern "C" fn EXTI25_16() {
-    on_irq();
-}
-
 /// safety: must be called only once
 #[cfg(gpio_x0)]
 pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     use crate::pac::Interrupt;
+
+    #[no_mangle]
+    unsafe extern "C" fn EXTI7_0() {
+        on_irq();
+    }
+    #[no_mangle]
+    unsafe extern "C" fn EXTI15_8() {
+        on_irq();
+    }
+    #[no_mangle]
+    unsafe extern "C" fn EXTI25_16() {
+        on_irq();
+    }
 
     qingke::pfic::enable_interrupt(Interrupt::EXTI7_0 as u8);
     qingke::pfic::enable_interrupt(Interrupt::EXTI15_8 as u8);
@@ -290,6 +294,37 @@ pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
 #[cfg(gpio_v3)]
 pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     use crate::pac::Interrupt;
+
+    crate::println!("exti init ok");
+
+    #[no_mangle]
+    unsafe extern "C" fn EXTI0() {
+        on_irq();
+    }
+    #[no_mangle]
+    unsafe extern "C" fn EXTI1() {
+        on_irq();
+    }
+    #[no_mangle]
+    unsafe extern "C" fn EXTI2() {
+        on_irq();
+    }
+    #[no_mangle]
+    unsafe extern "C" fn EXTI3() {
+        on_irq();
+    }
+    #[no_mangle]
+    unsafe extern "C" fn EXTI4() {
+        on_irq();
+    }
+    #[no_mangle]
+    unsafe extern "C" fn EXTI9_5() {
+        on_irq();
+    }
+    #[no_mangle]
+    unsafe extern "C" fn EXTI15_10() {
+        on_irq();
+    }
 
     qingke::pfic::enable_interrupt(Interrupt::EXTI0 as u8);
     qingke::pfic::enable_interrupt(Interrupt::EXTI1 as u8);

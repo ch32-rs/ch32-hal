@@ -6,12 +6,12 @@ use ch32v3_hal as hal;
 use embassy_executor::Spawner;
 use embassy_time::{Delay, Duration, Instant, Timer};
 use hal::exti::ExtiInput;
-use hal::gpio::{AnyPin, Input, Level, Output, Pin, Pull};
+use hal::gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed};
 use hal::{peripherals, println};
 
 #[embassy_executor::task]
 async fn blink(pin: AnyPin) {
-    let mut led = Output::new(pin, Level::Low);
+    let mut led = Output::new(pin, Level::Low, Speed::High);
 
     loop {
         led.set_high();
@@ -27,19 +27,16 @@ async fn main(spawner: Spawner) -> ! {
     let p = hal::init(Default::default());
     hal::embassy::init();
 
-    println!("embassy init ok");
+    let mut ei = ExtiInput::new(p.PB3, p.EXTI3, Pull::Up); // YD-CH32V307VCT6 USER button
 
-    let input = Input::new(p.PA0, Pull::Up);
-    let mut ei = ExtiInput::new(input, p.EXTI0);
+    //ei.wait_for_falling_edge().await;
 
-    println!("exti init ok");
-
-    ei.wait_for_falling_edge().await;
+    ei.wait_for_any_edge().await;
 
     println!("await ok");
 
     // GPIO
-    spawner.spawn(blink(p.PA4.degrade())).unwrap();
+    spawner.spawn(blink(p.PA15.degrade())).unwrap();
 
     loop {
         Timer::after(Duration::from_millis(1000)).await;
