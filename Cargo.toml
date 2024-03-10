@@ -9,7 +9,6 @@ ch32-metapac = { version = "0.0.3", features = [
     "rt",
 ], path = "../ch32-data/build/ch32-metapac" }
 
-
 #ch32v3 = { version = "0.1.7", features = [
 #    "ch32v30x",
 #    "rt",
@@ -68,8 +67,8 @@ embedded-hal-bus = "0.1.0"
 
 
 [features]
-# default = ["ch32v307vct6", "embassy"]
-default = ["ch32v203g6u6", "embassy"]
+default = ["ch32v307vct6", "embassy"]
+# default = ["ch32v203g6u6", "embassy"]
 embassy = [
     "dep:embassy-sync",
     "dep:embassy-futures",

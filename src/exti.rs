@@ -295,8 +295,6 @@ pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
 pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     use crate::pac::Interrupt;
 
-    crate::println!("exti init ok");
-
     #[no_mangle]
     unsafe extern "C" fn EXTI0() {
         on_irq();

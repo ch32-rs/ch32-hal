@@ -210,7 +210,6 @@ fn main() {
 
     // ========
     // Generate fns to enable GPIO, DMA in RCC
-
     for kind in ["dma", "gpio"] {
         let mut gg = TokenStream::new();
 
