@@ -46,7 +46,7 @@ proc-macro2 = "1.0.78"
 quote = "1.0"
 
 [features]
-default = ["ch32v307vct6", "embassy"]
+default = ["embassy"]
 embassy = [
     "dep:embassy-sync",
     "dep:embassy-futures",

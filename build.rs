@@ -33,6 +33,21 @@ fn main() {
     };
     println!("cargo:rustc-cfg={}", chip_family);
 
+    // Add Qingke IP core version cfg flags on the fly
+    // qingke_v2, qingke_v3, qingke_v4
+    let qingke_ver = match &*chip_family {
+        "ch32v0" => "qingke_v2",
+        "ch32v1" => "qingke_v3",
+        "ch32v2" => "qingke_v4", // v4b or v4c
+        "ch32v3" => "qingke_v4", // v4f
+        "ch32x0" => "qingke_v4", // v4c
+        "ch32l1" => "qingke_v4", // v4c
+        "ch641" => "qingke_v2",
+        "ch643" => "qingke_v4", // v4c
+        _ => "qingke_v4",
+    };
+    println!("cargo:rustc-cfg={}", qingke_ver);
+
     // Add CH32 specific cfg flags: D6, D8, D8C, D8W
     // D(Density), 6(2^6), 8(2^8)
     // C(Connectivity / Interconnectivity)
