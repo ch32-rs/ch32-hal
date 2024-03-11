@@ -32,6 +32,7 @@ pub fn clocks() -> &'static Clocks {
     unsafe { &CLOCKS }
 }
 
+#[cfg(any(ch32v2, ch32v3, ch32f2))]
 pub mod v3;
 
 #[cfg(not(ch32v208))]

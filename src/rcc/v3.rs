@@ -2,7 +2,7 @@
 use core::ops;
 
 use crate::pac::rcc::vals::{
-    Hpre as AHBPrescaler, PllMul, PllxMul, Ppre as APBPrescaler, Prediv as PllPreDiv, Sw as Sysclk,
+    Hpre as AHBPrescaler, PllMul, PllxMul, Ppre as APBPrescaler, Prediv as PllPreDiv, Sw as Sysclk, Usbpre,
 };
 use crate::pac::{EXTEND, FLASH, RCC};
 use crate::time::Hertz;
@@ -42,7 +42,8 @@ pub enum PllSource {
     // HSE or HSE div (2 or Prediv)
     HSE,
 
-    // PLL2, PREDIV1SRC
+    // PLL2 or not, selected by PREDIV1SRC
+    #[cfg(d8c)]
     PLL2,
 }
 
@@ -132,6 +133,7 @@ impl Default for Config {
     }
 }
 
+#[allow(unused_variables)]
 pub(crate) unsafe fn init(config: Config) {
     // Configure HSI
     while !RCC.ctlr().read().hsirdy() {}
@@ -152,6 +154,15 @@ pub(crate) unsafe fn init(config: Config) {
     };
 
     // Configure PLLs.
+    //
+    // TODO: Configure PLL2 and PLL3
+    #[cfg(d8c)]
+    let (pll2_clk, pll3_clk): (Option<Hertz>, Option<Hertz>) = if let Some(_pllx) = config.pllx {
+        todo!()
+    } else {
+        (None, None)
+    };
+    // Configure PLL
     let pll_clk = {
         // Disable PLL
         RCC.ctlr().modify(|w| w.set_pllon(false));
@@ -159,25 +170,77 @@ pub(crate) unsafe fn init(config: Config) {
             let pll_src = match config.pll_src {
                 PllSource::HSI => hsi.unwrap(),
                 PllSource::HSE => hse.unwrap(),
+                #[cfg(d8c)]
                 PllSource::PLL2 => todo!(),
             };
             let in_freq = pll_src / pll.prediv;
             let vco_freq = in_freq * pll.mul;
 
-            RCC.cfgr0().modify(|w| {
-                w.set_pllsrc(config.pll_src == PllSource::HSE || config.pll_src == PllSource::PLL2);
-                w.set_pllmul(pll.mul);
-            });
-            RCC.cfgr2().modify(|w| {
-                w.set_prediv1(pll.prediv);
-                w.set_prediv1src(config.pll_src == PllSource::PLL2);
-            });
-            if config.pll_src == PllSource::HSI {
-                match pll.prediv {
-                    PllPreDiv::DIV1 => EXTEND.ctr().modify(|w| w.set_pll_hsi_pre(true)), // set no divided
-                    PllPreDiv::DIV2 => EXTEND.ctr().modify(|w| w.set_pll_hsi_pre(false)),
-                    _ => panic!("invalid combination"),
+            // Usb clock must be 48MHz
+            let usb_pre = calc_usbpre(vco_freq);
+
+            RCC.cfgr0().modify(|w| w.set_pllmul(pll.mul));
+
+            match config.pll_src {
+                PllSource::HSI => {
+                    RCC.cfgr0().modify(|w| w.set_pllsrc(false)); // use HSI or HSI/2
+                    match pll.prediv {
+                        PllPreDiv::DIV1 => EXTEND.ctr().modify(|w| w.set_pll_hsi_pre(true)), // set no divided
+                        PllPreDiv::DIV2 => EXTEND.ctr().modify(|w| w.set_pll_hsi_pre(false)),
+                        _ => panic!(
+                            "If HSI is selected as the PLL source (PLLSRC), only dividers DIV1 and DIV2 are available"
+                        ),
+                    }
                 }
+                #[cfg(d8c)]
+                PllSource::HSE => {
+                    RCC.cfgr0().modify(|w| w.set_pllsrc(true));
+                    RCC.cfgr2().modify(|w| {
+                        w.set_prediv1src(false); // HSE
+                        w.set_prediv1(pll.prediv);
+                    });
+                }
+                #[cfg(d8c)]
+                PllSource::PLL2 => {
+                    RCC.cfgr0().modify(|w| w.set_pllsrc(true));
+                    RCC.cfgr2().modify(|w| {
+                        w.set_prediv1src(true); // PLL2
+                        w.set_prediv1(pll.prediv);
+                    });
+                }
+                // FV203/V303
+                #[cfg(any(d6, d8))]
+                PllSource::HSE => {
+                    RCC.cfgr0().modify(|w| w.set_pllsrc(true));
+                    match pll.prediv {
+                        PllPreDiv::DIV1 => RCC.cfgr0().modify(|w| w.set_pllxtpre(false)),
+                        PllPreDiv::DIV2 => RCC.cfgr0().modify(|w| w.set_pllxtpre(true)),
+                        _ => panic!(),
+                    }
+                }
+                // CH32V20x_D8
+                #[cfg(all(ch32v2, d8))]
+                PllSource::HSE => {
+                    RCC.cfgr0().modify(|w| w.set_pllsrc(true));
+                    match pll.prediv {
+                        PllPreDiv::DIV4 => RCC.cfgr0().modify(|w| w.set_pllxtpre(false)),
+                        PllPreDiv::DIV8 => RCC.cfgr0().modify(|w| w.set_pllxtpre(true)),
+                        _ => panic!(),
+                    }
+                }
+                // CH32F20x_D8W、、CH32V20x_D8W
+                #[cfg(d8w)]
+                PllSource::HSE => {
+                    RCC.cfgr0().modify(|w| w.set_pllsrc(true));
+                    match pll.prediv {
+                        // When using USB and ETH together, the HSE frequency must be 32MHz
+                        PllPreDiv::DIV2 if usb_pre == Some(Usbpre::DIV5) => {}
+                        PllPreDiv::DIV4 => RCC.cfgr0().modify(|w| w.set_pllxtpre(false)),
+                        PllPreDiv::DIV8 => RCC.cfgr0().modify(|w| w.set_pllxtpre(true)),
+                        _ => panic!(),
+                    }
+                }
+                _ => unreachable!(),
             }
 
             // Enable PLL
@@ -221,13 +284,25 @@ pub(crate) unsafe fn init(config: Config) {
     super::CLOCKS.pclk2 = pclk2;
 }
 
-pub fn calc_pclk<D>(hclk: Hertz, ppre: D) -> (Hertz, Hertz)
+fn calc_pclk<D>(hclk: Hertz, ppre: D) -> (Hertz, Hertz)
 where
     Hertz: ops::Div<D, Output = Hertz>,
 {
     let pclk = hclk / ppre;
     let pclk_tim = if hclk == pclk { pclk } else { pclk * 2u32 };
     (pclk, pclk_tim)
+}
+
+fn calc_usbpre(pllclk: Hertz) -> Option<Usbpre> {
+    // output 48MHz
+    match pllclk.0 {
+        48_000_000 => Some(Usbpre::DIV1),
+        96_000_000 => Some(Usbpre::DIV2),
+        144_000_000 => Some(Usbpre::DIV3),
+        #[cfg(d8w)]
+        240_000_000 => None,
+        _ => None,
+    }
 }
 
 impl ops::Div<PllPreDiv> for Hertz {
@@ -244,8 +319,9 @@ impl ops::Mul<PllMul> for Hertz {
             PllMul::MUL15 => Hertz(self.0 * 15),
             PllMul::MUL16 => Hertz(self.0 * 16),
             PllMul::MUL18 => Hertz(self.0 * 18),
+            #[cfg(d8c)]
             PllMul::MUL6_5 => Hertz(self.0 * 13 / 2),
-            // PllMul::MUL2 => Hertz(self.0 * 2),
+            // All the others are covered by this case
             _ => Hertz(self.0 * (rhs as u32 + 2)),
         }
     }

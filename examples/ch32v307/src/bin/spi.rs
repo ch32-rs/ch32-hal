@@ -2,6 +2,7 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
+use ch32_hal::dma::NoDma;
 use ch32_hal::spi;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -9,7 +10,6 @@ use fugit::RateExtU32;
 use hal::gpio::{AnyPin, Level, Output, Pin};
 use hal::println;
 use {ch32_hal as hal, panic_halt as _};
-use ch32_hal::dma::NoDma;
 
 #[embassy_executor::task]
 async fn blink(pin: AnyPin) {

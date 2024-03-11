@@ -4,7 +4,8 @@
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use hal::{gpio::{AnyPin, Level, Output, Pin}, println};
+use hal::gpio::{AnyPin, Level, Output, Pin};
+use hal::println;
 use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::task(pool_size = 3)]
@@ -22,11 +23,16 @@ async fn blink(pin: AnyPin, interval_ms: u64) {
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
-    let mut config = hal::Config {
+    let config = hal::Config {
         clock: hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE,
     };
     let p = hal::init(config);
     hal::embassy::init();
+
+    println!("SYS:   {}Hz", hal::rcc::clocks().sysclk.0);
+    println!("HCLK:  {}Hz", hal::rcc::clocks().hclk.0);
+    println!("PCLK1: {}Hz", hal::rcc::clocks().pclk1.0);
+    println!("PCLK2: {}Hz", hal::rcc::clocks().pclk2.0);
 
     // GPIO
     spawner.spawn(blink(p.PA15.degrade(), 1000)).unwrap();
