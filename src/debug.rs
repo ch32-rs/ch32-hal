@@ -4,15 +4,17 @@
 
 use qingke::riscv;
 
-#[cfg(not(ch32v0))]
-const DEBUG_DATA0_ADDRESS: *mut u32 = 0xE000_0380 as *mut u32;
-#[cfg(not(ch32v0))]
-const DEBUG_DATA1_ADDRESS: *mut u32 = 0xE000_0384 as *mut u32;
+#[cfg(any(qingke_v3, qingke_v4))]
+mod regs {
+    pub const DEBUG_DATA0_ADDRESS: *mut u32 = 0xE000_0380 as *mut u32;
+    pub const DEBUG_DATA1_ADDRESS: *mut u32 = 0xE000_0384 as *mut u32;
+}
 
-#[cfg(ch32v0)]
-const DEBUG_DATA0_ADDRESS: *mut u32 = 0xE00000F4 as *mut u32;
-#[cfg(ch32v0)]
-const DEBUG_DATA1_ADDRESS: *mut u32 = 0xE00000F8 as *mut u32;
+#[cfg(qingke_v2)]
+mod regs {
+    pub const DEBUG_DATA0_ADDRESS: *mut u32 = 0xE00000F4 as *mut u32;
+    pub const DEBUG_DATA1_ADDRESS: *mut u32 = 0xE00000F8 as *mut u32;
+}
 
 pub struct SDIPrint;
 
@@ -20,14 +22,14 @@ impl SDIPrint {
     pub fn enable() {
         unsafe {
             // Enable SDI print
-            core::ptr::write_volatile(DEBUG_DATA0_ADDRESS, 0);
+            core::ptr::write_volatile(regs::DEBUG_DATA0_ADDRESS, 0);
             riscv::asm::delay(100000);
         }
     }
 
     #[inline]
     fn is_busy() -> bool {
-        unsafe { core::ptr::read_volatile(DEBUG_DATA0_ADDRESS) != 0 }
+        unsafe { core::ptr::read_volatile(regs::DEBUG_DATA0_ADDRESS) != 0 }
     }
 }
 
@@ -45,8 +47,8 @@ impl core::fmt::Write for SDIPrint {
             while SDIPrint::is_busy() {}
 
             unsafe {
-                core::ptr::write_volatile(DEBUG_DATA1_ADDRESS, data1);
-                core::ptr::write_volatile(DEBUG_DATA0_ADDRESS, data0);
+                core::ptr::write_volatile(regs::DEBUG_DATA1_ADDRESS, data1);
+                core::ptr::write_volatile(regs::DEBUG_DATA0_ADDRESS, data0);
             }
         }
 
