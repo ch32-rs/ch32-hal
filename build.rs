@@ -31,9 +31,38 @@ fn main() {
         // On of ch643, ch641
         chip_name[..4].to_string()
     };
+    println!("cargo:rustc-cfg={}", chip_family);
+
+    // Add CH32 specific cfg flags: D6, D8, D8C, D8W
+    // D(Density), 6(2^6), 8(2^8)
+    // C(Connectivity / Interconnectivity)
+    // W(Wireless)
+    if chip_name.starts_with("ch32") {
+        let density = match chip_name.as_bytes()[9] {
+            b'6' | b'7' | b'8' => Some("D6"),
+            b'b' | b'c' => Some("D8"),
+            _ => None, // undocumented, leave it empty
+        };
+        let subtype = match &chip_name[6..8] {
+            "03" => Some(""),  // General purpose
+            "05" => Some("C"), // Connectivity
+            "07" => Some("C"), // Interconnectivity
+            "08" => Some("W"), // Wireless
+            _ => None,         // 35: Connectivity of USBPD
+        };
+        match (density, subtype) {
+            (Some(density), Some(subtype)) => {
+                println!(
+                    "cargo:rustc-cfg={}{}",
+                    density.to_ascii_lowercase(),
+                    subtype.to_ascii_lowercase()
+                );
+            }
+            _ => (),
+        }
+    }
 
     let mut gpio_lines = 16;
-    println!("cargo:rustc-cfg={}", chip_family);
     match &*chip_family {
         "ch32v0" => {
             gpio_lines = 8;
