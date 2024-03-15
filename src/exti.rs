@@ -126,13 +126,19 @@ impl<'a> ExtiInputFuture<'a> {
             let port = port as u8;
             let pin = pin as usize;
 
+            #[cfg(afio_v0)]
+            {
+                // AFIO_EXTICR
+                // stride: 2, len: 15, 8 lines
+                afio.exticr().modify(|w| w.set_exti(pin, port));
+            }
             #[cfg(afio_v3)]
             {
                 // AFIO_EXTICRx
                 // stride: 4, len: 4, 16 lines
                 afio.exticr(pin / 4).modify(|w| w.set_exti(pin % 4, port));
             }
-            #[cfg(not(afio_v3))]
+            #[cfg(afio_x0)]
             {
                 // stride: 2, len: 15, 24 lines
                 afio.exticr(pin / 16).modify(|w| w.set_exti(pin % 16, port));
@@ -227,7 +233,7 @@ mod _exti_8lines {
     impl_exti!(EXTI7, 7);
 }
 
-#[cfg(not(any(ch32x0, ch643)))]
+#[cfg(not(any(ch32v0, ch643)))]
 mod _exti_16lines {
     use super::*;
 
@@ -331,4 +337,16 @@ pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     qingke::pfic::enable_interrupt(Interrupt::EXTI4 as u8);
     qingke::pfic::enable_interrupt(Interrupt::EXTI9_5 as u8);
     qingke::pfic::enable_interrupt(Interrupt::EXTI15_10 as u8);
+}
+
+#[cfg(gpio_v0)]
+pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
+    use crate::pac::Interrupt;
+
+    #[no_mangle]
+    unsafe extern "C" fn EXTI7_0() {
+        on_irq();
+    }
+
+    qingke::pfic::enable_interrupt(Interrupt::EXTI7_0 as u8);
 }

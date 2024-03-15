@@ -17,6 +17,7 @@ pub mod debug;
 mod peripheral;
 pub use peripheral::*;
 //pub use _peripherals::Peripherals;
+#[cfg(not(ch32v0))]
 pub mod interrupt;
 // pub mod _peripherals;
 //pub mod prelude;

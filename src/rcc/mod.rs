@@ -32,8 +32,15 @@ pub fn clocks() -> &'static Clocks {
     unsafe { &CLOCKS }
 }
 
+#[cfg(ch32v0)]
+mod v0;
 #[cfg(any(ch32v2, ch32v3, ch32f2))]
-pub mod v3;
+mod v3;
+
+#[cfg(ch32v0)]
+pub use v0::Config;
+#[cfg(any(ch32v2, ch32v3))]
+pub use v3::Config;
 
 #[cfg(not(ch32v208))]
 pub const LSI_FREQ: Hertz = Hertz(40_000);
@@ -106,8 +113,7 @@ impl LsConfig {
     }
 }
 
-pub use v3::Config;
-
 pub unsafe fn init(config: Config) {
+    #[cfg(any(ch32v3, ch32v2))]
     v3::init(config)
 }

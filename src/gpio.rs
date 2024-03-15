@@ -458,6 +458,7 @@ pub(crate) mod sealed {
                         w.set_mode(pin % 8, mode);
                     });
                 }
+                #[cfg(not(gpio_v0))]
                 1 => {
                     block.cfghr().modify(|w| {
                         w.set_cnf(pin % 8, cnf);
@@ -465,7 +466,7 @@ pub(crate) mod sealed {
                     });
                 }
                 // only for GPIO with 24 lines
-                #[cfg(feature = "gpio_x0")]
+                #[cfg(gpio_x0)]
                 2 => {
                     block.cfgxr().modify(|w| {
                         w.set_cnf(pin % 8, cnf);
@@ -577,6 +578,7 @@ impl AnyPin {
 
 impl_peripheral!(AnyPin);
 impl Pin for AnyPin {
+    #[cfg(exti)]
     type ExtiChannel = exti::AnyChannel;
 }
 impl sealed::Pin for AnyPin {
@@ -589,7 +591,7 @@ impl sealed::Pin for AnyPin {
 foreach_pin!(
     ($pin_name:ident, $port_name:ident, $port_num:expr, $pin_num:expr, $exti_ch:ident) => {
         impl Pin for peripherals::$pin_name {
-            // #[cfg(feature = "exti")]
+            #[cfg(exti)]
             type ExtiChannel = peripherals::$exti_ch;
         }
 

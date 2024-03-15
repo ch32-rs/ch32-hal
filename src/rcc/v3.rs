@@ -1,4 +1,4 @@
-//! CH32V305/307, CH32F205/207
+//! CH32V2, CH32V3
 use core::ops;
 
 use crate::pac::rcc::vals::{

@@ -77,6 +77,14 @@ fn main() {
         }
     }
 
+    // Add peripheral cfg flags on the fly
+    for p in METADATA.peripherals {
+        if let Some(r) = &p.registers {
+            println!("cargo:rustc-cfg={}", r.kind);
+            println!("cargo:rustc-cfg={}_{}", r.kind, r.version);
+        }
+    }
+
     let mut gpio_lines = 16;
     match &*chip_family {
         "ch32v0" => {
@@ -89,14 +97,6 @@ fn main() {
             gpio_lines = 24;
         }
         _ => {}
-    }
-
-    // Add peripheral cfg flags on the fly
-    for p in METADATA.peripherals {
-        if let Some(r) = &p.registers {
-            println!("cargo:rustc-cfg={}", r.kind);
-            println!("cargo:rustc-cfg={}_{}", r.kind, r.version);
-        }
     }
 
     // ========
