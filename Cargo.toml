@@ -13,8 +13,8 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# ch32-metapac = { version = "0.0.4", features = ["memory-x", "rt"] }
-ch32-metapac = { version = "0.0.4", features = [
+# ch32-metapac = { version = "0.0.5", features = ["memory-x", "rt"] }
+ch32-metapac = { version = "0.0.5", features = [
     "memory-x",
     "rt",
 ], path = "../ch32-data/build/ch32-metapac" }
@@ -39,7 +39,7 @@ nb = "1.1.0"
 embedded-hal-nb = "1.0.0"
 
 [build-dependencies]
-ch32-metapac = { version = "0.0.4", default-features = false, features = [
+ch32-metapac = { version = "0.0.5", default-features = false, features = [
     "metadata",
 ], path = "../ch32-data/build/ch32-metapac" }
 proc-macro2 = "1.0.78"
@@ -55,8 +55,40 @@ embassy = [
 ]
 defmt = ["dep:defmt"]
 
+# Chip-selection features
+ch32v003a4m6 = ["ch32-metapac/ch32v003a4m6"]
+ch32v003f4p6 = ["ch32-metapac/ch32v003f4p6"]
+ch32v003f4u6 = ["ch32-metapac/ch32v003f4u6"]
+ch32v003j4m6 = ["ch32-metapac/ch32v003j4m6"]
+ch32v103c6t6 = ["ch32-metapac/ch32v103c6t6"]
+ch32v103c8t6 = ["ch32-metapac/ch32v103c8t6"]
+ch32v103c8u6 = ["ch32-metapac/ch32v103c8u6"]
+ch32v103r8t6 = ["ch32-metapac/ch32v103r8t6"]
+ch32v203c6t6 = ["ch32-metapac/ch32v203c6t6"]
+ch32v203c8t6 = ["ch32-metapac/ch32v203c8t6"]
+ch32v203c8u6 = ["ch32-metapac/ch32v203c8u6"]
+ch32v203f6p6 = ["ch32-metapac/ch32v203f6p6"]
+ch32v203f8p6 = ["ch32-metapac/ch32v203f8p6"]
+ch32v203f8u6 = ["ch32-metapac/ch32v203f8u6"]
 ch32v203g6u6 = ["ch32-metapac/ch32v203g6u6"]
+ch32v203g8r6 = ["ch32-metapac/ch32v203g8r6"]
+ch32v203k6t6 = ["ch32-metapac/ch32v203k6t6"]
+ch32v203k8t6 = ["ch32-metapac/ch32v203k8t6"]
+ch32v203rbt6 = ["ch32-metapac/ch32v203rbt6"]
+ch32v208cbu6 = ["ch32-metapac/ch32v208cbu6"]
+ch32v208gbu6 = ["ch32-metapac/ch32v208gbu6"]
+ch32v208rbt6 = ["ch32-metapac/ch32v208rbt6"]
+ch32v208wbu6 = ["ch32-metapac/ch32v208wbu6"]
+ch32v303cbt6 = ["ch32-metapac/ch32v303cbt6"]
+ch32v303rbt6 = ["ch32-metapac/ch32v303rbt6"]
+ch32v303rct6 = ["ch32-metapac/ch32v303rct6"]
+ch32v303vct6 = ["ch32-metapac/ch32v303vct6"]
+ch32v305fbp6 = ["ch32-metapac/ch32v305fbp6"]
+ch32v305gbu6 = ["ch32-metapac/ch32v305gbu6"]
+ch32v305rbt6 = ["ch32-metapac/ch32v305rbt6"]
+ch32v307rct6 = ["ch32-metapac/ch32v307rct6"]
 ch32v307vct6 = ["ch32-metapac/ch32v307vct6"]
+ch32v307wcu6 = ["ch32-metapac/ch32v307wcu6"]
 ch32x033f8p6 = ["ch32-metapac/ch32x033f8p6"]
 ch32x034f8p6 = ["ch32-metapac/ch32x034f8p6"]
 ch32x034f8u6 = ["ch32-metapac/ch32x034f8u6"]
@@ -66,7 +98,3 @@ ch32x035f8u6 = ["ch32-metapac/ch32x035f8u6"]
 ch32x035g8r6 = ["ch32-metapac/ch32x035g8r6"]
 ch32x035g8u6 = ["ch32-metapac/ch32x035g8u6"]
 ch32x035r8t6 = ["ch32-metapac/ch32x035r8t6"]
-ch32v003a4m6 = ["ch32-metapac/ch32v003a4m6"]
-ch32v003f4p6 = ["ch32-metapac/ch32v003f4p6"]
-ch32v003f4u6 = ["ch32-metapac/ch32v003f4u6"]
-ch32v003j4m6 = ["ch32-metapac/ch32v003j4m6"]

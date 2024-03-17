@@ -149,9 +149,9 @@ fn main() {
     }
 
     // One singleton per DMA channel
-    //for c in METADATA.dma_channels {
-    //    singletons.push(c.name.to_string());
-    //}
+    for c in METADATA.dma_channels {
+        singletons.push(c.name.to_string());
+    }
 
     let mut pin_set = std::collections::HashSet::new();
     for p in METADATA.peripherals {
