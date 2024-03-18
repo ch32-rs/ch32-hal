@@ -19,8 +19,8 @@ ch32-metapac = { version = "0.0.5", features = [
     "rt",
 ], path = "../ch32-data/build/ch32-metapac" }
 
-qingke = { version = "0.1.5", features = ["critical-section-impl"] }
-qingke-rt = { version = "0.1.5", features = ["highcode"] }
+qingke = { version = "0.1.7", features = ["critical-section-impl"] }
+qingke-rt = { version = "0.1.7" }
 #qingke-rt = { version = "0.1.5", path = "../qingke/qingke-rt", features = [
 #    "highcode",
 #] }
@@ -47,6 +47,7 @@ quote = "1.0"
 
 [features]
 default = ["embassy"]
+highcode = ["qingke-rt/highcode"]
 embassy = [
     "dep:embassy-sync",
     "dep:embassy-futures",

@@ -10,7 +10,7 @@ use crate::rcc::clocks;
 pub struct CycleDelay;
 
 impl embedded_hal::delay::DelayNs for CycleDelay {
-    #[highcode]
+    #[cfg_attr(feature = "highcode", highcode)]
     fn delay_ns(&mut self, ns: u32) {
         let cycles = ns as u64 * clocks().sysclk.to_Hz() as u64 / 1_500_000_000;
 
@@ -18,7 +18,7 @@ impl embedded_hal::delay::DelayNs for CycleDelay {
             riscv::asm::delay(cycles as u32);
         }
     }
-    #[highcode]
+    #[cfg_attr(feature = "highcode", highcode)]
     fn delay_us(&mut self, us: u32) {
         let cycles = us as u64 * clocks().sysclk.to_Hz() as u64 / 1_500_000;
 
@@ -27,7 +27,7 @@ impl embedded_hal::delay::DelayNs for CycleDelay {
         }
     }
 
-    #[highcode]
+    #[cfg_attr(feature = "highcode", highcode)]
     fn delay_ms(&mut self, ms: u32) {
         let cycles_per_us = clocks().sysclk.to_Hz() as u32 / 1_500_000;
 
@@ -69,7 +69,7 @@ impl SystickDelay {
         });
     }
 
-    // #[highcode]
+    // #[cfg_attr(feature = "highcode", highcode)]
     pub fn delay_ticks(&mut self, n: u32) {
         let rb = unsafe { &*pac::SYSTICK::PTR };
         let target = rb.cntl().read().bits().wrapping_add(n - 5); // 5 opcodes overhead

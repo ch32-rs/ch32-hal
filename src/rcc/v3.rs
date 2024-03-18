@@ -114,6 +114,22 @@ impl Config {
             ls: super::LsConfig::default_lsi(),
         }
     };
+    pub const SYSCLK_FREQ_144MHZ_HSI: Config = {
+        Config {
+            hse: None,
+            sys: Sysclk::PLL,
+            pll_src: PllSource::HSI,
+            pll: Some(Pll {
+                prediv: PllPreDiv::DIV1,
+                mul: PllMul::MUL18,
+            }),
+            pllx: None,
+            ahb_pre: AHBPrescaler::DIV1,
+            apb1_pre: APBPrescaler::DIV1,
+            apb2_pre: APBPrescaler::DIV1,
+            ls: super::LsConfig::default_lsi(),
+        }
+    };
 }
 
 impl Default for Config {

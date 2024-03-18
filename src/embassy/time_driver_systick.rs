@@ -8,6 +8,7 @@ use critical_section::{CriticalSection, Mutex};
 use embassy_time_driver::{AlarmHandle, Driver};
 use pac::systick::vals;
 use qingke::interrupt::Priority;
+#[cfg(feature = "highcode")]
 use qingke_rt::highcode;
 
 use crate::pac;
@@ -162,7 +163,7 @@ impl Driver for SystickDriver {
 }
 
 #[no_mangle]
-#[highcode]
+#[cfg_attr(feature = "highcode", highcode)]
 extern "C" fn SysTick() {
     DRIVER.on_interrupt();
 }
