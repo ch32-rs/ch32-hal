@@ -24,12 +24,12 @@ pub mod interrupt;
 
 pub use crate::_generated::{peripherals, Peripherals};
 
-//pub mod dma;
+pub mod dma;
 
 //pub mod adc;
 pub mod exti;
 pub mod gpio;
-//pub mod i2c;
+pub mod i2c;
 //pub mod pioc;
 pub mod signature;
 //pub mod spi;
@@ -79,7 +79,7 @@ macro_rules! bind_interrupts {
         $(
             #[allow(non_snake_case)]
             #[no_mangle]
-            #[link_section = ".highcode"]
+            #[cfg_attr(feature = "highcode", ch32_rt::highcode)]
             unsafe extern "C" fn $irq() {
                 $(
                     <$handler as $crate::interrupt::Handler<$crate::interrupt::$irq>>::on_interrupt();

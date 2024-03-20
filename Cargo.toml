@@ -21,7 +21,7 @@ ch32-metapac = { version = "0.0.5", features = [
 
 qingke = { version = "0.1.7", features = ["critical-section-impl"] }
 qingke-rt = { version = "0.1.7" }
-#qingke-rt = { version = "0.1.5", path = "../qingke/qingke-rt", features = [
+#qingke-rt = { version = "0.1.7", path = "../qingke/qingke-rt", features = [
 #    "highcode",
 #] }
 embedded-hal = { version = "1.0.0", package = "embedded-hal" }

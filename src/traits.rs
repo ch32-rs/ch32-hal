@@ -11,3 +11,14 @@ macro_rules! dma_trait {
         }
     };
 }
+
+macro_rules! pin_trait {
+    ($signal:ident, $instance:path) => {
+        pub trait $signal<T: $instance, const REMAP: u8>: crate::gpio::Pin {}
+    };
+}
+macro_rules! pin_trait_impl {
+    (crate::$mod:ident::$trait:ident, $instance:ident, $pin:ident, $remap:expr) => {
+        impl crate::$mod::$trait<crate::peripherals::$instance, $remap> for crate::peripherals::$pin {}
+    };
+}

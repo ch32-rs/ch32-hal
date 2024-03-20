@@ -8,5 +8,5 @@ pub fn init() {
     time_driver_systick::init();
 
     #[cfg(qingke_v2)]
-    panic!("qingke_v2 is not supported");
+    panic!("qingke_v2(rv32ec) is not supported");
 }
