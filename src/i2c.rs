@@ -133,7 +133,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
 
         T::set_remap(REMAP);
 
-        // auto opendrain for CH32V2, CH32V3
+        // CH32V2, CH32V3
         scl.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
         sda.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
 
