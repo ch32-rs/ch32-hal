@@ -472,13 +472,3 @@ pin_trait!(SclPin, Instance);
 pin_trait!(SdaPin, Instance);
 // dma_trait!(RxDma, Instance);
 // dma_trait!(TxDma, Instance);
-
-pin_trait_impl!(crate::i2c::SclPin, I2C1, PB6, 0);
-pin_trait_impl!(crate::i2c::SdaPin, I2C1, PB7, 0);
-
-pin_trait_impl!(crate::i2c::SclPin, I2C1, PB8, 1);
-pin_trait_impl!(crate::i2c::SdaPin, I2C1, PB9, 1);
-
-// Note: There is no remapping functionality on I2C2
-pin_trait_impl!(crate::i2c::SclPin, I2C2, PB10, 0);
-pin_trait_impl!(crate::i2c::SdaPin, I2C2, PB11, 0);

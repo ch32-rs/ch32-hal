@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::{env, fs};
@@ -36,14 +37,9 @@ fn main() {
     // Add Qingke IP core version cfg flags on the fly
     // qingke_v2, qingke_v3, qingke_v4
     let qingke_ver = match &*chip_family {
-        "ch32v0" => "qingke_v2",
+        "ch32v0" | "ch641" => "qingke_v2",
         "ch32v1" => "qingke_v3",
-        "ch32v2" => "qingke_v4", // v4b or v4c
-        "ch32v3" => "qingke_v4", // v4f
-        "ch32x0" => "qingke_v4", // v4c
-        "ch32l1" => "qingke_v4", // v4c
-        "ch641" => "qingke_v2",
-        "ch643" => "qingke_v4", // v4c
+        "ch32v2" | "ch32v3" | "ch32l1" | "ch643" => "qingke_v4", // v4b, v4c, v4f
         _ => "qingke_v4",
     };
     println!("cargo:rustc-cfg={}", qingke_ver);
@@ -277,6 +273,48 @@ fn main() {
                 #gg
             }
         })
+    }
+
+    // ========
+    // Generate pin_trait_impl!
+
+    #[rustfmt::skip]
+    let signals: HashMap<_, _> = [
+        // (kind, signal) => trait
+        /*(("usart", "TX"), quote!(crate::usart::TxPin)),
+        (("usart", "RX"), quote!(crate::usart::RxPin)),
+        (("usart", "CTS"), quote!(crate::usart::CtsPin)),
+        (("usart", "RTS"), quote!(crate::usart::RtsPin)),
+        (("usart", "CK"), quote!(crate::usart::CkPin)),
+        (("spi", "MISO"), quote!(crate::spi::MisoPin)),
+        (("spi", "SCK"), quote!(crate::spi::SckPin)),
+        (("spi", "MOSI"), quote!(crate::spi::MosiPin)),
+        (("spi", "NSS"), quote!(crate::spi::CsPin)),
+        (("spi", "I2S_MCK"), quote!(crate::spi::MckPin)),
+        (("spi", "I2S_CK"), quote!(crate::spi::CkPin)),
+        (("spi", "I2S_WS"), quote!(crate::spi::WsPin)), */
+        (("i2c", "SDA"), quote!(crate::i2c::SdaPin)),
+        (("i2c", "SCL"), quote!(crate::i2c::SclPin)),
+    ].into();
+
+    for p in METADATA.peripherals {
+        if let Some(regs) = &p.registers {
+            for pin in p.pins {
+                let key = (regs.kind, pin.signal);
+                if let Some(tr) = signals.get(&key) {
+                    let peri = format_ident!("{}", p.name);
+                    let pin_name =  format_ident!("{}", pin.pin);
+
+                    let remap = pin.remap.unwrap_or(0);
+
+                    g.extend(quote! {
+                        pin_trait_impl!(#tr, #peri, #pin_name, #remap);
+                    });
+
+                    // panic!("{} {}", peri, pin_name);
+                }
+            }
+        }
     }
 
     // ========
