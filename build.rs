@@ -178,7 +178,20 @@ fn main() {
         crate::peripherals_struct!(#(#singleton_tokens),*);
     });
 
-    // TODO: interrupt mod
+    // ========
+    // Generate interrupt declarations
+    let mut irqs = Vec::new();
+    for irq in METADATA.interrupts {
+        irqs.push(format_ident!("{}", irq.name));
+    }
+
+    g.extend(quote! {
+        crate::interrupt_mod!(
+            #(
+                #irqs,
+            )*
+        );
+    });
 
     // ========
     // Extract the rcc registers
@@ -246,6 +259,17 @@ fn main() {
                 impl crate::peripheral::RemapPeripheral for peripherals::#pname {}
             });
         }
+
+        // TODO
+        if let Some(regs) = &p.registers {
+            let kind = regs.kind.to_string();
+
+            if ["i2c"].contains(&&*kind) {
+                g.extend(quote! {
+                    //
+                })
+            }
+        }
     }
 
     // ========
@@ -277,16 +301,14 @@ fn main() {
 
     // ========
     // Generate pin_trait_impl!
-
-    #[rustfmt::skip]
     let signals: HashMap<_, _> = [
         // (kind, signal) => trait
-        /*(("usart", "TX"), quote!(crate::usart::TxPin)),
+        /*  (("usart", "TX"), quote!(crate::usart::TxPin)),
         (("usart", "RX"), quote!(crate::usart::RxPin)),
         (("usart", "CTS"), quote!(crate::usart::CtsPin)),
         (("usart", "RTS"), quote!(crate::usart::RtsPin)),
-        (("usart", "CK"), quote!(crate::usart::CkPin)),
-        (("spi", "MISO"), quote!(crate::spi::MisoPin)),
+        (("usart", "CK"), quote!(crate::usart::CkPin)),*/
+        /*(("spi", "MISO"), quote!(crate::spi::MisoPin)),
         (("spi", "SCK"), quote!(crate::spi::SckPin)),
         (("spi", "MOSI"), quote!(crate::spi::MosiPin)),
         (("spi", "NSS"), quote!(crate::spi::CsPin)),
@@ -295,7 +317,8 @@ fn main() {
         (("spi", "I2S_WS"), quote!(crate::spi::WsPin)), */
         (("i2c", "SDA"), quote!(crate::i2c::SdaPin)),
         (("i2c", "SCL"), quote!(crate::i2c::SclPin)),
-    ].into();
+    ]
+    .into();
 
     for p in METADATA.peripherals {
         if let Some(regs) = &p.registers {
@@ -303,7 +326,7 @@ fn main() {
                 let key = (regs.kind, pin.signal);
                 if let Some(tr) = signals.get(&key) {
                     let peri = format_ident!("{}", p.name);
-                    let pin_name =  format_ident!("{}", pin.pin);
+                    let pin_name = format_ident!("{}", pin.pin);
 
                     let remap = pin.remap.unwrap_or(0);
 
@@ -316,6 +339,23 @@ fn main() {
             }
         }
     }
+
+    // ========
+    // Write peripheral_interrupts module.
+    let mut mt = TokenStream::new();
+    for p in METADATA.peripherals {
+        let mut pt = TokenStream::new();
+
+        for irq in p.interrupts {
+            let iname = format_ident!("{}", irq.interrupt);
+            let sname = format_ident!("{}", irq.signal);
+            pt.extend(quote!(pub type #sname = crate::interrupt::typelevel::#iname;));
+        }
+
+        let pname = format_ident!("{}", p.name);
+        mt.extend(quote!(pub mod #pname { #pt }));
+    }
+    g.extend(quote!(#[allow(non_camel_case_types)] pub mod peripheral_interrupts { #mt }));
 
     // ========
     // Write foreach_foo! macrotables

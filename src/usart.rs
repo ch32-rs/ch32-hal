@@ -1,4 +1,4 @@
-//! 3 USARTs, 5 UARTs (CH32V20x_D6: 4 USARTs, 4 UARTs)
+//! 4 USARTs
 //!
 //! - No split of BasicInstance and FullInstance
 
@@ -15,10 +15,8 @@ Multiple interrupt sources
 
 use core::marker::PhantomData;
 
-use ch32v3::ch32v30x::uart4::RegisterBlock;
-
-use crate::gpio::sealed::Pin;
-use crate::gpio::Pull;
+use crate::gpio::sealed::AFType;
+use crate::gpio::{Pull, Speed};
 use crate::{into_ref, pac, peripherals, Peripheral};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -119,7 +117,7 @@ impl<'d, T: Instance> UartTx<'d, T> {
     ) -> Result<Self, ConfigError> {
         into_ref!(_peri, tx);
 
-        tx.set_as_af_output();
+        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         T::set_remap(REMAP);
 
         let rb = T::regs();
@@ -134,8 +132,8 @@ impl<'d, T: Instance> UartTx<'d, T> {
         let rb = T::regs();
 
         for &c in buffer {
-            while rb.statr().read().tc().bit_is_clear() {} // wait tx complete
-            rb.datar().write(|w| unsafe { w.dr().bits(c as u16) });
+            while !rb.statr().read().tc() {} // wait tx complete
+            rb.datar().write(|w| w.set_dr(c as u16));
         }
         Ok(())
     }
@@ -143,7 +141,7 @@ impl<'d, T: Instance> UartTx<'d, T> {
     pub fn blocking_flush(&mut self) -> Result<(), Error> {
         let rb = T::regs();
 
-        while rb.statr().read().txe().bit_is_clear() {} // wait txe
+        while !rb.statr().read().txe() {} // wait tx ends
         Ok(())
     }
 }
@@ -184,11 +182,10 @@ impl<'d, T: Instance> UartRx<'d, T> {
     pub fn nb_read(&mut self) -> Result<u8, nb::Error<Error>> {
         let rb = T::regs();
 
-        // while rb.statr.read().rxne().bit_is_clear() {} // wait rxne
-        if rb.statr().read().rxne().bit_is_clear() {
+        if !rb.statr().read().rxne() {
             Err(nb::Error::WouldBlock)
         } else {
-            Ok(rb.datar().read().dr().bits() as u8) // FIXME: how to handle 9 bits
+            Ok(rb.datar().read().dr() as u8) // FIXME: how to handle 9 bits
         }
     }
 
@@ -196,8 +193,8 @@ impl<'d, T: Instance> UartRx<'d, T> {
         let rb = T::regs();
 
         for c in buffer {
-            while rb.statr().read().rxne().bit_is_clear() {} // wait rxne
-            *c = rb.datar().read().dr().bits() as u8; // FIXME: how to handle 9 bits
+            while !rb.statr().read().rxne() {} // wait rxne
+            *c = rb.datar().read().dr() as u8; // FIXME: how to handle 9 bits
         }
         Ok(())
     }
@@ -234,15 +231,15 @@ impl<'d, T: Instance> Uart<'d, T> {
         into_ref!(_peri, tx);
 
         // 推挽复用输出(外加上拉)
-        tx.set_as_af_output();
+        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         T::set_remap(REMAP);
 
         let rb = T::regs();
         configure(rb, &config, true, true)?;
 
-        rb.ctlr3().modify(|_, w| w.hdsel().set_bit()); // half duplex
+        rb.ctlr3().modify(|w| w.set_hdsel(true)); // half duplex
 
-        rb.statr().modify(|_, w| w.rxne().clear_bit()); // clear rxne
+        rb.statr().modify(|w| w.set_rxne(false)); // clear rxne
         let _ = rb.datar().read().dr(); // clear rxne
 
         Ok(Self {
@@ -259,7 +256,7 @@ impl<'d, T: Instance> Uart<'d, T> {
     ) -> Result<Self, ConfigError> {
         into_ref!(_peri, tx, rx);
 
-        tx.set_as_af_output();
+        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         rx.set_as_input(Pull::None);
         T::set_remap(REMAP);
 
@@ -280,8 +277,8 @@ impl<'d, T: Instance> Uart<'d, T> {
         let rb = T::regs();
 
         for &c in buffer {
-            while rb.statr().read().txe().bit_is_clear() {} // wait tx complete
-            rb.datar().write(|w| unsafe { w.dr().bits(c as u16) });
+            while !rb.statr().read().txe() {} // wait tx complete
+            rb.datar().write(|w| w.set_dr(c as u16));
         }
         Ok(())
     }
@@ -305,45 +302,29 @@ pub(crate) mod sealed {
     pub trait Instance {
         type Interrupt: interrupt::Interrupt;
 
-        fn regs() -> &'static pac::usart1::RegisterBlock;
-
-        fn enable_and_reset();
-        // fn state() -> &'static ();
-
-        // remap for USART1 to USART3
-        fn set_remap(remap: u8);
+        fn regs() -> &'static pac::usart::Usart;
     }
 }
 
-fn configure(
-    rb: &pac::usart1::RegisterBlock,
-    config: &Config,
-    enable_tx: bool,
-    enable_rx: bool,
-) -> Result<(), ConfigError> {
+fn configure(rb: &pac::usart::Usart, config: &Config, enable_tx: bool, enable_rx: bool) -> Result<(), ConfigError> {
     if !enable_rx && !enable_tx {
         panic!("USART: At least one of RX or TX should be enabled");
     }
 
-    rb.ctlr2().modify(|_, w| w.stop().variant(config.stop_bits as u8));
+    rb.ctlr2().modify(|w| w.set_stop(config.stop_bits as u8));
 
-    rb.ctlr1().modify(|_, w| {
-        w.m()
-            .variant(config.data_bits as u8 != 0)
-            .pce()
-            .variant(config.parity != Parity::ParityNone)
-            .ps()
-            .variant(config.parity == Parity::ParityOdd) // 1 for odd parity, 0 for even parity
-            .te()
-            .bit(enable_tx)
-            .re()
-            .bit(enable_rx)
+    rb.ctlr1().modify(|w| {
+        w.set_m(config.data_bits as u8 != 0);
+        w.set_pce(config.parity != Parity::ParityNone);
+        w.set_ps(config.parity == Parity::ParityOdd); // 1 for odd parity, 0 for even parity
+        w.set_te(enable_tx);
+        w.set_re(enable_rx);
     });
 
     // HCLK/(16*USARTDIV)
     // USARTDIV = DIV_M+(DIV_F/16)  via USART_BRR
 
-    let apbclock = crate::rcc::clocks().hclk.to_Hz();
+    let apbclock = crate::rcc::clocks().hclk.0;
 
     let div_m = 25 * apbclock / (4 * config.baudrate);
     let mut tmpreg = (div_m / 100) << 4;
@@ -351,106 +332,43 @@ fn configure(
     let div_f = div_m - 100 * (tmpreg >> 4);
     tmpreg |= ((div_f * 16 + 50) / 100) & 0x0F;
 
-    rb.brr().write(|w| unsafe { w.bits(tmpreg) });
+    rb.brr().write(|w| w.0 = tmpreg);
 
     // enable uart
-    rb.ctlr1().modify(|_, w| w.ue().set_bit());
+    rb.ctlr1().modify(|w| w.set_ue(true));
 
     Ok(())
 }
 
-// embedded-hal
-mod eh1 {
-    use super::*;
-}
-
 // Peripheral traits
 
-pub trait Instance: Peripheral<P = Self> + sealed::Instance + 'static + Send {}
+pub trait Instance:
+    Peripheral<P = Self>
+    + sealed::Instance
+    + crate::peripheral::RccPeripheral
+    + crate::peripheral::RemapPeripheral
+    + 'static
+    + Send
+{
+}
 
 macro_rules! impl_uart {
-    ($inst:ident, $irq:ident, $rst_reg:ident, $rst_field:ident, $en_reg:ident, $en_field:ident, $remap_field:ident) => {
+    ($inst:ident, $irq:ident) => {
         impl sealed::Instance for crate::peripherals::$inst {
             type Interrupt = crate::interrupt::$irq;
 
-            fn regs() -> &'static crate::pac::usart1::RegisterBlock {
-                unsafe { &*crate::pac::$inst::PTR }
-            }
-
-            fn enable_and_reset() {
-                let rcc = unsafe { &*crate::pac::RCC::PTR };
-
-                rcc.$rst_reg().modify(|_, w| w.$rst_field().set_bit());
-                rcc.$rst_reg().modify(|_, w| w.$rst_field().clear_bit());
-                rcc.$en_reg().modify(|_, w| w.$en_field().set_bit());
-            }
-
-            fn set_remap(remap: u8) {
-                let afio = unsafe { &*pac::AFIO::PTR };
-                afio.pcfr().modify(|_, w| w.$remap_field().variant(remap));
+            fn regs() -> &'static crate::pac::usart::Usart {
+                &crate::pac::$inst
             }
         }
-
         impl Instance for peripherals::$inst {}
     };
 }
 
-macro_rules! impl_uart_bool_remap {
-    ($inst:ident, $irq:ident, $rst_reg:ident, $rst_field:ident, $en_reg:ident, $en_field:ident, $remap_field:ident) => {
-        impl sealed::Instance for crate::peripherals::$inst {
-            type Interrupt = crate::interrupt::$irq;
-
-            fn regs() -> &'static crate::pac::usart1::RegisterBlock {
-                unsafe { &*crate::pac::$inst::PTR }
-            }
-
-            fn enable_and_reset() {
-                let rcc = unsafe { &*crate::pac::RCC::PTR };
-
-                rcc.$rst_reg().modify(|_, w| w.$rst_field().set_bit());
-                rcc.$rst_reg().modify(|_, w| w.$rst_field().clear_bit());
-                rcc.$en_reg().modify(|_, w| w.$en_field().set_bit());
-            }
-
-            fn set_remap(remap: u8) {
-                let afio = unsafe { &*pac::AFIO::PTR };
-                let remap = remap == 1;
-                afio.pcfr().modify(|_, w| w.$remap_field().variant(remap));
-            }
-        }
-
-        impl Instance for peripherals::$inst {}
-    };
-}
-
-// USART1 is a beast of its own, the remapping is spread out across two registers
-impl sealed::Instance for crate::peripherals::USART1 {
-    type Interrupt = crate::interrupt::USART1;
-
-    fn regs() -> &'static crate::pac::usart1::RegisterBlock {
-        unsafe { &*crate::pac::USART1::PTR }
-    }
-
-    fn enable_and_reset() {
-        let rcc = unsafe { &*crate::pac::RCC::PTR };
-
-        rcc.apb2prstr().modify(|_, w| w.usart1rst().set_bit());
-        rcc.apb2prstr().modify(|_, w| w.usart1rst().clear_bit());
-        rcc.apb2pcenr().modify(|_, w| w.usart1en().set_bit());
-    }
-
-    fn set_remap(remap: u8) {
-        let low_bit = remap & 0b1 == 1;
-        let high_bit = ((remap & 0b10) >> 1) == 1;
-        let afio = unsafe { &*pac::AFIO::PTR };
-        afio.pcfr().modify(|_, w| w.usart1rm().variant(low_bit));
-        afio.pcfr2().modify(|_, w| w.uart1_remap2().variant(high_bit));
-    }
-}
-impl Instance for peripherals::USART1 {}
-
-impl_uart_bool_remap!(USART2, USART2, apb1prstr, usart2rst, apb1pcenr, usart2en, usart2rm);
-impl_uart!(USART3, USART3, apb1prstr, usart3rst, apb1pcenr, usart3en, usart3rm);
+impl_uart!(USART1, USART1);
+impl_uart!(USART2, USART2);
+impl_uart!(USART3, USART3);
+impl_uart!(USART4, USART4);
 
 macro_rules! pin_trait {
     ($signal:ident, $instance:path) => {
@@ -463,87 +381,3 @@ pin_trait!(TxPin, Instance);
 pin_trait!(CtsPin, Instance);
 pin_trait!(RtsPin, Instance);
 pin_trait!(CkPin, Instance);
-
-macro_rules! pin_trait_impl {
-    (crate::$mod:ident::$trait:ident, $instance:ident, $pin:ident, $remap:expr) => {
-        impl crate::$mod::$trait<crate::peripherals::$instance, $remap> for crate::peripherals::$pin {}
-    };
-}
-
-// USART1
-
-// 0: RX/PA10, CTS/PA11, TX/PA9, CK/PA8, RTS/PA12
-pin_trait_impl!(crate::usart::RxPin, USART1, PA10, 0);
-pin_trait_impl!(crate::usart::CtsPin, USART1, PA11, 0);
-pin_trait_impl!(crate::usart::TxPin, USART1, PA9, 0);
-pin_trait_impl!(crate::usart::CkPin, USART1, PA8, 0);
-pin_trait_impl!(crate::usart::RtsPin, USART1, PA12, 0);
-
-// 01: RX/PB7, CTS/PA11, TX/PB6, CK/PA8, RTS/PA12
-pin_trait_impl!(crate::usart::RxPin, USART1, PB7, 1);
-pin_trait_impl!(crate::usart::CtsPin, USART1, PA11, 1);
-pin_trait_impl!(crate::usart::TxPin, USART1, PB6, 1);
-pin_trait_impl!(crate::usart::CkPin, USART1, PA8, 1);
-pin_trait_impl!(crate::usart::RtsPin, USART1, PA12, 1);
-
-// 10: RX/PA8, CTS/PA5, TX/PB15, CK/PA10, RTS/PA9
-pin_trait_impl!(crate::usart::RxPin, USART1, PA8, 2);
-pin_trait_impl!(crate::usart::CtsPin, USART1, PA5, 2);
-pin_trait_impl!(crate::usart::TxPin, USART1, PB15, 2);
-pin_trait_impl!(crate::usart::CkPin, USART1, PA10, 2);
-pin_trait_impl!(crate::usart::RtsPin, USART1, PA9, 2);
-
-// 11: RX/PA7, CTS/PC4, TX/PA6, CK/PA5, RTS/PC5
-pin_trait_impl!(crate::usart::RxPin, USART1, PA7, 3);
-pin_trait_impl!(crate::usart::CtsPin, USART1, PC4, 3);
-pin_trait_impl!(crate::usart::TxPin, USART1, PA6, 3);
-pin_trait_impl!(crate::usart::CkPin, USART1, PA5, 3);
-pin_trait_impl!(crate::usart::RtsPin, USART1, PC5, 3);
-
-// USART2
-
-// 0: RX/PA3, CTS/PA0, TX/PA2, CK/PA4, RTS/PA1
-pin_trait_impl!(crate::usart::RxPin, USART2, PA3, 0);
-pin_trait_impl!(crate::usart::CtsPin, USART2, PA0, 0);
-pin_trait_impl!(crate::usart::TxPin, USART2, PA2, 0);
-pin_trait_impl!(crate::usart::CkPin, USART2, PA4, 0);
-pin_trait_impl!(crate::usart::RtsPin, USART2, PA1, 0);
-
-// 1: RX/PD6, CTS/PD3, TX/PD5, CK/PD7, RTS/PD4
-pin_trait_impl!(crate::usart::RxPin, USART2, PD6, 1);
-pin_trait_impl!(crate::usart::CtsPin, USART2, PD3, 1);
-pin_trait_impl!(crate::usart::TxPin, USART2, PD5, 1);
-pin_trait_impl!(crate::usart::CkPin, USART2, PD7, 1);
-pin_trait_impl!(crate::usart::RtsPin, USART2, PD4, 1);
-
-// USART3
-
-// CH32V20x_D6 only supports this mapping
-// 00: RX/PB11, CTS/PB13, TX/PB10, CK/PB12, RTS/PB14
-pin_trait_impl!(crate::usart::RxPin, USART3, PB11, 0);
-pin_trait_impl!(crate::usart::CtsPin, USART3, PB13, 0);
-pin_trait_impl!(crate::usart::TxPin, USART3, PB10, 0);
-pin_trait_impl!(crate::usart::CkPin, USART3, PB12, 0);
-pin_trait_impl!(crate::usart::RtsPin, USART3, PB14, 0);
-
-// 01: RX/PC11, CTS/PB13, TX/PC10, CK/PC12, RTS/PB14
-pin_trait_impl!(crate::usart::RxPin, USART3, PC11, 1);
-pin_trait_impl!(crate::usart::CtsPin, USART3, PB13, 1);
-pin_trait_impl!(crate::usart::TxPin, USART3, PC10, 1);
-pin_trait_impl!(crate::usart::CkPin, USART3, PC12, 1);
-pin_trait_impl!(crate::usart::RtsPin, USART3, PB14, 1);
-
-// Remapping not supported for the "fifth bit of the lot number less than 2"
-// 10: RX/PA14, CTS/PD11, TX/PA13, CK/PD10, RTS/PD12
-pin_trait_impl!(crate::usart::RxPin, USART3, PA14, 2);
-pin_trait_impl!(crate::usart::CtsPin, USART3, PD11, 2);
-pin_trait_impl!(crate::usart::TxPin, USART3, PA13, 2);
-pin_trait_impl!(crate::usart::CkPin, USART3, PD10, 2);
-pin_trait_impl!(crate::usart::RtsPin, USART3, PD12, 2);
-
-// 11: RX/PD9, CTS/PD11, TX/PD8, CK/PD10, RTS/PD12
-pin_trait_impl!(crate::usart::RxPin, USART3, PD9, 3);
-pin_trait_impl!(crate::usart::CtsPin, USART3, PD11, 3);
-pin_trait_impl!(crate::usart::TxPin, USART3, PD8, 3);
-pin_trait_impl!(crate::usart::CkPin, USART3, PD10, 3);
-pin_trait_impl!(crate::usart::RtsPin, USART3, PD12, 3);

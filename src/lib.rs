@@ -18,7 +18,7 @@ mod peripheral;
 pub use peripheral::*;
 //pub use _peripherals::Peripherals;
 #[cfg(not(ch32v0))]
-pub mod interrupt;
+mod interrupt_ext;
 // pub mod _peripherals;
 //pub mod prelude;
 
@@ -34,7 +34,7 @@ pub mod i2c;
 pub mod signature;
 //pub mod spi;
 //pub mod timer;
-// pub mod usart;
+//pub mod usart;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;
@@ -48,6 +48,9 @@ pub(crate) mod _generated {
 
     include!(concat!(env!("OUT_DIR"), "/_generated.rs"));
 }
+
+mod patches;
+pub use crate::_generated::interrupt;
 
 #[derive(Default)]
 pub struct Config {

@@ -6,11 +6,11 @@ use core::future::Future;
 
 use crate::dma::NoDma;
 // use crate::dma::NoDma;
-use crate::gpio::sealed::{AFType, Pin};
-use crate::gpio::{Pull, Speed};
-use crate::interrupt::Interrupt;
+use crate::gpio::sealed::AFType;
+use crate::gpio::Speed;
+// use crate::interrupt::Interrupt;
 use crate::time::Hertz;
-use crate::{interrupt, into_ref, pac, peripherals, Peripheral, PeripheralRef};
+use crate::{into_ref, pac, peripherals, Peripheral, PeripheralRef};
 
 /// I2C error.
 #[derive(Debug, PartialEq, Eq)]
@@ -460,15 +460,10 @@ impl sealed::Instance for peripherals::I2C2 {
         pac::I2C2
     }
 }
-impl crate::peripheral::sealed::RemapPeripheral for peripherals::I2C2 {
-    fn set_remap(_remap: u8) {
-        // nop
-    }
-}
-impl crate::peripheral::RemapPeripheral for peripherals::I2C2 {}
 impl Instance for peripherals::I2C2 {}
 
 pin_trait!(SclPin, Instance);
 pin_trait!(SdaPin, Instance);
+// pin_trait!(SmbaPin, Instance);
 // dma_trait!(RxDma, Instance);
 // dma_trait!(TxDma, Instance);

@@ -13,17 +13,18 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# ch32-metapac = { version = "0.0.5", features = ["memory-x", "rt"] }
+# ch32-metapac = { version = "0.0.5", features = [
+#     "memory-x",
+#     "rt",
+# ], git = "https://github.com/ch32-rs/ch32-metapac.git" }
 ch32-metapac = { version = "0.0.5", features = [
     "memory-x",
     "rt",
 ], path = "../ch32-data/build/ch32-metapac" }
 
-qingke = { version = "0.1.7", features = ["critical-section-impl"] }
-qingke-rt = { version = "0.1.7" }
-#qingke-rt = { version = "0.1.7", path = "../qingke/qingke-rt", features = [
-#    "highcode",
-#] }
+qingke = { version = "0.1.8", features = ["critical-section-impl"] }
+qingke-rt = "0.1.8"
+# qingke-rt = { version = "0.1.8", path = "../qingke/qingke-rt" }
 embedded-hal = { version = "1.0.0", package = "embedded-hal" }
 critical-section = { version = "1.1.2" }
 defmt = { version = "0.3.5", optional = true }
@@ -39,11 +40,14 @@ nb = "1.1.0"
 embedded-hal-nb = "1.0.0"
 
 [build-dependencies]
+proc-macro2 = "1.0.78"
+quote = "1.0"
+#ch32-metapac = { version = "0.0.5", default-features = false, features = [
+#    "metadata",
+#], git = "https://github.com/ch32-rs/ch32-metapac.git" }
 ch32-metapac = { version = "0.0.5", default-features = false, features = [
     "metadata",
 ], path = "../ch32-data/build/ch32-metapac" }
-proc-macro2 = "1.0.78"
-quote = "1.0"
 
 [features]
 default = ["embassy"]
