@@ -27,7 +27,7 @@ async fn main(spawner: Spawner) -> ! {
     // GPIO
     spawner.spawn(blink(p.PA15.degrade(), 1000)).unwrap();
     spawner.spawn(blink(p.PB4.degrade(), 100)).unwrap();
-    spawner.spawn(blink(p.PB8.degrade(), 100)).unwrap();
+    // spawner.spawn(blink(p.PB8.degrade(), 100)).unwrap();
     loop {
         Timer::after_millis(2000).await;
     }
