@@ -1,9 +1,12 @@
 //! Patches for some peripherals
 
-impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::I2C2 {
-    fn set_remap(_remap: u8) {}
+#[cfg(has_i2c2)]
+mod i2c2 {
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::I2C2 {
+        fn set_remap(_remap: u8) {}
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::I2C2 {}
 }
-impl crate::peripheral::RemapPeripheral for crate::peripherals::I2C2 {}
 
 impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::USART1 {
     fn set_remap(remap: u8) {
@@ -13,4 +16,3 @@ impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::USART1 {
     }
 }
 impl crate::peripheral::RemapPeripheral for crate::peripherals::USART1 {}
-

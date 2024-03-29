@@ -79,6 +79,8 @@ fn main() {
             println!("cargo:rustc-cfg={}", r.kind);
             println!("cargo:rustc-cfg={}_{}", r.kind, r.version);
         }
+        // Add has_i2c1 flags
+        println!("cargo:rustc-cfg=has_{}", p.name.to_ascii_lowercase());
     }
 
     let mut gpio_lines = 16;
