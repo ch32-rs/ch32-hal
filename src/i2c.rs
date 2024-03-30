@@ -469,3 +469,72 @@ pin_trait!(SdaPin, Instance);
 // pin_trait!(SmbaPin, Instance);
 // dma_trait!(RxDma, Instance);
 // dma_trait!(TxDma, Instance);
+
+impl embedded_hal::i2c::Error for Error {
+    fn kind(&self) -> embedded_hal::i2c::ErrorKind {
+        match *self {
+            Self::Bus => embedded_hal::i2c::ErrorKind::Bus,
+            Self::Arbitration => embedded_hal::i2c::ErrorKind::ArbitrationLoss,
+            Self::Nack => embedded_hal::i2c::ErrorKind::NoAcknowledge(embedded_hal::i2c::NoAcknowledgeSource::Unknown),
+            Self::Timeout => embedded_hal::i2c::ErrorKind::Other,
+            Self::Crc => embedded_hal::i2c::ErrorKind::Other,
+            Self::Overrun => embedded_hal::i2c::ErrorKind::Overrun,
+            Self::ZeroLengthTransfer => embedded_hal::i2c::ErrorKind::Other,
+        }
+    }
+}
+
+impl<'d, T: Instance, TXDMA, RXDMA> embedded_hal::i2c::ErrorType for I2c<'d, T, TXDMA, RXDMA> {
+    type Error = Error;
+}
+
+impl<'d, T: Instance> embedded_hal::i2c::I2c for I2c<'d, T, NoDma, NoDma> {
+    fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
+        self.blocking_read(address, read)
+    }
+
+    fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
+        self.blocking_write(address, write)
+    }
+
+    fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
+        self.blocking_write_read(address, write, read)
+    }
+
+    fn transaction(
+        &mut self,
+        address: u8,
+        operations: &mut [embedded_hal::i2c::Operation<'_>],
+    ) -> Result<(), Self::Error> {
+        let _ = address;
+        let _ = operations;
+        todo!()
+    }
+}
+
+
+// eh02 compatible
+
+impl<'d, T: Instance> embedded_hal_02::blocking::i2c::Read for I2c<'d, T> {
+    type Error = Error;
+
+    fn read(&mut self, address: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
+        self.blocking_read(address, buffer)
+    }
+}
+
+impl<'d, T: Instance> embedded_hal_02::blocking::i2c::Write for I2c<'d, T> {
+    type Error = Error;
+
+    fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
+        self.blocking_write(address, write)
+    }
+}
+
+impl<'d, T: Instance> embedded_hal_02::blocking::i2c::WriteRead for I2c<'d, T> {
+    type Error = Error;
+
+    fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
+        self.blocking_write_read(address, write, read)
+    }
+}

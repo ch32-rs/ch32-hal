@@ -1,6 +1,6 @@
 //! Patches for some peripherals
 
-#[cfg(has_i2c2)]
+#[cfg(peri_i2c2)]
 mod i2c2 {
     impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::I2C2 {
         fn set_remap(_remap: u8) {}
