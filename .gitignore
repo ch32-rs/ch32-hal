@@ -2,3 +2,5 @@ target/
 Cargo.lock
 trash/
 .vscode/
+
+.DS_Store

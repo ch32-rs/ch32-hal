@@ -303,11 +303,11 @@ fn main() {
     // Generate pin_trait_impl!
     let signals: HashMap<_, _> = [
         // (kind, signal) => trait
-        /*  (("usart", "TX"), quote!(crate::usart::TxPin)),
+        (("usart", "TX"), quote!(crate::usart::TxPin)),
         (("usart", "RX"), quote!(crate::usart::RxPin)),
         (("usart", "CTS"), quote!(crate::usart::CtsPin)),
         (("usart", "RTS"), quote!(crate::usart::RtsPin)),
-        (("usart", "CK"), quote!(crate::usart::CkPin)),*/
+        (("usart", "CK"), quote!(crate::usart::CkPin)),
         /*(("spi", "MISO"), quote!(crate::spi::MisoPin)),
         (("spi", "SCK"), quote!(crate::spi::SckPin)),
         (("spi", "MOSI"), quote!(crate::spi::MosiPin)),
@@ -361,7 +361,6 @@ fn main() {
     // Write foreach_foo! macrotables
     let mut peripherals_table: Vec<Vec<String>> = Vec::new();
     let mut pins_table: Vec<Vec<String>> = Vec::new();
-
 
     let gpio_base = METADATA.peripherals.iter().find(|p| p.name == "GPIOA").unwrap().address as u32;
     let gpio_stride = 0x400;

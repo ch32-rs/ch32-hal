@@ -16,10 +16,8 @@ pub mod debug;
 
 mod peripheral;
 pub use peripheral::*;
-//pub use _peripherals::Peripherals;
 #[cfg(not(ch32v0))]
 mod interrupt_ext;
-// pub mod _peripherals;
 //pub mod prelude;
 
 pub use crate::_generated::{peripherals, Peripherals};
@@ -34,7 +32,7 @@ pub mod i2c;
 pub mod signature;
 //pub mod spi;
 //pub mod timer;
-//pub mod usart;
+pub mod usart;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;

@@ -1,6 +1,6 @@
 //! 4 USARTs
 //!
-//! - No split of BasicInstance and FullInstance
+//! - No split of Instance and FullInstance
 
 /*
 Full-duplex or half-duplex synchronous or asynchronous communication
@@ -15,9 +15,11 @@ Multiple interrupt sources
 
 use core::marker::PhantomData;
 
+use embassy_sync::waitqueue::AtomicWaker;
+
 use crate::gpio::sealed::AFType;
 use crate::gpio::{Pull, Speed};
-use crate::{into_ref, pac, peripherals, Peripheral};
+use crate::{interrupt, into_ref, pac, peripherals, Peripheral};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -121,7 +123,7 @@ impl<'d, T: Instance> UartTx<'d, T> {
         T::set_remap(REMAP);
 
         let rb = T::regs();
-        configure(rb, &config, true, false)?;
+        configure(&rb, &config, true, false)?;
 
         // TODO: async state
 
@@ -173,7 +175,7 @@ impl<'d, T: Instance> UartRx<'d, T> {
         T::set_remap(REMAP);
 
         let rb = T::regs();
-        configure(rb, &config, false, true)?;
+        configure(&rb, &config, false, true)?;
 
         Ok(Self { phantom: PhantomData })
     }
@@ -235,7 +237,7 @@ impl<'d, T: Instance> Uart<'d, T> {
         T::set_remap(REMAP);
 
         let rb = T::regs();
-        configure(rb, &config, true, true)?;
+        configure(&rb, &config, true, true)?;
 
         rb.ctlr3().modify(|w| w.set_hdsel(true)); // half duplex
 
@@ -261,7 +263,7 @@ impl<'d, T: Instance> Uart<'d, T> {
         T::set_remap(REMAP);
 
         let rb = T::regs();
-        configure(rb, &config, true, true)?;
+        configure(&rb, &config, true, true)?;
 
         Ok(Self {
             tx: UartTx { phantom: PhantomData },
@@ -290,19 +292,6 @@ impl<'d, T: Instance> Uart<'d, T> {
 
     pub fn blocking_read(&mut self, buffer: &mut [u8]) -> Result<(), Error> {
         self.rx.blocking_read(buffer)
-    }
-}
-
-pub(crate) mod sealed {
-    // use embassy_sync::waitqueue::AtomicWaker;
-
-    use super::*;
-    use crate::interrupt;
-
-    pub trait Instance {
-        type Interrupt: interrupt::Interrupt;
-
-        fn regs() -> &'static pac::usart::Usart;
     }
 }
 
@@ -341,43 +330,55 @@ fn configure(rb: &pac::usart::Usart, config: &Config, enable_tx: bool, enable_rx
 }
 
 // Peripheral traits
-
-pub trait Instance:
-    Peripheral<P = Self>
-    + sealed::Instance
-    + crate::peripheral::RccPeripheral
-    + crate::peripheral::RemapPeripheral
-    + 'static
-    + Send
-{
+struct State {
+    rx_waker: AtomicWaker,
 }
 
-macro_rules! impl_uart {
-    ($inst:ident, $irq:ident) => {
-        impl sealed::Instance for crate::peripherals::$inst {
-            type Interrupt = crate::interrupt::$irq;
+impl State {
+    const fn new() -> Self {
+        Self {
+            rx_waker: AtomicWaker::new(),
+        }
+    }
+}
 
-            fn regs() -> &'static crate::pac::usart::Usart {
-                &crate::pac::$inst
+trait SealedInstance: crate::peripheral::RccPeripheral + crate::peripheral::RemapPeripheral {
+    fn regs() -> crate::pac::usart::Usart;
+    fn state() -> &'static State;
+
+    // fn buffered_state() -> &'static buffered::State;
+}
+
+#[allow(private_bounds)]
+pub trait Instance: Peripheral<P = Self> + SealedInstance + 'static + Send {
+    /// Interrupt for this instance.
+    type Interrupt: interrupt::typelevel::Interrupt;
+}
+
+foreach_peripheral!(
+    (usart, $inst:ident) => {
+        impl SealedInstance for peripherals::$inst {
+            fn regs() -> crate::pac::usart::Usart {
+                crate::pac::$inst
+            }
+
+            fn state() -> &'static State {
+                static STATE: State = State::new();
+                &STATE
             }
         }
-        impl Instance for peripherals::$inst {}
-    };
-}
 
-impl_uart!(USART1, USART1);
-impl_uart!(USART2, USART2);
-impl_uart!(USART3, USART3);
-impl_uart!(USART4, USART4);
-
-macro_rules! pin_trait {
-    ($signal:ident, $instance:path) => {
-        pub trait $signal<T: $instance, const REMAP: u8>: crate::gpio::Pin {}
+        impl Instance for peripherals::$inst {
+            type Interrupt = crate::_generated::peripheral_interrupts::$inst::GLOBAL;
+        }
     };
-}
+);
 
 pin_trait!(RxPin, Instance);
 pin_trait!(TxPin, Instance);
 pin_trait!(CtsPin, Instance);
 pin_trait!(RtsPin, Instance);
 pin_trait!(CkPin, Instance);
+
+dma_trait!(TxDma, Instance);
+dma_trait!(RxDma, Instance);

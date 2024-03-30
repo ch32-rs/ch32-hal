@@ -20,8 +20,6 @@ fn main() -> ! {
     loop {
         println!("hello world!");
 
-        unsafe {
-            qingke::riscv::asm::delay(10_000_000);
-        }
+        qingke::riscv::asm::delay(10_000_000);
     }
 }

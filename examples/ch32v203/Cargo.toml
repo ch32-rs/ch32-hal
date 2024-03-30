@@ -17,12 +17,16 @@ embassy-executor = { version = "0.5.0", features = [
 ] }
 embassy-time = { version = "0.3.0", features = ["tick-hz-1_000_000"] }
 
-qingke = { version = "0.1.7", features = ["critical-section-impl"] }
-qingke-rt = { version = "0.1.7" }
+qingke = { version = "0.1.9", features = ["critical-section-impl"] }
+qingke-rt = { version = "0.1.9", path = "../../../qingke/qingke-rt" }
 
 panic-halt = "0.2.0"
 
 display-interface-spi = "0.5.0"
+embedded-hal = "1.0.0"
+embedded-graphics = "0.8.1"
+ssd1306 = "0.8.4"
+heapless = "0.8.0"
 
 # mipidsi = "0.7.1"
 # embedded-graphics = "0.8.1"

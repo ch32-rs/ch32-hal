@@ -479,22 +479,11 @@ foreach_peripheral!(
     };
 );
 
-// impl Instance for peripherals::I2C1 {}
-
-/*
-impl sealed::Instance for peripherals::I2C2 {
-    fn regs() -> pac::i2c::I2c {
-        pac::I2C2
-    }
-}
-impl Instance for peripherals::I2C2 {}
-*/
-
 pin_trait!(SclPin, Instance);
 pin_trait!(SdaPin, Instance);
 // pin_trait!(SmbaPin, Instance);
-// dma_trait!(RxDma, Instance);
-// dma_trait!(TxDma, Instance);
+dma_trait!(RxDma, Instance);
+dma_trait!(TxDma, Instance);
 
 impl embedded_hal::i2c::Error for Error {
     fn kind(&self) -> embedded_hal::i2c::ErrorKind {
