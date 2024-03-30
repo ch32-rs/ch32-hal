@@ -308,11 +308,11 @@ fn main() {
         (("usart", "CTS"), quote!(crate::usart::CtsPin)),
         (("usart", "RTS"), quote!(crate::usart::RtsPin)),
         (("usart", "CK"), quote!(crate::usart::CkPin)),
-        /*(("spi", "MISO"), quote!(crate::spi::MisoPin)),
+        (("spi", "MISO"), quote!(crate::spi::MisoPin)),
         (("spi", "SCK"), quote!(crate::spi::SckPin)),
         (("spi", "MOSI"), quote!(crate::spi::MosiPin)),
         (("spi", "NSS"), quote!(crate::spi::CsPin)),
-        (("spi", "I2S_MCK"), quote!(crate::spi::MckPin)),
+        /*(("spi", "I2S_MCK"), quote!(crate::spi::MckPin)),
         (("spi", "I2S_CK"), quote!(crate::spi::CkPin)),
         (("spi", "I2S_WS"), quote!(crate::spi::WsPin)), */
         (("i2c", "SDA"), quote!(crate::i2c::SdaPin)),

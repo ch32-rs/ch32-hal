@@ -16,3 +16,13 @@ impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::USART1 {
     }
 }
 impl crate::peripheral::RemapPeripheral for crate::peripherals::USART1 {}
+
+
+#[cfg(peri_spi2)]
+mod spi2 {
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::SPI2 {
+        fn set_remap(_remap: u8) {
+        }
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::SPI2 {}
+}
