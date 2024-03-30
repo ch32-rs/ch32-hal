@@ -21,7 +21,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut uart = UartTx::new(p.USART1, p.PA9, cfg).unwrap();
 
     loop {
-        Timer::after_millis(2000).await;
+        Timer::after_millis(1000).await;
 
         uart.blocking_write(b"hello world from embassy main\r\n");
 
