@@ -359,7 +359,10 @@ fn main() {
 
     // ========
     // Write foreach_foo! macrotables
+    let mut peripherals_table: Vec<Vec<String>> = Vec::new();
     let mut pins_table: Vec<Vec<String>> = Vec::new();
+
+
     let gpio_base = METADATA.peripherals.iter().find(|p| p.name == "GPIOA").unwrap().address as u32;
     let gpio_stride = 0x400;
 
@@ -382,12 +385,16 @@ fn main() {
                     ]);
                 }
             }
+
+            let row = vec![regs.kind.to_string(), p.name.to_string()];
+            peripherals_table.push(row);
         }
     }
 
     // _macros.rs
     let mut m = String::new();
 
+    make_table(&mut m, "foreach_peripheral", &peripherals_table);
     // pin, port, exti
     make_table(&mut m, "foreach_pin", &pins_table);
 

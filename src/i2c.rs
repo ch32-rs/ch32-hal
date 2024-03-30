@@ -4,13 +4,15 @@
 
 use core::future::Future;
 
+use embassy_sync::waitqueue::AtomicWaker;
+
 use crate::dma::NoDma;
 // use crate::dma::NoDma;
 use crate::gpio::sealed::AFType;
 use crate::gpio::Speed;
 // use crate::interrupt::Interrupt;
 use crate::time::Hertz;
-use crate::{into_ref, pac, peripherals, Peripheral, PeripheralRef};
+use crate::{interrupt, into_ref, pac, peripherals, Peripheral, PeripheralRef};
 
 /// I2C error.
 #[derive(Debug, PartialEq, Eq)]
@@ -430,30 +432,54 @@ impl<'d, T: Instance, TXDMA, RXDMA> Drop for I2c<'d, T, TXDMA, RXDMA> {
     }
 }
 
-pub(crate) mod sealed {
-    use super::*;
+struct State {
+    #[allow(unused)]
+    waker: AtomicWaker,
+}
 
-    pub trait Instance {
-        fn regs() -> pac::i2c::I2c;
+impl State {
+    const fn new() -> Self {
+        Self {
+            waker: AtomicWaker::new(),
+        }
     }
+}
+
+trait SealedInstance: crate::peripheral::RccPeripheral + crate::peripheral::RemapPeripheral {
+    fn regs() -> crate::pac::i2c::I2c;
+    fn state() -> &'static State;
 }
 
 /// I2C peripheral instance
-pub trait Instance:
-    sealed::Instance + crate::peripheral::RccPeripheral + crate::peripheral::RemapPeripheral + 'static
-{
-    // /// Event interrupt for this instance
-    // type EventInterrupt: interrupt::typelevel::Interrupt;
-    //  /// Error interrupt for this instance
-    // type ErrorInterrupt: interrupt::typelevel::Interrupt;
+#[allow(private_bounds)]
+pub trait Instance: SealedInstance + 'static {
+    /// Event interrupt for this instance
+    type EventInterrupt: interrupt::typelevel::Interrupt;
+    /// Error interrupt for this instance
+    type ErrorInterrupt: interrupt::typelevel::Interrupt;
 }
 
-impl sealed::Instance for peripherals::I2C1 {
-    fn regs() -> pac::i2c::I2c {
-        pac::I2C1
-    }
-}
-impl Instance for peripherals::I2C1 {}
+foreach_peripheral!(
+    (i2c, $inst:ident) => {
+        impl SealedInstance for peripherals::$inst {
+            fn regs() -> crate::pac::i2c::I2c {
+                crate::pac::$inst
+            }
+
+            fn state() -> &'static State {
+                static STATE: State = State::new();
+                &STATE
+            }
+        }
+
+        impl Instance for peripherals::$inst {
+            type EventInterrupt = crate::_generated::peripheral_interrupts::$inst::EV;
+            type ErrorInterrupt = crate::_generated::peripheral_interrupts::$inst::ER;
+        }
+    };
+);
+
+// impl Instance for peripherals::I2C1 {}
 
 /*
 impl sealed::Instance for peripherals::I2C2 {
@@ -511,7 +537,6 @@ impl<'d, T: Instance> embedded_hal::i2c::I2c for I2c<'d, T, NoDma, NoDma> {
         todo!()
     }
 }
-
 
 // eh02 compatible
 
