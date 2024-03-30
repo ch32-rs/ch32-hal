@@ -230,8 +230,13 @@ fn main() {
             let en_reg = format_ident!("{}", en.register.to_ascii_lowercase());
             let set_en_field = format_ident!("set_{}", en.field.to_ascii_lowercase());
 
+            let clk = format_ident!("{}", rcc.bus_clock.to_ascii_lowercase());
+
             g.extend(quote! {
                 impl crate::peripheral::sealed::RccPeripheral for peripherals::#pname {
+                    fn frequency() -> crate::time::Hertz {
+                        crate::rcc::clocks().#clk
+                    }
                     fn enable_and_reset_with_cs(_cs: critical_section::CriticalSection) {
                         crate::pac::RCC.#en_reg().modify(|w| w.#set_en_field(true));
                         #rst

@@ -309,7 +309,7 @@ pub(crate) mod sealed {
     use critical_section::CriticalSection;
 
     pub trait RccPeripheral {
-        // fn frequency() -> crate::time::Hertz;
+        fn frequency() -> crate::time::Hertz;
         fn enable_and_reset_with_cs(cs: CriticalSection);
         fn disable_with_cs(cs: CriticalSection);
 

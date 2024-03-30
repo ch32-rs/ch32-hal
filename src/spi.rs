@@ -207,7 +207,7 @@ impl<'d, T: Instance, Tx, Rx> Spi<'d, T, Tx, Rx> {
     ) -> Self {
         into_ref!(peri, txdma, rxdma);
 
-        let div = calculate_clock_div(crate::rcc::clocks().hclk.0, config.frequency.0);
+        let div = calculate_clock_div(T::frequency().0, config.frequency.0);
 
         let cpha = config.raw_phase();
         let cpol = config.raw_polarity();

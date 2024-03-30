@@ -169,7 +169,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
 
         regs.ctlr1().modify(|w| w.set_pe(false)); // disale i2c
 
-        let freq_in = crate::rcc::clocks().pclk1.0;
+        let freq_in = T::frequency().0;
         let freq_range = freq_in / 1_000_000;
 
         assert!(freq_range >= 2 && freq_range <= 36); // MHz

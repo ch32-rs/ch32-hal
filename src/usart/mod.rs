@@ -19,6 +19,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::gpio::sealed::AFType;
 use crate::gpio::{Pull, Speed};
+use crate::time::Hertz;
 use crate::{interrupt, into_ref, pac, peripherals, Peripheral};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -123,7 +124,7 @@ impl<'d, T: Instance> UartTx<'d, T> {
         T::set_remap(REMAP);
 
         let rb = T::regs();
-        configure(&rb, &config, true, false)?;
+        configure(&rb, &config, T::frequency(), true, false)?;
 
         // TODO: async state
 
@@ -175,7 +176,7 @@ impl<'d, T: Instance> UartRx<'d, T> {
         T::set_remap(REMAP);
 
         let rb = T::regs();
-        configure(&rb, &config, false, true)?;
+        configure(&rb, &config, T::frequency(), false, true)?;
 
         Ok(Self { phantom: PhantomData })
     }
@@ -237,7 +238,7 @@ impl<'d, T: Instance> Uart<'d, T> {
         T::set_remap(REMAP);
 
         let rb = T::regs();
-        configure(&rb, &config, true, true)?;
+        configure(&rb, &config, T::frequency(), true, true)?;
 
         rb.ctlr3().modify(|w| w.set_hdsel(true)); // half duplex
 
@@ -263,7 +264,7 @@ impl<'d, T: Instance> Uart<'d, T> {
         T::set_remap(REMAP);
 
         let rb = T::regs();
-        configure(&rb, &config, true, true)?;
+        configure(&rb, &config, T::frequency(), true, true)?;
 
         Ok(Self {
             tx: UartTx { phantom: PhantomData },
@@ -295,7 +296,13 @@ impl<'d, T: Instance> Uart<'d, T> {
     }
 }
 
-fn configure(rb: &pac::usart::Usart, config: &Config, enable_tx: bool, enable_rx: bool) -> Result<(), ConfigError> {
+fn configure(
+    rb: &pac::usart::Usart,
+    config: &Config,
+    pclk_freq: Hertz,
+    enable_tx: bool,
+    enable_rx: bool,
+) -> Result<(), ConfigError> {
     if !enable_rx && !enable_tx {
         panic!("USART: At least one of RX or TX should be enabled");
     }
@@ -313,9 +320,8 @@ fn configure(rb: &pac::usart::Usart, config: &Config, enable_tx: bool, enable_rx
     // HCLK/(16*USARTDIV)
     // USARTDIV = DIV_M+(DIV_F/16)  via USART_BRR
 
-    let apbclock = crate::rcc::clocks().hclk.0;
-
-    let div_m = 25 * apbclock / (4 * config.baudrate);
+    let clock_in = pclk_freq.0;
+    let div_m = 25 * clock_in / (4 * config.baudrate);
     let mut tmpreg = (div_m / 100) << 4;
 
     let div_f = div_m - 100 * (tmpreg >> 4);
