@@ -32,6 +32,9 @@ Keypoints:
 - [x] I2C
   - [x] blocking API
   - [ ] async API
+- [x] ADC
+  - [x] blocking API, for CH32V2, CH32V3
+  - [ ] async API
 - [ ] OPA
 - [ ] USB
 - More to come
