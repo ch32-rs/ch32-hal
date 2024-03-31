@@ -24,7 +24,7 @@ pub use crate::_generated::{peripherals, Peripherals};
 
 pub mod dma;
 
-//pub mod adc;
+pub mod adc;
 pub mod exti;
 pub mod gpio;
 pub mod i2c;

@@ -1,25 +1,18 @@
-use embedded_hal::delay::DelayNs;
+//! ADC
+//!
+//! Max clock: 14MHz for CHFV2x_V3x
 
-use crate::gpio::Pin;
+#![macro_use]
+
+use ch32_metapac::adc::vals;
+use embassy_sync::waitqueue::AtomicWaker;
+
+pub use crate::pac::adc::vals::SampleTime;
 use crate::{into_ref, peripherals, Peripheral};
 
 pub const ADC_MAX: u32 = (1 << 12) - 1;
 // No calibration data, voltage should be 1.2V (1.16 to 1.24)
 pub const VREF_INT: u32 = 1200;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Default)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum SampleTime {
-    #[default]
-    Cycles4 = 0b000,
-    Cycles5 = 0b001,
-    Cycles6 = 0b010,
-    Cycles7 = 0b011,
-    Cycles8 = 0b100,
-    Cycles9 = 0b101,
-    Cycles10 = 0b110,
-    Cycles11 = 0b111,
-}
 
 pub struct Config {
     /// Div1 to Div16
@@ -41,6 +34,17 @@ impl Default for Config {
     }
 }
 
+pub struct State {
+    pub waker: AtomicWaker,
+}
+impl State {
+    pub const fn new() -> Self {
+        Self {
+            waker: AtomicWaker::new(),
+        }
+    }
+}
+
 /// Analog to Digital driver.
 pub struct Adc<'d, T: Instance> {
     #[allow(unused)]
@@ -48,31 +52,32 @@ pub struct Adc<'d, T: Instance> {
 }
 
 impl<'d, T: Instance> Adc<'d, T> {
-    pub fn new(adc: impl Peripheral<P = T> + 'd, delay: &mut impl DelayNs, config: Config) -> Self {
+    pub fn new(adc: impl Peripheral<P = T> + 'd, config: Config) -> Self {
         into_ref!(adc);
         T::enable_and_reset();
 
-        let rcc = unsafe { &*crate::pac::RCC::PTR };
-        rcc.cfgr0().modify(|_, w| w.adcpre().variant(config.clkdiv));
+        // TODO: ADCPRE
+        T::regs().ctlr3().modify(|w| w.set_clk_div(config.clkdiv));
 
-        T::regs().ctlr1().modify(|_, w| {
-            unsafe { w.bits(0) } // clear, only independent mode is supported
+        // clear, only independent mode is supported
+        T::regs().ctlr1().modify(|w| {
+            w.0 = 0;
         });
 
         // no external trigger
         // no continuous mode
-        T::regs().ctlr2().modify(|_, w| {
-            w.align()
-                .clear_bit() // right aligned
-                .extsel()
-                .variant(0b111) //  SWSTART 软件触发
+        T::regs().ctlr2().modify(|w| {
+            w.set_align(false); // right aligned
+            w.set_exttrig(true); // external trigger
+            w.set_extsel(vals::Extsel::RSWSTART); //  SWSTART Software trigger
+            w.set_cont(false); // single conversion
         });
 
-        // ADC ON
-        T::regs().ctlr2().modify(|_, w| w.adon().set_bit());
-        delay.delay_us(1000);
+        const CHANNEL_COUNT: u8 = 1;
+        T::regs().rsqr1().modify(|w| w.set_l(CHANNEL_COUNT - 1));
 
-        T::regs().rsqr1().modify(|_, w| w.l().variant(config.channel_count - 1));
+        // ADC ON
+        T::regs().ctlr2().modify(|w| w.set_adon(true));
 
         Self { adc }
     }
@@ -84,147 +89,108 @@ impl<'d, T: Instance> Adc<'d, T> {
         let channel = channel.channel();
 
         // sample time config
-        let bits = sample_time as u32;
-        if channel > 9 {
-            T::regs().samptr1_charge1().modify(|r, w| unsafe {
-                w.bits((r.bits() & !(0b111 << (channel - 10) * 3)) | (bits << (channel - 10) * 3))
-            });
+        if channel < 10 {
+            T::regs().samptr2().modify(|w| w.set_smp(channel as usize, sample_time));
         } else {
             T::regs()
-                .samptr2_charge2()
-                .modify(|r, w| unsafe { w.bits((r.bits() & !(0b111 << channel * 3)) | (bits << channel * 3)) });
+                .samptr1()
+                .modify(|w| w.set_smp((channel - 10) as usize, sample_time));
         }
 
-        // rank config
+        // regular sequence config
         assert!(rank < 17 || rank > 0);
         if rank < 7 {
-            let offset = (rank - 1) * 5;
             T::regs()
-                // TODO: Probably remove the __channel
-                .rsqr3__channel()
-                .modify(|r, w| unsafe { w.bits(r.bits() & !(0b11111 << offset) | (channel as u32) << offset) })
+                .rsqr3()
+                .modify(|w| w.set_sq((rank - 1) as usize, channel & 0b11111));
         } else if rank < 13 {
-            let offset = (rank - 7) * 5;
             T::regs()
                 .rsqr2()
-                .modify(|r, w| unsafe { w.bits(r.bits() & !(0b11111 << offset) | (channel as u32) << offset) })
+                .modify(|w| w.set_sq((rank - 7) as usize, channel & 0b11111));
         } else {
-            let offset = (rank - 13) * 5;
             T::regs()
                 .rsqr1()
-                .modify(|r, w| unsafe { w.bits(r.bits() & !(0b11111 << offset) | (channel as u32) << offset) })
+                .modify(|w| w.set_sq((rank - 13) as usize, channel & 0b11111));
         }
     }
 
     // Get_ADC_Val
-    pub fn convert(&mut self, channel: &mut impl AdcPin<T>, delay: &mut impl DelayNs) -> u16 {
-        T::regs().ctlr2().modify(|_, w| w.swstart().set_bit());
-        T::regs().ctlr2().modify(|_, w| w.adon().set_bit());
+    pub fn convert(&mut self, channel: &mut impl AdcPin<T>, sample_time: SampleTime) -> u16 {
+        self.configure_channel(channel, 1, sample_time);
 
-        while T::regs().statr().read().eoc().bit_is_clear() {
-            delay.delay_us(1);
-        }
+        T::regs().ctlr2().modify(|w| w.set_swstart(true));
 
-        (T::regs().rdatar_dr_act_dcg().read().bits() & 0xffff) as u16
+        // while not end of conversion
+        while !T::regs().statr().read().eoc() {}
+
+        T::regs().rdatar().read().data()
     }
 }
 
-pub(crate) mod sealed {
-
-    //pub trait InterruptableInstance {
-    //        type Interrupt: crate::interrupt::Interrupt;
-    //  }
-    //InterruptableInstance
-
-    pub trait Instance {
-        fn regs() -> &'static crate::pac::adc1::RegisterBlock;
-
-        fn enable_and_reset();
-    }
-
-    pub trait AdcPin<T: Instance> {
-        fn channel(&self) -> u8;
-    }
-
-    pub trait InternalChannel<T> {
-        fn channel(&self) -> u8;
-    }
+trait SealedInstance {
+    #[allow(unused)]
+    fn regs() -> crate::pac::adc::Adc;
+    fn state() -> &'static State;
 }
 
-pub trait Instance: sealed::Instance + crate::Peripheral<P = Self> {}
+pub(crate) trait SealedAdcPin<T: Instance> {
+    fn set_as_analog(&mut self) {}
+
+    #[allow(unused)]
+    fn channel(&self) -> u8;
+}
+
+trait SealedInternalChannel<T> {
+    #[allow(unused)]
+    fn channel(&self) -> u8;
+}
+
+#[allow(private_bounds)]
+pub trait Instance: SealedInstance + crate::Peripheral<P = Self> + crate::peripheral::RccPeripheral {
+    type Interrupt: crate::interrupt::typelevel::Interrupt;
+}
 
 /// ADC pin.
-pub trait AdcPin<T: Instance>: sealed::AdcPin<T> + Pin {}
+#[allow(private_bounds)]
+pub trait AdcPin<T: Instance>: SealedAdcPin<T> {}
 /// ADC internal channel.
-pub trait InternalChannel<T>: sealed::InternalChannel<T> {}
+#[allow(private_bounds)]
+pub trait InternalChannel<T>: SealedInternalChannel<T> {}
 
-macro_rules! impl_adc {
-    ($inst:ident, $en_reg:ident, $en_field:ident, $rst_reg:ident, $rst_field:ident) => {
-        impl sealed::Instance for peripherals::$inst {
-            fn regs () -> &'static crate::pac::adc1::RegisterBlock {
-                unsafe { &*(crate::pac::$inst::PTR as *const crate::pac::adc1::RegisterBlock) }
+foreach_peripheral!(
+    (adc, $inst:ident) => {
+        impl crate::adc::SealedInstance for peripherals::$inst {
+            fn regs() -> crate::pac::adc::Adc {
+                crate::pac::$inst
             }
 
-            fn enable_and_reset() {
-                let rcc = unsafe { &*crate::pac::RCC::ptr() };
-                rcc.$en_reg().modify(|_, w| w.$en_field().set_bit());
-                rcc.$rst_reg().modify(|_, w| w.$rst_field().set_bit());
-                rcc.$rst_reg().modify(|_, w| w.$rst_field().clear_bit());
+            fn state() -> &'static State {
+                static STATE: State = State::new();
+                &STATE
             }
         }
 
-        impl Instance for peripherals::$inst {}
+        impl crate::adc::Instance for peripherals::$inst {
+            type Interrupt = crate::_generated::peripheral_interrupts::$inst::GLOBAL;
+        }
     };
-}
-
-impl_adc!(ADC1, apb2pcenr, adc1en, apb2prstr, adc1rst);
-impl_adc!(ADC2, apb2pcenr, adc2en, apb2prstr, adc2rst);
+);
 
 macro_rules! impl_adc_pin {
     ($inst:ident, $pin:ident, $ch:expr) => {
         impl crate::adc::AdcPin<peripherals::$inst> for crate::peripherals::$pin {}
 
-        impl crate::adc::sealed::AdcPin<peripherals::$inst> for crate::peripherals::$pin {
+        impl crate::adc::SealedAdcPin<peripherals::$inst> for crate::peripherals::$pin {
+            fn set_as_analog(&mut self) {
+                <Self as crate::gpio::sealed::Pin>::set_as_analog(self);
+            }
+
             fn channel(&self) -> u8 {
                 $ch
             }
         }
     };
 }
-
-impl_adc_pin!(ADC1, PA0, 0);
-impl_adc_pin!(ADC1, PA1, 1);
-impl_adc_pin!(ADC1, PA2, 2);
-impl_adc_pin!(ADC1, PA3, 3);
-impl_adc_pin!(ADC1, PA4, 4);
-impl_adc_pin!(ADC1, PA5, 5);
-impl_adc_pin!(ADC1, PA6, 6);
-impl_adc_pin!(ADC1, PA7, 7);
-impl_adc_pin!(ADC1, PB0, 8);
-impl_adc_pin!(ADC1, PB1, 9);
-impl_adc_pin!(ADC1, PC0, 10);
-impl_adc_pin!(ADC1, PC1, 11);
-impl_adc_pin!(ADC1, PC2, 12);
-impl_adc_pin!(ADC1, PC3, 13);
-impl_adc_pin!(ADC1, PC4, 14);
-impl_adc_pin!(ADC1, PC5, 15);
-
-impl_adc_pin!(ADC2, PA0, 0);
-impl_adc_pin!(ADC2, PA1, 1);
-impl_adc_pin!(ADC2, PA2, 2);
-impl_adc_pin!(ADC2, PA3, 3);
-impl_adc_pin!(ADC2, PA4, 4);
-impl_adc_pin!(ADC2, PA5, 5);
-impl_adc_pin!(ADC2, PA6, 6);
-impl_adc_pin!(ADC2, PA7, 7);
-impl_adc_pin!(ADC2, PB0, 8);
-impl_adc_pin!(ADC2, PB1, 9);
-impl_adc_pin!(ADC2, PC0, 10);
-impl_adc_pin!(ADC2, PC1, 11);
-impl_adc_pin!(ADC2, PC2, 12);
-impl_adc_pin!(ADC2, PC3, 13);
-impl_adc_pin!(ADC2, PC4, 14);
-impl_adc_pin!(ADC2, PC5, 15);
 
 // pub struct Vref;
 //impl<T: Instance> AdcPin<T> for Vref {}

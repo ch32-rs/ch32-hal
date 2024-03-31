@@ -329,6 +329,8 @@ fn main() {
         if let Some(regs) = &p.registers {
             for pin in p.pins {
                 let key = (regs.kind, pin.signal);
+
+                // singnals and pins
                 if let Some(tr) = signals.get(&key) {
                     let peri = format_ident!("{}", p.name);
                     let pin_name = format_ident!("{}", pin.pin);
@@ -340,6 +342,27 @@ fn main() {
                     });
 
                     // panic!("{} {}", peri, pin_name);
+                }
+
+                // ADC pin is special
+                if regs.kind == "adc" {
+                    if p.rcc.is_none() {
+                        continue;
+                    }
+
+                    let peri = format_ident!("{}", p.name);
+                    let pin_name = format_ident!("{}", pin.pin);
+
+                    let ch: Option<u8> = if pin.signal.starts_with("IN") {
+                        Some(pin.signal.strip_prefix("IN").unwrap().parse().unwrap())
+                    } else {
+                        None
+                    };
+                    if let Some(ch) = ch {
+                        g.extend(quote! {
+                            impl_adc_pin!( #peri, #pin_name, #ch);
+                        });
+                    }
                 }
             }
         }

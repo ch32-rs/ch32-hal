@@ -142,7 +142,7 @@ impl Config {
             pllx: None,
             ahb_pre: AHBPrescaler::DIV1,
             apb1_pre: APBPrescaler::DIV4, // 24MHz
-            apb2_pre: APBPrescaler::DIV1,
+            apb2_pre: APBPrescaler::DIV4,
             ls: super::LsConfig::default_lsi(),
         }
     };
