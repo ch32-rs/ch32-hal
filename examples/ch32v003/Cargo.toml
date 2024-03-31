@@ -11,9 +11,10 @@ ch32-hal = { path = "../../", features = [
 ], default-features = false }
 
 
-# qingke-rt = { version = "0.1.9" }
-qingke-rt = { version = "0.1.9", path = "../../../qingke/qingke-rt" }
-qingke = { version = "0.1.9", path = "../../../qingke" }
+qingke-rt = { version = "0.1.9" }
+qingke = { version = "0.1.9" }
+# qingke-rt = { version = "0.1.9", path = "../../../qingke/qingke-rt" }
+# qingke = { version = "0.1.9", path = "../../../qingke" }
 
 panic-halt = "0.2.0"
 

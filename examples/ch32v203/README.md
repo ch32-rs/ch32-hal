@@ -2,6 +2,6 @@
 
 ## Boards
 
-### FlappyBoard
+### FlappyBoard - CH32V203G6
 
 Link: <https://github.com/metro94/FlappyBoard>
