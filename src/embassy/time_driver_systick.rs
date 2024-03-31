@@ -109,7 +109,8 @@ impl SystickDriver {
 impl Driver for SystickDriver {
     fn now(&self) -> u64 {
         let rb = &crate::pac::SYSTICK;
-        rb.cnt().read() / (self.period.load(Ordering::Relaxed) as u64)
+        let period = self.period.load(Ordering::Relaxed) as u64;
+        rb.cnt().read() / period
     }
     unsafe fn allocate_alarm(&self) -> Option<AlarmHandle> {
         let id = self.alarm_count.fetch_update(Ordering::AcqRel, Ordering::Acquire, |x| {
@@ -153,7 +154,8 @@ impl Driver for SystickDriver {
                 return false;
             }
 
-            let safe_timestamp = timestamp.saturating_add(1) * (self.period.load(Ordering::Relaxed) as u64);
+            let period = self.period.load(Ordering::Relaxed) as u64;
+            let safe_timestamp = timestamp.saturating_add(1) * period;
             rb.cmp().write_value(safe_timestamp);
             rb.ctlr().modify(|w| w.set_stie(true));
 
