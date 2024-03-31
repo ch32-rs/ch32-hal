@@ -13,12 +13,12 @@ pub mod rcc;
 
 pub mod debug;
 //pub mod delay;
+pub mod prelude;
 
 mod peripheral;
 pub use peripheral::*;
 #[cfg(not(ch32v0))]
 mod interrupt_ext;
-//pub mod prelude;
 
 pub use crate::_generated::{peripherals, Peripherals};
 
@@ -28,7 +28,6 @@ pub mod dma;
 pub mod exti;
 pub mod gpio;
 pub mod i2c;
-//pub mod pioc;
 pub mod signature;
 pub mod spi;
 //pub mod timer;

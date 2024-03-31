@@ -1,4 +1,9 @@
 //! Patches for some peripherals
+//!
+//! This should be removed in the future.
+//!
+//! - Patches for remap implementation
+//! - Patches for peripherals without remap(fake remap)
 
 #[cfg(peri_i2c2)]
 mod i2c2 {
