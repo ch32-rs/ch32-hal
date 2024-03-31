@@ -2,28 +2,26 @@
 //!
 //! All crate.io drivers suck!
 //! Let's create our own!
-//! Check how to write one in 100 lines of code.
+//! Check how to write one in 100 lines of code,
+//! instead of introduce a 1000+ lines of unmaintained code.
 
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
 use core::fmt::Write;
 
-use display_interface_spi::SPIInterface;
 use embassy_executor::Spawner;
 use embassy_time::{Delay, Duration, Timer};
-use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::geometry::{OriginDimensions, Size};
 use embedded_graphics::mono_font::ascii::FONT_9X18;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::raw::ToBytes;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle};
-use embedded_graphics::text::{Alignment, Text, TextStyle};
+use embedded_graphics::text::{Alignment, Text};
 use embedded_hal::delay::DelayNs;
 use hal::dma::NoDma;
-use hal::gpio::{AnyPin, Input, Level, Output, Pin, Pull};
+use hal::gpio::{AnyPin, Level, Output, Pin};
 use hal::prelude::*;
 use hal::spi::Spi;
 use hal::{peripherals, println};
@@ -260,11 +258,9 @@ impl<const WIDTH: u16, const HEIGHT: u16, const OFFSETX: u16, const OFFSETY: u16
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
-    config.clock = hal::rcc::Config::SYSCLK_FREQ_96MHZ_HSI;
+    config.clock = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSI;
     let p = hal::init(config);
     hal::embassy::init();
-
-    let mut delay = Delay;
 
     // SPI1, remap 0
     let cs = p.PA4;
@@ -283,7 +279,7 @@ async fn main(spawner: Spawner) -> ! {
     cs.set_low();
 
     let mut spi_config = hal::spi::Config::default();
-    spi_config.frequency = Hertz::mhz(2);
+    spi_config.frequency = Hertz::mhz(24);
 
     let spi = Spi::new_txonly(p.SPI1, sck, sda, NoDma, NoDma, spi_config);
 
@@ -295,13 +291,11 @@ async fn main(spawner: Spawner) -> ! {
     let mut display: ST7735<160, 80, 1, 26> = ST7735::new(spi, dc);
 
     println!("display init ...");
-
     display.init();
+    println!("display init ok");
 
     // GPIO, // T1C4
     spawner.spawn(blink(led.degrade())).unwrap();
-
-    let mut i = 0;
 
     display.clear(Rgb565::BLACK).unwrap();
 
@@ -325,8 +319,6 @@ async fn main(spawner: Spawner) -> ! {
     let mut buf = heapless::String::<128>::new();
     let mut i = 0;
     loop {
-        println!("tick");
-
         buf.clear();
         core::write!(buf, "Hello, {}", i).unwrap();
 
