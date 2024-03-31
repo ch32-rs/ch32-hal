@@ -37,6 +37,7 @@ Keypoints:
   - [ ] async API
 - [ ] OPA
 - [ ] USB
+- [x] RNG
 - More to come
 
 ## Minimum supported Rust version(MSRV)

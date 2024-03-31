@@ -46,6 +46,8 @@ embassy-time = { version = "0.3.0", features = [
 nb = "1.1.0"
 embedded-hal-nb = "1.0.0"
 
+rand_core = "0.6.3"
+
 [build-dependencies]
 proc-macro2 = "1.0.78"
 quote = "1.0"

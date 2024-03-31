@@ -31,6 +31,8 @@ pub mod i2c;
 pub mod signature;
 pub mod spi;
 //pub mod timer;
+#[cfg(rng)]
+pub mod rng;
 pub mod usart;
 
 #[cfg(feature = "embassy")]
@@ -79,15 +81,14 @@ macro_rules! bind_interrupts {
         $(
             #[allow(non_snake_case)]
             #[no_mangle]
-            #[cfg_attr(feature = "highcode", ch32_rt::highcode)]
             unsafe extern "C" fn $irq() {
                 $(
-                    <$handler as $crate::interrupt::Handler<$crate::interrupt::$irq>>::on_interrupt();
+                    <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
                 )*
             }
 
             $(
-                unsafe impl $crate::interrupt::Binding<$crate::interrupt::$irq, $handler> for $name {}
+                unsafe impl $crate::interrupt::typelevel::Binding<$crate::interrupt::typelevel::$irq, $handler> for $name {}
             )*
         )*
     };
