@@ -108,7 +108,7 @@ impl SystickDriver {
 
 impl Driver for SystickDriver {
     fn now(&self) -> u64 {
-        let rb = &crate::pac::SYSTICK;
+        let rb = crate::pac::SYSTICK;
         let period = self.period.load(Ordering::Relaxed) as u64;
         rb.cnt().read() / period
     }
@@ -144,7 +144,8 @@ impl Driver for SystickDriver {
             alarm.timestamp.set(timestamp);
 
             let t = self.now();
-            if timestamp <= t {
+            // See-also: https://github.com/ch32-rs/ch32-hal/issues/4
+            if timestamp <= t + 1 {
                 // If alarm timestamp has passed the alarm will not fire.
                 // Disarm the alarm and return `false` to indicate that.
                 rb.ctlr().modify(|w| w.set_stie(false));
