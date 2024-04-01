@@ -27,6 +27,7 @@ pub mod dma;
 pub mod adc;
 pub mod exti;
 pub mod gpio;
+#[cfg(i2c)]
 pub mod i2c;
 pub mod signature;
 pub mod spi;
