@@ -48,7 +48,7 @@ impl From<Speed> for vals::Mode {
 #[cfg(gpio_x0)]
 impl From<Speed> for vals::Mode {
     fn from(_value: Speed) -> Self {
-        vals::vals::Mode::OUTPUT_50MHZ
+        vals::Mode::OUTPUT_50MHZ
     }
 }
 
@@ -64,8 +64,8 @@ pub enum Pull {
 impl From<Pull> for vals::Cnf {
     fn from(value: Pull) -> Self {
         match value {
-            Pull::None => vals::Cnf::FLOATING_IN_OPEN_DRAIN_OUT,
-            _ => vals::Cnf::PULL_IN_AF_PUSH_PULL_OUT,
+            Pull::None => vals::Cnf::FLOATING_IN__OPEN_DRAIN_OUT,
+            _ => vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
         }
     }
 }
@@ -162,10 +162,17 @@ impl<'d> Flex<'d> {
     #[inline]
     pub fn set_as_output_open_drain(&mut self, speed: Speed) {
         // 通用开漏输出模式
+        #[cfg(not(gpio_x0))]
         critical_section::with(|_| {
             self.pin
-                .set_mode_cnf(speed.into(), vals::Cnf::FLOATING_IN_OPEN_DRAIN_OUT);
+                .set_mode_cnf(speed.into(), vals::Cnf::FLOATING_IN__OPEN_DRAIN_OUT);
         });
+        #[cfg(gpio_x0)]
+        critical_section::with(|_| {
+            self.pin
+                .set_mode_cnf(speed.into(), vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT); // FIXME: only i2c is auto set to open drain
+        });
+
     }
 
     #[inline]
@@ -418,12 +425,14 @@ pub enum OutputType {
     /// Drive the pin both high or low.
     PushPull,
     /// Drive the pin low, or don't drive it at all if the output level is high.
+    #[cfg(not(gpio_x0))]
     OpenDrain,
 }
 
 impl From<OutputType> for sealed::AFType {
     fn from(value: OutputType) -> Self {
         match value {
+            #[cfg(not(gpio_x0))]
             OutputType::OpenDrain => sealed::AFType::OutputOpenDrain,
             OutputType::PushPull => sealed::AFType::OutputPushPull,
         }
@@ -442,13 +451,15 @@ pub(crate) mod sealed {
         /// Output, drive the pin both high or low.
         OutputPushPull = 0b10,
         /// Output, drive the pin low, or don't drive it at all if the output level is high.
+        #[cfg(not(gpio_x0))]
         OutputOpenDrain = 0b11,
     }
 
     impl From<AFType> for Cnf {
         fn from(value: AFType) -> Self {
             match value {
-                AFType::OutputPushPull => Cnf::PULL_IN_AF_PUSH_PULL_OUT,
+                AFType::OutputPushPull => Cnf::PULL_IN__AF_PUSH_PULL_OUT,
+                #[cfg(not(gpio_x0))]
                 AFType::OutputOpenDrain => Cnf::AF_OPEN_DRAIN_OUT,
             }
         }
@@ -518,7 +529,7 @@ pub(crate) mod sealed {
 
         #[inline]
         fn set_as_output(&self, speed: Speed) {
-            self.set_mode_cnf(speed.into(), Cnf::ANALOG_IN_PUSH_PULL_OUT);
+            self.set_mode_cnf(speed.into(), Cnf::ANALOG_IN__PUSH_PULL_OUT);
         }
 
         #[inline]
@@ -547,7 +558,7 @@ pub(crate) mod sealed {
         /// Analog mode, both input and output
         #[inline]
         fn set_as_analog(&self) {
-            self.set_mode_cnf(vals::Mode::INPUT, vals::Cnf::ANALOG_IN_PUSH_PULL_OUT);
+            self.set_mode_cnf(vals::Mode::INPUT, vals::Cnf::ANALOG_IN__PUSH_PULL_OUT);
         }
 
         /// Set the pin as "disconnected", ie doing nothing and consuming the lowest

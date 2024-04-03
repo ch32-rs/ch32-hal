@@ -16,12 +16,11 @@ fn main() -> ! {
     println!("Chip UID: {:x?}", hal::signature::unique_id());
     let chip_id = hal::signature::chip_id();
     println!("Chip {}, DevID: 0x{:x}", chip_id.name(), chip_id.dev_id());
+    println!("Clocks: {:?}", hal::rcc::clocks());
 
     loop {
         println!("hello world!");
 
-        unsafe {
-            qingke::riscv::asm::delay(10_000_000);
-        }
+        qingke::riscv::asm::delay(10_000_000);
     }
 }

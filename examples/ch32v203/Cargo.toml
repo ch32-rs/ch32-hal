@@ -32,7 +32,6 @@ heapless = "0.8.0"
 micromath = { version = "2.1.0", features = ["num-traits"] }
 
 # mipidsi = "0.7.1"
-# embedded-graphics = "0.8.1"
 # embedded-hal-bus = "0.1.0"
 
 

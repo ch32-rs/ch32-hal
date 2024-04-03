@@ -38,6 +38,8 @@ mod v0;
 mod v1;
 #[cfg(any(ch32v2, ch32v3, ch32f2))]
 mod v3;
+#[cfg(ch32x0)]
+mod x0;
 
 #[cfg(ch32v0)]
 pub use v0::Config;
@@ -45,6 +47,8 @@ pub use v0::Config;
 pub use v1::Config;
 #[cfg(any(ch32v2, ch32v3))]
 pub use v3::Config;
+#[cfg(ch32x0)]
+pub use x0::Config;
 
 #[cfg(not(ch32v208))]
 pub const LSI_FREQ: Hertz = Hertz(40_000);
