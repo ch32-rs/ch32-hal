@@ -35,6 +35,7 @@ pub enum Error {
 
 #[derive(Copy, Clone)]
 pub enum BitOrder {
+    #[cfg(not(spi_v0))]
     LsbFirst,
     MsbFirst,
 }
@@ -76,6 +77,7 @@ impl Config {
 
     fn lsb_first(&self) -> bool {
         match self.bit_order {
+            #[cfg(not(spi_v0))]
             BitOrder::LsbFirst => true,
             BitOrder::MsbFirst => false,
         }
@@ -207,14 +209,19 @@ impl<'d, T: Instance, Tx, Rx> Spi<'d, T, Tx, Rx> {
     ) -> Self {
         into_ref!(peri, txdma, rxdma);
 
+        let regs = T::regs();
+
         let div = calculate_clock_div(T::frequency().0, config.frequency.0);
+
+        #[cfg(spi_v0)]
+        if config.frequency.0 >= 36_000_000 && div == BaudRate::DIV_2 {
+            regs.hscr().modify(|w| w.set_hsrxen(true));
+        }
 
         let cpha = config.raw_phase();
         let cpol = config.raw_polarity();
 
         T::enable_and_reset();
-
-        let regs = T::regs();
 
         regs.ctlr2().modify(|w| w.set_ssoe(false));
         regs.ctlr1().modify(|w| {
@@ -315,7 +322,6 @@ fn calculate_clock_div(hclk: u32, clk: u32) -> BaudRate {
     let div = hclk / clk;
 
     match div {
-        0 => unreachable!(),
         1..=2 => BaudRate::DIV_2,
         3..=4 => BaudRate::DIV_4,
         5..=8 => BaudRate::DIV_8,
