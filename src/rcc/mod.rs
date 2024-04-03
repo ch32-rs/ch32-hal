@@ -119,5 +119,8 @@ impl LsConfig {
 
 pub unsafe fn init(config: Config) {
     #[cfg(any(ch32v3, ch32v2))]
-    v3::init(config)
+    v3::init(config);
+
+    #[cfg(ch32v0)]
+    v0::init(config);
 }
