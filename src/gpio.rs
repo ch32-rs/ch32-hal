@@ -14,6 +14,7 @@
 use core::convert::Infallible;
 
 use critical_section::CriticalSection;
+use pac::gpio::vals;
 
 use self::sealed::Pin as _;
 use crate::{exti, impl_peripheral, into_ref, pac, peripherals, Peripheral, PeripheralRef};
@@ -31,6 +32,26 @@ pub enum Speed {
     High = 0b11,
 }
 
+#[cfg(any(gpio_v3, gpio_v0))]
+impl From<Speed> for vals::Mode {
+    fn from(value: Speed) -> Self {
+        use Speed::*;
+
+        match value {
+            Medium => vals::Mode::OUTPUT_10MHZ,
+            Low => vals::Mode::OUTPUT_2MHZ,
+            High => vals::Mode::OUTPUT_50MHZ,
+        }
+    }
+}
+
+#[cfg(gpio_x0)]
+impl From<Speed> for vals::Mode {
+    fn from(_value: Speed) -> Self {
+        vals::vals::Mode::OUTPUT_50MHZ
+    }
+}
+
 /// Pull setting for an input.
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -38,6 +59,15 @@ pub enum Pull {
     None,
     Up,
     Down,
+}
+
+impl From<Pull> for vals::Cnf {
+    fn from(value: Pull) -> Self {
+        match value {
+            Pull::None => vals::Cnf::FLOATING_IN_OPEN_DRAIN_OUT,
+            _ => vals::Cnf::PULL_IN_AF_PUSH_PULL_OUT,
+        }
+    }
 }
 
 impl Pull {
@@ -110,7 +140,7 @@ impl<'d> Flex<'d> {
     #[inline]
     pub fn set_as_input(&mut self, pull: Pull) {
         critical_section::with(|_| {
-            self.pin.set_cnf_mode(pull.to_cnf(), 0b00);
+            self.pin.set_mode_cnf(vals::Mode::INPUT, pull.into());
             self.pin.set_pull(pull);
         });
     }
@@ -133,7 +163,8 @@ impl<'d> Flex<'d> {
     pub fn set_as_output_open_drain(&mut self, speed: Speed) {
         // 通用开漏输出模式
         critical_section::with(|_| {
-            self.pin.set_cnf_mode(0b01, speed as u8);
+            self.pin
+                .set_mode_cnf(speed.into(), vals::Cnf::FLOATING_IN_OPEN_DRAIN_OUT);
         });
     }
 
@@ -400,6 +431,8 @@ impl From<OutputType> for sealed::AFType {
 }
 
 pub(crate) mod sealed {
+    use pac::gpio::vals::{Cnf, Mode};
+
     use super::*;
 
     /// Alternate function type settings, CNF, when MODE>0b00
@@ -410,6 +443,15 @@ pub(crate) mod sealed {
         OutputPushPull = 0b10,
         /// Output, drive the pin low, or don't drive it at all if the output level is high.
         OutputOpenDrain = 0b11,
+    }
+
+    impl From<AFType> for Cnf {
+        fn from(value: AFType) -> Self {
+            match value {
+                AFType::OutputPushPull => Cnf::PULL_IN_AF_PUSH_PULL_OUT,
+                AFType::OutputOpenDrain => Cnf::AF_OPEN_DRAIN_OUT,
+            }
+        }
     }
 
     pub trait Pin {
@@ -444,12 +486,9 @@ pub(crate) mod sealed {
         }
 
         #[inline]
-        fn set_cnf_mode(&self, cnf: u8, mode: u8) {
+        fn set_mode_cnf(&self, mode: Mode, cnf: Cnf) {
             let pin = self._pin() as usize;
             let block = self.block();
-
-            let cnf = cnf & 0b11;
-            let mode = mode & 0b11;
 
             match pin / 8 {
                 0 => {
@@ -479,18 +518,12 @@ pub(crate) mod sealed {
 
         #[inline]
         fn set_as_output(&self, speed: Speed) {
-            let cnf = 0b00;
-            let mode = speed as u8;
-
-            self.set_cnf_mode(cnf, mode);
+            self.set_mode_cnf(speed.into(), Cnf::ANALOG_IN_PUSH_PULL_OUT);
         }
 
         #[inline]
         fn set_as_input(&self, pull: Pull) {
-            let cnf = if pull == Pull::None { 0b01 } else { 0b10 };
-            let mode = 0b00;
-
-            self.set_cnf_mode(cnf, mode);
+            self.set_mode_cnf(vals::Mode::INPUT, pull.into());
             self.set_pull(pull);
         }
 
@@ -508,19 +541,13 @@ pub(crate) mod sealed {
         /// Only one type, alternate function + push pull
         #[inline]
         fn set_as_af_output(&self, af_type: AFType, speed: Speed) {
-            let cnf = af_type as u8;
-            let mode = speed as u8;
-
-            self.set_cnf_mode(cnf, mode);
+            self.set_mode_cnf(speed.into(), af_type.into());
         }
 
         /// Analog mode, both input and output
         #[inline]
         fn set_as_analog(&self) {
-            let cnf = 0b00;
-            let mode = 0b00;
-
-            self.set_cnf_mode(cnf, mode);
+            self.set_mode_cnf(vals::Mode::INPUT, vals::Cnf::ANALOG_IN_PUSH_PULL_OUT);
         }
 
         /// Set the pin as "disconnected", ie doing nothing and consuming the lowest

@@ -26,6 +26,18 @@ mod usart1 {
     impl crate::peripheral::RemapPeripheral for crate::peripherals::USART1 {}
 }
 
+#[cfg(all(peri_i2c1, ch32v0))]
+mod i2c1 {
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::I2C1 {
+        fn set_remap(remap: u8) {
+            let afio = &crate::pac::AFIO;
+            afio.pcfr1().modify(|w| w.set_i2c1_rm(remap & 0b1 != 0));
+            afio.pcfr1().modify(|w| w.set_i2c1_rm1(remap & 0b10 != 0));
+        }
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::I2C1 {}
+}
+
 #[cfg(peri_spi2)]
 mod spi2 {
     impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::SPI2 {

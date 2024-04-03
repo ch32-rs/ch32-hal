@@ -17,7 +17,7 @@ pub mod prelude;
 
 mod peripheral;
 pub use peripheral::*;
-#[cfg(not(ch32v0))]
+// #[cfg(not(ch32v0))]
 mod interrupt_ext;
 
 pub use crate::_generated::{peripherals, Peripherals};

@@ -57,6 +57,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         T::enable_and_reset();
 
         // TODO: ADCPRE
+        #[cfg(not(adc_v0))]
         T::regs().ctlr3().modify(|w| w.set_clk_div(config.clkdiv));
 
         // clear, only independent mode is supported
@@ -69,7 +70,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         T::regs().ctlr2().modify(|w| {
             w.set_align(false); // right aligned
             w.set_exttrig(true); // external trigger
-            w.set_extsel(vals::Extsel::RSWSTART); //  SWSTART Software trigger
+            w.set_extsel(vals::Extsel::SWSTART); //  SWSTART Software trigger
             w.set_cont(false); // single conversion
         });
 
