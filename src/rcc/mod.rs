@@ -127,4 +127,7 @@ pub unsafe fn init(config: Config) {
 
     #[cfg(ch32v0)]
     v0::init(config);
+
+    #[cfg(ch32x0)]
+    x0::init(config);
 }
