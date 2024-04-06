@@ -250,18 +250,19 @@ impl<'d, T: Instance, Tx, Rx> Spi<'d, T, Tx, Rx> {
     }
 
     fn set_word_size(&mut self, config: word_impl::Config) {
-        if self.current_word_size != config {
-            self.current_word_size = config;
-            T::regs().ctlr1().modify(|w| {
-                w.set_dff(config == <u16 as sealed::Word>::CONFIG);
-            });
+        if self.current_word_size == config {
+            return;
         }
+        T::regs().ctlr1().modify(|w| {
+            w.set_dff(config == <u16 as sealed::Word>::CONFIG);
+        });
+        self.current_word_size = config;
     }
 
     /// Blocking write.
     pub fn blocking_write<W: Word>(&mut self, words: &[W]) -> Result<(), Error> {
         T::regs().ctlr1().modify(|w| w.set_spe(true));
-        flush_rx_fifo(&T::regs());
+        flush_rx_fifo(T::regs());
         self.set_word_size(W::CONFIG);
         for word in words.iter() {
             let _ = transfer_word(&T::regs(), *word)?;
@@ -272,7 +273,7 @@ impl<'d, T: Instance, Tx, Rx> Spi<'d, T, Tx, Rx> {
     /// Blocking read.
     pub fn blocking_read<W: Word>(&mut self, words: &mut [W]) -> Result<(), Error> {
         T::regs().ctlr1().modify(|w| w.set_spe(true));
-        flush_rx_fifo(&T::regs());
+        flush_rx_fifo(T::regs());
         self.set_word_size(W::CONFIG);
         for word in words.iter_mut() {
             *word = transfer_word(&T::regs(), W::default())?;
@@ -285,7 +286,7 @@ impl<'d, T: Instance, Tx, Rx> Spi<'d, T, Tx, Rx> {
     /// This writes the contents of `data` on MOSI, and puts the received data on MISO in `data`, at the same time.
     pub fn blocking_transfer_in_place<W: Word>(&mut self, words: &mut [W]) -> Result<(), Error> {
         T::regs().ctlr1().modify(|w| w.set_spe(true));
-        flush_rx_fifo(&T::regs());
+        flush_rx_fifo(T::regs());
         self.set_word_size(W::CONFIG);
         for word in words.iter_mut() {
             *word = transfer_word(&T::regs(), *word)?;
@@ -301,7 +302,7 @@ impl<'d, T: Instance, Tx, Rx> Spi<'d, T, Tx, Rx> {
     /// If `write` is shorter it is padded with zero bytes.
     pub fn blocking_transfer<W: Word>(&mut self, read: &mut [W], write: &[W]) -> Result<(), Error> {
         T::regs().ctlr1().modify(|w| w.set_spe(true));
-        flush_rx_fifo(&T::regs());
+        flush_rx_fifo(T::regs());
         self.set_word_size(W::CONFIG);
         let len = read.len().max(write.len());
         for i in 0..len {
@@ -372,7 +373,7 @@ fn spin_until_rx_ready(regs: &pac::spi::Spi) -> Result<(), Error> {
     }
 }
 
-fn flush_rx_fifo(regs: &pac::spi::Spi) {
+fn flush_rx_fifo(regs: pac::spi::Spi) {
     while regs.statr().read().rxne() {
         let _ = regs.datar().read();
     }
