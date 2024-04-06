@@ -194,7 +194,6 @@ pub trait Instance: SealedInstance + Peripheral<P = Self> + crate::peripheral::R
     type Interrupt: interrupt::typelevel::Interrupt;
 }
 
-
 foreach_peripheral!(
     (rng, $inst:ident) => {
         impl Instance for peripherals::$inst {

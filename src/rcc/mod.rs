@@ -39,7 +39,7 @@ mod v1;
 #[cfg(any(ch32v2, ch32v3, ch32f2))]
 mod v3;
 #[cfg(ch32x0)]
-mod x0;
+pub mod x0;
 
 #[cfg(ch32v0)]
 pub use v0::Config;

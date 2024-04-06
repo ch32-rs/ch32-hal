@@ -170,9 +170,9 @@ impl<'d> Flex<'d> {
         #[cfg(gpio_x0)]
         critical_section::with(|_| {
             self.pin
-                .set_mode_cnf(speed.into(), vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT); // FIXME: only i2c is auto set to open drain
+                .set_mode_cnf(speed.into(), vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT);
+            // FIXME: only i2c is auto set to open drain
         });
-
     }
 
     #[inline]
