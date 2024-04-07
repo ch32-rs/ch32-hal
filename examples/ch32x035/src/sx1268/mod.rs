@@ -665,6 +665,40 @@ impl Command for SetTx {
     }
 }
 
+#[derive(Debug)]
+pub struct ReadRegister<T> {
+    address: u16,
+    _phantom: core::marker::PhantomData<T>,
+}
+impl<T> Command for ReadRegister<T>
+where
+    T: Response,
+{
+    type Response = T;
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::READ_REGISTER;
+        buf[1] = (self.address >> 8) as u8;
+        buf[2] = self.address as u8;
+        return 3;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WriteRegister<'a> {
+    address: u16,
+    data: &'a [u8],
+}
+impl<'a> Command for WriteRegister<'a> {
+    type Response = ();
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::WRITE_REGISTER;
+        buf[1] = (self.address >> 8) as u8;
+        buf[2] = self.address as u8;
+        buf[3..3 + self.data.len()].copy_from_slice(self.data);
+        return 3 + self.data.len();
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct WriteBuffer<'a> {
     pub offset: u8,
@@ -802,7 +836,7 @@ impl SX1268 {
         let len = cmd.encode(&mut buf);
         let resp_len = C::Response::expected_len();
 
-        hal::println!("!! in : {:02x?}", &buf[..len]);
+        //hal::println!("!! in : {:02x?}", &buf[..len]);
         if resp_len != 0 {
             let total_len = len + 1 + C::Response::expected_len();
 
@@ -811,33 +845,44 @@ impl SX1268 {
             self.cs.set_high();
 
             let reply = &buf[len + 1..];
-            hal::println!("!! out: {:02x?}", &buf[..total_len]);
+            //hal::println!("!! out: {:02x?}", &buf[..total_len]);
             Ok(C::Response::decode(reply))
         } else {
             self.cs.set_low();
             self.spi.transfer_in_place(&mut buf[..len])?;
             self.cs.set_high();
-            hal::println!("!! out: {:02x?}", &buf[..len]);
+            //hal::println!("!! out: {:02x?}", &buf[..len]);
             Ok(C::Response::decode(&[]))
         }
     }
 
-    fn write_register(&mut self, address: u16, data: &[u8]) -> Result<(), spi::Error> {
-        todo!();
-
+    pub fn write_register(&mut self, address: u16, data: &[u8]) -> Result<(), spi::Error> {
+        self.send_command(WriteRegister { address, data })?;
         Ok(())
     }
 
-    fn write_buffer(&mut self, offset: u8, data: &[u8]) -> Result<(), spi::Error> {
+    pub fn write_buffer(&mut self, offset: u8, data: &[u8]) -> Result<(), spi::Error> {
         self.send_command(WriteBuffer { offset, data })?;
         Ok(())
     }
 
-    fn read_register(&mut self, address: u16, data: &mut [u8]) -> Result<(), spi::Error> {
-        let out = [cmds::READ_REGISTER, (address >> 8) as u8, address as u8];
+    pub fn read_register(&mut self, address: u16, data: &mut [u8]) -> Result<(), spi::Error> {
+        let mut out = [cmds::READ_REGISTER, (address >> 8) as u8, address as u8, cmds::NOP];
 
         self.cs.set_low();
-        self.spi.blocking_transfer(data, &out[..])?;
+        self.spi.blocking_transfer_in_place(&mut out[..])?;
+        self.spi.blocking_transfer_in_place(data)?;
+        self.cs.set_high();
+
+        Ok(())
+    }
+
+    pub fn read_buffer(&mut self, offset: u8, data: &mut [u8]) -> Result<(), spi::Error> {
+        let mut out = [cmds::READ_BUFFER, offset, cmds::NOP];
+
+        self.cs.set_low();
+        self.spi.blocking_transfer_in_place(&mut out[..])?;
+        self.spi.blocking_transfer_in_place(data)?;
         self.cs.set_high();
 
         Ok(())

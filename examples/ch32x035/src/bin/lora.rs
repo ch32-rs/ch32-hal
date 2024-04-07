@@ -9,7 +9,7 @@
 use core::fmt::Write;
 
 use ch32_hal as hal;
-use ch32x035_examples::sx1268::{Config, SX1268};
+use ch32x035_examples::sx1268::{regs, Config, SX1268};
 use embassy_executor::Spawner;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_hal::delay::DelayNs;
@@ -86,6 +86,10 @@ async fn main(spawner: Spawner) -> ! {
 
     println!("init ok");
 
+    //let mut buf = [0u8; 16];
+    //sx1268.read_register(regs::CHIP_REV, &mut buf).unwrap();
+   // println!("CHIP_REV: {:?}", core::str::from_utf8(&buf[..]).unwrap());
+
     loop {
         Timer::after_millis(1000).await;
         println!("-------------");
@@ -93,11 +97,11 @@ async fn main(spawner: Spawner) -> ! {
         // active low
         led.set_low();
 
-        sx1268.tx_bytes(b"Hello From ch32-hal Hello From ch32-hal Hello From ch32-hal Hello From ch32-hal Hello From ch32-hal Hello From ch32-hal Hello From ch32-hal Hello From ch32-hal !!\0", &mut delay).unwrap();
+        sx1268.tx_bytes(b"Hello From ch32-hal!!!\0", &mut delay).unwrap();
         sx1268.busy.wait_for_low().await;
         println!("busy low");
 
-       // dio1.wait_for_high().await;
+        // dio1.wait_for_high().await;
         let irq_status = sx1268.get_irq_status().unwrap();
         //  println!("dio1 high");
         println!("irq_status: {:?}", irq_status);
