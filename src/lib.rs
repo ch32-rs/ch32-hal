@@ -23,6 +23,8 @@ mod interrupt_ext;
 pub use crate::_generated::{peripherals, Peripherals};
 
 pub mod dma;
+#[cfg(systick_rv2)]
+pub mod delay;
 
 pub mod adc;
 pub mod exti;
@@ -60,6 +62,9 @@ pub struct Config {
 pub fn init(config: Config) -> Peripherals {
     unsafe {
         rcc::init(config.clock);
+
+        #[cfg(systick_rv2)]
+        delay::Delay::init();
     }
 
     ::critical_section::with(|cs| unsafe {
