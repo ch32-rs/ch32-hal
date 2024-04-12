@@ -1,5 +1,7 @@
+use core::ops;
+
 use crate::pac::rcc::vals::{Hpre as AHBPrescaler, Pllsrc as PllSource, Ppre as APBPrescaler, Sw as Sysclk};
-use crate::pac::{FLASH, RCC};
+use crate::pac::{AFIO, FLASH, RCC};
 use crate::time::Hertz;
 
 const HSI_FREQUENCY: Hertz = Hertz(24_000_000);
@@ -39,7 +41,7 @@ impl Config {
     pub const SYSCLK_FREQ_48MHZ_HSI: Config = Config {
         hse: None,
         sys: Sysclk::PLL,
-        pll_src: PllSource::HSI_MUL2,
+        pll_src: PllSource::HSI,
         ahb_pre: AHBPrescaler::DIV1,
         apb2_pre: APBPrescaler::DIV1,
     };
@@ -50,7 +52,18 @@ impl Config {
             mode: HseMode::Oscillator,
         }),
         sys: Sysclk::PLL,
-        pll_src: PllSource::HSE_MUL2,
+        pll_src: PllSource::HSE,
+        ahb_pre: AHBPrescaler::DIV1,
+        apb2_pre: APBPrescaler::DIV1,
+    };
+
+    pub const SYSCLK_FREQ_24MHZ_HSE: Config = Config {
+        hse: Some(Hse {
+            freq: Hertz(24_000_000),
+            mode: HseMode::Oscillator,
+        }),
+        sys: Sysclk::HSE,
+        pll_src: PllSource::HSE,
         ahb_pre: AHBPrescaler::DIV1,
         apb2_pre: APBPrescaler::DIV1,
     };
@@ -62,8 +75,8 @@ impl Default for Config {
             // hsi: true,
             hse: None,
             sys: Sysclk::HSI,
-            pll_src: PllSource::HSE_MUL2,
-            ahb_pre: AHBPrescaler::DIV1,
+            pll_src: PllSource::HSI,
+            ahb_pre: AHBPrescaler::DIV3,
             apb2_pre: APBPrescaler::DIV1,
         }
     }
@@ -71,45 +84,90 @@ impl Default for Config {
 
 #[allow(unused_variables)]
 pub(crate) unsafe fn init(config: Config) {
-    if config.sys == Sysclk::HSE || (config.sys == Sysclk::PLL && config.pll_src == PllSource::HSE_MUL2) {
-        // enable HSI
+    if config.sys == Sysclk::HSE || (config.sys == Sysclk::PLL && config.pll_src == PllSource::HSE) {
+        // enable HSE pins
+        RCC.apb2pcenr().modify(|w| w.set_afioen(true));
+        AFIO.pcfr1().modify(|w| w.set_pa12_rm(true));
+
+        // enable HSE
         RCC.ctlr().modify(|w| {
             w.set_hsebyp(config.hse.unwrap().mode == HseMode::Bypass);
             w.set_hseon(true);
         });
         while !RCC.ctlr().read().hserdy() {}
-        RCC.cfgr0().modify(|w| w.set_sw(Sysclk::HSE));
     }
 
-    let mut sysclk = 24_000_000;
-    if config.sys == Sysclk::HSI {
-        // enable HSI
-        // default enabled
-        sysclk = HSI_FREQUENCY.0;
-    } else if config.sys == Sysclk::HSE {
-        // enable HSE
-        RCC.cfgr0().modify(|w| w.set_sw(Sysclk::HSE));
-        while RCC.cfgr0().read().sws() != Sysclk::HSE {}
-        sysclk = config.hse.unwrap().freq.0;
-    } else if config.sys == Sysclk::PLL {
-        RCC.cfgr0().modify(|w| w.set_pllsrc(config.pll_src));
-        RCC.ctlr().modify(|w| w.set_pllon(true));
-        while !RCC.ctlr().read().pllrdy() {}
+    let sysclk = match config.sys {
+        Sysclk::HSI => {
+            // HSI default enabled
+            HSI_FREQUENCY.0
+        }
+        Sysclk::HSE => {
+            // enable HSE
+            RCC.cfgr0().modify(|w| w.set_sw(Sysclk::HSE));
+            while RCC.cfgr0().read().sws() != Sysclk::HSE {}
+            config.hse.unwrap().freq.0
+        }
+        Sysclk::PLL => {
+            RCC.cfgr0().modify(|w| w.set_pllsrc(config.pll_src));
+            RCC.ctlr().modify(|w| w.set_pllon(true));
+            while !RCC.ctlr().read().pllrdy() {}
 
-        RCC.cfgr0().modify(|w| w.set_sw(Sysclk::PLL));
-        while RCC.cfgr0().read().sws() != Sysclk::PLL {}
+            RCC.cfgr0().modify(|w| w.set_sw(Sysclk::PLL));
+            while RCC.cfgr0().read().sws() != Sysclk::PLL {}
 
-        match config.pll_src {
-            PllSource::HSI_MUL2 => sysclk = HSI_FREQUENCY.0 * 2,
-            PllSource::HSE_MUL2 => sysclk = config.hse.unwrap().freq.0 * 2,
-            _ => unreachable!(),
-        };
-    }
+            // MUL2 is the only option, always *2
+            match config.pll_src {
+                PllSource::HSI => HSI_FREQUENCY.0 * 2,
+                PllSource::HSE => config.hse.unwrap().freq.0 * 2,
+                _ => unreachable!(),
+            }
+        }
+        _ => unreachable!(),
+    };
 
-    // TODO: handle AHBPrescaler and APBPrescaler
+    RCC.cfgr0().modify(|w| {
+        w.set_hpre(config.ahb_pre);
+        w.set_ppre2(config.apb2_pre); // FIXME: this is undocumented, only for ADC2?
+    });
+
+    // TODO: handle APBPrescaler
+    let hclk = match config.ahb_pre {
+        AHBPrescaler::DIV1 => sysclk,
+        AHBPrescaler::DIV2 => sysclk / 2,
+        AHBPrescaler::DIV3 => sysclk / 3,
+        AHBPrescaler::DIV4 => sysclk / 4,
+        AHBPrescaler::DIV5 => sysclk / 5,
+        AHBPrescaler::DIV6 => sysclk / 6,
+        AHBPrescaler::DIV7 => sysclk / 7,
+        AHBPrescaler::DIV8 => sysclk / 8,
+        AHBPrescaler::DIV16 => sysclk / 16,
+        AHBPrescaler::DIV32 => sysclk / 16,
+        AHBPrescaler::DIV64 => sysclk / 64,
+        AHBPrescaler::DIV128 => sysclk / 128,
+        AHBPrescaler::DIV256 => sysclk / 256,
+        _ => panic!(),
+    };
+
+    let pclk2 = Hertz(hclk) / config.apb2_pre;
 
     super::CLOCKS.sysclk = Hertz(sysclk);
-    super::CLOCKS.hclk = Hertz(sysclk);
-    super::CLOCKS.pclk1 = Hertz(sysclk);
-    super::CLOCKS.pclk2 = Hertz(sysclk);
+    super::CLOCKS.hclk = Hertz(hclk);
+    super::CLOCKS.pclk1 = Hertz(hclk);
+    super::CLOCKS.pclk2 = pclk2;
+}
+
+impl ops::Div<APBPrescaler> for Hertz {
+    type Output = Hertz;
+    fn div(self, rhs: APBPrescaler) -> Hertz {
+        let raw = rhs as u32;
+        if raw >= 0b100 {
+            // 2, 4, 8, 16
+            let d = raw - 0b100 + 1;
+            Hertz(self.0 >> d)
+        } else {
+            // DIV1
+            self
+        }
+    }
 }
