@@ -16,7 +16,7 @@ async fn main(spawner: Spawner) -> ! {
     hal::embassy::init();
 
     // GPIO
-    let mut led = Output::new(p.PA4, Level::Low);
+    let mut led = Output::new(p.PA4, Level::Low, Default::default());
 
     let mut cfg = usart::Config::default();
     //cfg.baudrate = 1000000;

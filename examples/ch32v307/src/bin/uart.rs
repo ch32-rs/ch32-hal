@@ -11,7 +11,7 @@ use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::task]
 async fn blink(pin: AnyPin) {
-    let mut led = Output::new(pin, Level::Low);
+    let mut led = Output::new(pin, Level::Low, Default::default());
 
     loop {
         led.set_high();

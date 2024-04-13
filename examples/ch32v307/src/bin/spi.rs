@@ -8,11 +8,12 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use hal::gpio::{AnyPin, Level, Output, Pin};
 use hal::println;
+use hal::time::Hertz;
 use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::task]
 async fn blink(pin: AnyPin) {
-    let mut led = Output::new(pin, Level::Low);
+    let mut led = Output::new(pin, Level::Low, Default::default());
 
     loop {
         led.set_high();
@@ -33,7 +34,7 @@ async fn main(spawner: Spawner) -> ! {
     let (sck, miso, mosi) = (p.PA5, p.PA6, p.PA7);
 
     let mut spi_config = spi::Config::default();
-    spi_config.frequency = 375.kHz();
+    spi_config.frequency = Hertz::khz(375);
     let mut spi = spi::Spi::new(p.SPI1, sck, mosi, miso, NoDma, NoDma, spi_config);
 
     loop {
