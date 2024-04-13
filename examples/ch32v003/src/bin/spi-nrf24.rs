@@ -11,7 +11,6 @@ use hal::spi::Spi;
 use qingke::riscv;
 use {ch32_hal as hal, panic_halt as _};
 
-
 /// The following example is an altered verison of https://github.com/rtxm/rust-nrf24l01/tree/master.
 /// the code has been altered to avoid `std` and rely on `ch320-hal`'s `Output` and `SPI` impls.
 
@@ -586,7 +585,6 @@ impl NRF24L01 {
         let (status, fifo_status) = self.read_register(FIFO_STATUS)?;
         if (status & 1 != 0) || (fifo_status & 0b0010_0000 != 0) {
             // TX_FIFO is full
-            // Err(io::Error::new(io::ErrorKind::WriteZero, "Sending queue is full!"))
             println!("Sending queue is full!");
             Err(NrfError::WriteZeroQueueFull)
         } else {
@@ -597,7 +595,6 @@ impl NRF24L01 {
                 W_TX_PAYLOAD
             };
             if data.len() > 32 {
-                // Err(io::Error::new(io::ErrorKind::InvalidData, "Packet too big!"))
                 println!("Packet too big!");
                 Err(NrfError::InvalidDataPacketTooBig)
             } else {
@@ -634,9 +631,6 @@ impl NRF24L01 {
             // send with a 10us pulse
             self.ce.up()?;
             // sleep(Duration::new(0, 10_000));
-            // riscv::asm::delay(1000);
-            // println!("packet");
-            // riscv::asm::delay(4_294_967_295);
             riscv::asm::delay(10_000);
             self.ce.down()?;
             let mut status = 0u8;
@@ -645,7 +639,6 @@ impl NRF24L01 {
             while status & 0x30 == 0 {
                 // wait at least 360us
                 // sleep(Duration::new(0, 360_000));
-                // println!("staus");
                 riscv::asm::delay(360_000);
                 let outcome = self.read_register(OBSERVE_TX)?;
                 status = outcome.0;
@@ -656,12 +649,8 @@ impl NRF24L01 {
                 // failure
                 // clear MAX_RT
                 self.write_register(STATUS, 0x10)?;
-                println!("MAX_RT");
+                println!("Max retries reached!");
                 // force return
-                // return Err(io::Error::new(
-                //     io::ErrorKind::TimedOut,
-                //     "Maximum number of retries reached!",
-                // ));
                 return Err(NrfError::MaxRetries);
             };
             // Success
