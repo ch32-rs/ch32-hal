@@ -1,4 +1,5 @@
 pub const CHIP_REV: u16 = 0x0320;
+
 pub const DIOX_OUTPUT_ENABLE: u16 = 0x0580;
 pub const DIOX_INPUT_ENABLE: u16 = 0x0583;
 pub const DIOX_PILL_UP_CONTROL: u16 = 0x0584;

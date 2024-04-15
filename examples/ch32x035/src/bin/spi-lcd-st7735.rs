@@ -259,7 +259,7 @@ impl<const WIDTH: u16, const HEIGHT: u16, const OFFSETX: u16, const OFFSETY: u16
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
-    config.clock = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
+    config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
     let p = hal::init(config);
     hal::embassy::init();
 
@@ -339,5 +339,7 @@ async fn main(spawner: Spawner) -> ! {
         )
         .draw(&mut display)
         .unwrap();
+
+        Timer::after_millis(1).await;
     }
 }

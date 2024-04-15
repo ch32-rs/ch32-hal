@@ -4,7 +4,7 @@ use hal::dma::NoDma;
 use hal::exti::ExtiInput;
 use hal::gpio::{Input, Output};
 use hal::spi::Spi;
-use hal::{peripherals, spi};
+use hal::{peripherals, println, spi};
 
 use crate::hal;
 
@@ -40,9 +40,26 @@ impl Response for u8 {
         1
     }
 }
+impl Response for i8 {
+    fn decode(buf: &[u8]) -> Self {
+        buf[0] as _
+    }
+    fn expected_len() -> usize {
+        1
+    }
+}
 impl Response for u16 {
     fn decode(buf: &[u8]) -> Self {
         (buf[0] as u16) << 8 | buf[1] as u16
+    }
+    fn expected_len() -> usize {
+        2
+    }
+}
+
+impl Response for (u8, u8) {
+    fn decode(buf: &[u8]) -> Self {
+        (buf[0], buf[1])
     }
     fn expected_len() -> usize {
         2
@@ -59,7 +76,7 @@ impl Response for Status {
 impl Status {
     pub fn is_error(&self) -> bool {
         let s = self.command_status();
-        s >= 3 && s <= 6
+        s >= 3 && s <= 5
     }
 
     pub fn is_data_ready(&self) -> bool {
@@ -189,6 +206,20 @@ impl Command for SetDIO2AsRfSwitchCtrl {
     }
 }
 
+pub struct SetRegulatorMode(u8);
+impl Command for SetRegulatorMode {
+    type Response = ();
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::SET_REGULATOR_MODE;
+        buf[1] = self.0;
+        return 2;
+    }
+}
+impl SetRegulatorMode {
+    pub const LDO: Self = Self(0x00);
+    pub const DCDC: Self = Self(0x01);
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Calibrate(pub u8);
 impl Calibrate {
@@ -210,8 +241,8 @@ impl Default for Calibrate {
 
 #[derive(Debug, Clone, Copy)]
 pub struct CalibrateImage {
-    freq1: u8,
-    freq2: u8,
+    pub freq1: u8,
+    pub freq2: u8,
 }
 impl Command for CalibrateImage {
     type Response = ();
@@ -223,6 +254,19 @@ impl Command for CalibrateImage {
     }
 }
 impl CalibrateImage {
+    pub fn for_freq(freq: u32) -> Self {
+        if freq > 900_000_000 {
+            Self::BAND_902_928
+        } else if freq > 850_000_000 {
+            Self::BAND_864_870
+        } else if freq > 770_000_000 {
+            Self::BAND_779_787
+        } else if freq > 460_000_000 {
+            Self::BAND_470_510
+        } else {
+            Self::BAND_430_440
+        }
+    }
     pub const BAND_430_440: Self = Self {
         freq1: 0x6B,
         freq2: 0x6F,
@@ -234,6 +278,15 @@ impl CalibrateImage {
     pub const BAND_779_787: Self = Self {
         freq1: 0xC1,
         freq2: 0xC5,
+    };
+    // for sx1262
+    pub const BAND_864_870: Self = Self {
+        freq1: 0xD7,
+        freq2: 0xD8,
+    };
+    pub const BAND_902_928: Self = Self {
+        freq1: 0xE1,
+        freq2: 0xE9,
     };
 }
 
@@ -268,6 +321,30 @@ impl SetPaConfig {
         device_sel: 0x00,
         pa_lut: 0x01,
     };
+    pub const POWER_17DBM: Self = Self {
+        pa_duty_cycle: 0x02,
+        hp_max: 0x03,
+        device_sel: 0x00,
+        pa_lut: 0x01,
+    };
+    pub const POWER_14DBM: Self = Self {
+        pa_duty_cycle: 0x04,
+        hp_max: 0x06,
+        device_sel: 0x00,
+        pa_lut: 0x01,
+    };
+    pub const POWER_10DBM: Self = Self {
+        pa_duty_cycle: 0x00,
+        hp_max: 0x03,
+        device_sel: 0x00,
+        pa_lut: 0x01,
+    };
+    pub const POWER_15DBM_SX1262: Self = Self {
+        pa_duty_cycle: 0x06,
+        hp_max: 0x00,
+        device_sel: 0x01,
+        pa_lut: 0x01,
+    };
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -287,22 +364,27 @@ pub struct SetTxParams {
     // - 17 (0xEF) to +14 (0x0E) dBm by step of 1 dB if low power PA is selected
     // - 9 (0xF7) to +22 (0x16) dBm by step of 1 dB if high power PA is selected
     pub power: i8,
-    pub ramp_time: u8,
+    pub ramp_time: RampTime,
+}
+impl SetTxParams {
+    pub const fn new(dbm: i8, ramp_time: RampTime) -> Self {
+        Self { power: dbm, ramp_time }
+    }
 }
 impl Command for SetTxParams {
     type Response = ();
     fn encode(&self, buf: &mut [u8]) -> usize {
         buf[0] = cmds::SET_TX_PARAMS;
         buf[1] = self.power as u8;
-        buf[2] = self.ramp_time;
+        buf[2] = self.ramp_time as u8;
         return 3;
     }
 }
 impl Default for SetTxParams {
     fn default() -> Self {
         Self {
-            power: 14,
-            ramp_time: RampTime::_200U as u8,
+            power: 22,
+            ramp_time: RampTime::_3400U,
         }
     }
 }
@@ -412,6 +494,8 @@ pub enum LoRaBandWidth {
     BW41 = 0x0A,
     /// 62.50 kHz
     BW62 = 0x03,
+
+    // for LLCC68
     /// 125 kHz
     BW125 = 0x04,
     /// 250 kHz
@@ -421,12 +505,12 @@ pub enum LoRaBandWidth {
 }
 
 #[derive(Copy, Clone)]
-#[repr(u8)]
-pub enum LoraCodingRate {
-    CR4_5 = 0x01,
-    CR4_6 = 0x02,
-    CR4_7 = 0x03,
-    CR4_8 = 0x04,
+pub struct LoraCodingRate(u8);
+impl LoraCodingRate {
+    pub const CR_4_5: Self = Self(0x01);
+    pub const CR_4_6: Self = Self(0x02);
+    pub const CR_4_7: Self = Self(0x03);
+    pub const CR_4_8: Self = Self(0x04);
 }
 
 #[derive(Clone, Copy)]
@@ -447,14 +531,68 @@ pub enum SetModulationParams {
 impl SetModulationParams {
     pub const LORA_DEFAULT: Self = Self::LoRa {
         sf: LoRaSpreadFactor::SF7,
-        bw: LoRaBandWidth::BW125,
-        cr: LoraCodingRate::CR4_5,
-        low_data_rate_optimize: false,
+        bw: LoRaBandWidth::BW500,
+        cr: LoraCodingRate::CR_4_5,
+        low_data_rate_optimize: true,
+    };
+    pub const LORA_KBPS_62_5: Self = Self::LoRa {
+        sf: LoRaSpreadFactor::SF5,
+        bw: LoRaBandWidth::BW500,
+        cr: LoraCodingRate::CR_4_5,
+        low_data_rate_optimize: true,
+    };
+    pub const LORA_KBPS_38_4: Self = Self::LoRa {
+        sf: LoRaSpreadFactor::SF5,
+        bw: LoRaBandWidth::BW500,
+        cr: LoraCodingRate::CR_4_8,
+        low_data_rate_optimize: true,
+    };
+    pub const LORA_KBPS_19_2: Self = Self::LoRa {
+        sf: LoRaSpreadFactor::SF7,
+        bw: LoRaBandWidth::BW500,
+        cr: LoraCodingRate::CR_4_6,
+        low_data_rate_optimize: true,
+    };
+    pub const LORA_KBPS_9_6: Self = Self::LoRa {
+        sf: LoRaSpreadFactor::SF8,
+        bw: LoRaBandWidth::BW500,
+        cr: LoraCodingRate::CR_4_6,
+        low_data_rate_optimize: true,
+    };
+    pub const LORA_KBPS_4_8: Self = Self::LoRa {
+        sf: LoRaSpreadFactor::SF8,
+        bw: LoRaBandWidth::BW250,
+        cr: LoraCodingRate::CR_4_5,
+        low_data_rate_optimize: true,
+    };
+    pub const LORA_KBPS_2_4: Self = Self::LoRa {
+        sf: LoRaSpreadFactor::SF11,
+        bw: LoRaBandWidth::BW500,
+        cr: LoraCodingRate::CR_4_5,
+        low_data_rate_optimize: true,
+    };
+    pub const LORA_KBPS_1_2: Self = Self::LoRa {
+        sf: LoRaSpreadFactor::SF11,
+        bw: LoRaBandWidth::BW500,
+        cr: LoraCodingRate::CR_4_5,
+        low_data_rate_optimize: true,
+    };
+    pub const LORA_KBPS_0_3: Self = Self::LoRa {
+        sf: LoRaSpreadFactor::SF11,
+        bw: LoRaBandWidth::BW500,
+        cr: LoraCodingRate::CR_4_5,
+        low_data_rate_optimize: true,
     };
     pub const VARIATION1: Self = Self::LoRa {
         sf: LoRaSpreadFactor::SF9,
         bw: LoRaBandWidth::BW500,
-        cr: LoraCodingRate::CR4_5,
+        cr: LoraCodingRate::CR_4_5,
+        low_data_rate_optimize: true,
+    };
+    pub const VARIATION2: Self = Self::LoRa {
+        sf: LoRaSpreadFactor::SF9,
+        bw: LoRaBandWidth::BW500,
+        cr: LoraCodingRate::CR_4_7,
         low_data_rate_optimize: true,
     };
 }
@@ -489,11 +627,53 @@ impl Command for SetModulationParams {
                 buf[1] = 0x01;
                 buf[2] = *sf as u8;
                 buf[3] = *bw as u8;
-                buf[4] = *cr as u8;
+                buf[4] = cr.0;
                 buf[5] = if *low_data_rate_optimize { 0x01 } else { 0x00 };
                 return 6;
             }
         }
+    }
+}
+
+// Only when PacketType = 0x01 (LoRa)
+#[derive(Clone, Copy)]
+pub struct SetLoRaPacketParams {
+    /// 前导码长度
+    pub preamble_len: u16,
+    pub fixed_len: bool,
+    pub payload_len: u8,
+    pub crc: bool,
+    pub invert_iq: bool,
+}
+impl SetLoRaPacketParams {
+    pub const fn with_payload_len(len: u8) -> Self {
+        Self {
+            preamble_len: 60,
+            fixed_len: true,
+            payload_len: len,
+            crc: true,
+            invert_iq: false,
+        }
+    }
+    pub const DEFAULT: Self = Self {
+        preamble_len: 60,
+        fixed_len: false,
+        payload_len: 0,
+        crc: true,
+        invert_iq: false,
+    };
+}
+impl Command for SetLoRaPacketParams {
+    type Response = ();
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::SET_PACKET_PARAMS;
+        buf[1] = (self.preamble_len >> 8) as u8;
+        buf[2] = self.preamble_len as u8;
+        buf[3] = if self.fixed_len { 0x01 } else { 0x00 };
+        buf[4] = self.payload_len;
+        buf[5] = if self.crc { 0x01 } else { 0x00 };
+        buf[6] = if self.invert_iq { 0x01 } else { 0x00 };
+        return 7;
     }
 }
 
@@ -529,10 +709,10 @@ pub enum SetPacketParams {
 }
 impl SetPacketParams {
     pub const LORA_DEFAULT: Self = Self::LoRa {
-        preamble_len: 8,
+        preamble_len: 60,
         header_type: LoRaHeaderType::VarLen,
         payload_len: 0,
-        crc: false,
+        crc: true,
         invert_iq: false,
     };
 }
@@ -626,6 +806,18 @@ impl Command for GetIrqStatus {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct ClearIrqStatus(pub u16);
+impl Command for ClearIrqStatus {
+    type Response = ();
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::CLEAR_IRQ_STATUS;
+        buf[1] = (self.0 >> 8) as u8;
+        buf[2] = self.0 as u8;
+        return 3;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct GetStatus;
 impl Command for GetStatus {
     type Response = Status;
@@ -638,6 +830,10 @@ impl Command for GetStatus {
 #[derive(Default, Debug, Clone, Copy)]
 pub struct SetRx {
     pub timeout: u32,
+}
+impl SetRx {
+    pub const SINGLE: Self = Self { timeout: 0 };
+    pub const CONTINUOUS: Self = Self { timeout: 0xFF_FFFF };
 }
 impl Command for SetRx {
     type Response = ();
@@ -662,6 +858,33 @@ impl Command for SetTx {
         buf[2] = (self.timeout >> 8) as u8;
         buf[3] = self.timeout as u8;
         return 4;
+    }
+}
+
+pub struct SetFs;
+impl Command for SetFs {
+    type Response = ();
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::SET_FS;
+        return 1;
+    }
+}
+
+pub struct SetTxContinuousWave;
+impl Command for SetTxContinuousWave {
+    type Response = ();
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::SET_TX_CONTINUOUS_WAVE;
+        return 1;
+    }
+}
+
+pub struct SetTxInfinitePreamble;
+impl Command for SetTxInfinitePreamble {
+    type Response = ();
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::SET_TX_INFINITE_PREAMBLE;
+        return 1;
     }
 }
 
@@ -742,53 +965,180 @@ impl Command for GetStats {
     }
 }
 
+pub struct GetRxBufferStatus;
+impl Command for GetRxBufferStatus {
+    type Response = (u8, u8);
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::GET_RX_BUFFER_STATUS;
+        return 1;
+    }
+}
+
+pub struct LoRaPacketStatus {
+    // Average over last packet received of RSSI Actual signal power is –RssiPkt/2 (dBm)
+    pub rssi_pkt: i8,
+    // Estimation of SNR on last packet received in two’s compliment format multiplied by 4. LoRa® Actual SNR in dB =SnrPkt/4
+    pub snr_pkt: i8,
+    // Estimation of RSSI of the LoRa® signal (after despreading) on last packet received. Actual Rssi in dB = -SignalRssiPkt/2
+    pub signal_rssi_pkt: i8,
+}
+impl Response for LoRaPacketStatus {
+    fn decode(buf: &[u8]) -> Self {
+        Self {
+            rssi_pkt: buf[0] as i8,
+            snr_pkt: buf[1] as i8,
+            signal_rssi_pkt: buf[2] as i8,
+        }
+    }
+    fn expected_len() -> usize {
+        3
+    }
+}
+pub struct GetLoRaPacketStatus;
+impl Command for GetLoRaPacketStatus {
+    type Response = LoRaPacketStatus;
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::GET_PACKET_STATUS;
+        return 1;
+    }
+}
+
+pub struct GetRssiInst;
+impl Command for GetRssiInst {
+    type Response = i8;
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::GET_RSSI_INST;
+        return 1;
+    }
+}
+
+// Miscellaneous
+pub struct GetDeviceErrors;
+impl Command for GetDeviceErrors {
+    type Response = u16;
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::GET_DEVICE_ERRORS;
+        return 1;
+    }
+}
+
+pub struct ClearDeviceErrors;
+impl Command for ClearDeviceErrors {
+    type Response = Status; // return status
+    fn encode(&self, buf: &mut [u8]) -> usize {
+        buf[0] = cmds::CLEAR_DEVICE_ERRORS;
+        return 1;
+    }
+}
+
 // ==========
 // The device
 
-pub struct Config {}
-pub struct SX1268 {
+#[derive(Default)]
+pub struct Config {
+    pub freq: u32,
+    pub dio2_as_txen: bool,
+    pub dio3_as_txco_ctrl: Option<(TxcoVoltage, u32)>,
+    pub xosc_trim: Option<(u8, u8)>,
+}
+pub struct SX1268<CS> {
     spi: Spi<'static, peripherals::SPI1, NoDma, NoDma>,
-    cs: Output<'static>,
-    pub busy: ExtiInput<'static>,
+    cs: CS,
 }
 
-impl SX1268 {
-    pub fn new(
-        spi: Spi<'static, peripherals::SPI1, NoDma, NoDma>,
-        cs: Output<'static>,
-        busy: ExtiInput<'static>,
-    ) -> Self {
-        Self { spi, cs, busy }
+impl<CS: embedded_hal::digital::OutputPin> SX1268<CS> {
+    pub fn new(spi: Spi<'static, peripherals::SPI1, NoDma, NoDma>, cs: CS) -> Self {
+        Self { spi, cs }
     }
 
-    pub fn init(&mut self, _config: Config, delay: &mut impl DelayNs) -> Result<(), spi::Error> {
+    pub fn init(&mut self, config: Config, delay: &mut impl DelayNs) -> Result<(), spi::Error> {
+        // wake up
         let status = self.get_status()?;
         if status.chip_mode() == 0x02 {
             // already in standby RC
-        } else {
-            self.send_command(SetStandby::RC)?;
+        }
+        //self.send_command(SetStandby::XOSC)?;
+        self.send_command(SetStandby::RC)?;
+
+        if let Some((voltage, delay)) = config.dio3_as_txco_ctrl {
+            hal::println!("DIO3 as TXCO CTRL");
+            self.send_command(SetDIO3AsTCXOCtrl::new(voltage, delay))?;
+            //self.send_command(SetStandby::XOSC)?;
+            //self.write_register(regs::XTA_TRIM, 0x2F)?;
+            //self.write_register(regs::XTB_TRIM, 0x2F)?;
+            //  重新计算修正时钟
+            self.send_command(Calibrate::ALL)?;
+            self.send_command(SetStandby::XOSC)?;
+
+            // 进入 STDBY_XOSC 待机配置模式
         }
 
-        // must be first config command
-        self.send_command(SetPacketType::LORA)?;
-        self.send_command(SetRfFrequency::hz(433_450_000))?;
-        self.send_command(SetDIO3AsTCXOCtrl::new(TxcoVoltage::V3_3, 500))?;
+        if let Some((xta_trim, xtb_trim)) = config.xosc_trim {
+            // E220
+            self.send_command(SetStandby::XOSC)?;
+            self.write_register(regs::XTA_TRIM, xta_trim)?;
+            self.write_register(regs::XTB_TRIM, xtb_trim)?;
+        } else {
+            // E22
+            // self.send_command(SetStandby::RC)?;
+            //  self.send_command(SetStandby::XOSC)?;
+        }
 
-        self.send_command(Calibrate::ALL)?;
-        self.send_command(CalibrateImage::BAND_430_440)?;
+        self.send_command(SetRegulatorMode::DCDC)?;
 
-        self.send_command(SetPaConfig::POWER_22DBM)?;
-
-        self.send_command(SetTxParams::default())?;
-        self.send_command(SetBufferBaseAddress::default())?;
-
-        self.send_command(SetModulationParams::VARIATION1)?;
-        self.send_command(SetPacketParams::LORA_DEFAULT)?;
-
+        if config.dio2_as_txen {
+            hal::println!("DIO2 as TXEN");
+            self.send_command(SetDIO2AsRfSwitchCtrl(true))?;
+        }
         // use dio1 as irq
         self.send_command(SetDioIrqParams::DEFAULT)?;
-        self.send_command(SetDIO2AsRfSwitchCtrl(true))?;
 
+        // E220
+        // 进入 STDBY_XOSC 待机配置模式
+        //        const XTA_TRIM_VALUE: u8 = 0x1C;
+        //      self.send_command(SetStandby::XOSC)?;
+        //    self.write_register(regs::XTA_TRIM, XTA_TRIM_VALUE)?;
+        //  self.write_register(regs::XTB_TRIM, XTA_TRIM_VALUE)?;
+        // self.send_command(SetDIO3AsTCXOCtrl::new(TxcoVoltage::V3_3, 500))?;
+
+        self.send_command(SetBufferBaseAddress::default())?;
+
+        // ========== rf part
+        let rf_freq = config.freq;
+        hal::println!("rf_freq: {}", rf_freq);
+
+        // radio config sequence
+        self.send_command(SetPacketType::LORA)?;
+
+        // when tx, callibrate image must after set rf freq
+        self.send_command(SetRfFrequency::hz(rf_freq))?;
+
+        self.send_command(CalibrateImage::BAND_470_510)?;
+
+        // must in STDBY_RC mode
+        // self.send_command(Calibrate::ALL)?;
+        // will busy for 3.5ms
+
+        //self.send_command(SetStandby::XOSC)?;
+
+        // self.send_command(SetModulationParams::LORA_DEFAULT)?;
+        self.send_command(SetModulationParams::LORA_KBPS_2_4)?;
+        self.send_command(SetLoRaPacketParams::DEFAULT)?;
+
+        pub const LORA_SYNC_WORD: u16 = 0x3444; // pub,  0x1424 private
+        self.set_lora_sync_word(LORA_SYNC_WORD)?;
+
+        // power should match
+        self.send_command(SetPaConfig::POWER_10DBM)?;
+        self.send_command(SetTxParams::new(22, RampTime::_3400U))?;
+
+        Ok(())
+    }
+
+    pub fn set_rf_frequency(&mut self, freq: u32) -> Result<(), spi::Error> {
+        self.send_command(SetRfFrequency::hz(freq))?;
+        self.send_command(SetStandby::XOSC)?;
+        self.send_command(SetRfFrequency::hz(freq))?;
         Ok(())
     }
 
@@ -798,20 +1148,33 @@ impl SX1268 {
         Ok(())
     }
 
-    pub fn set_tx(&mut self, delay: &mut impl DelayNs) -> Result<(), spi::Error> {
-        todo!();
+    pub fn set_fs(&mut self) -> Result<(), spi::Error> {
+        self.send_command(SetFs)?;
+        Ok(())
     }
 
-    pub fn tx_bytes(&mut self, data: &[u8], delay: &mut impl DelayNs) -> Result<(), spi::Error> {
+    pub fn set_tx_continuous_wave(&mut self) -> Result<(), spi::Error> {
+        self.send_command(SetTxContinuousWave)?;
+        Ok(())
+    }
+
+    pub fn set_tx_infinite_preamble(&mut self) -> Result<(), spi::Error> {
+        self.send_command(SetTxInfinitePreamble)?;
+        Ok(())
+    }
+
+    pub fn rx_bytes(&mut self) -> Result<(), spi::Error> {
+        let cmd = SetLoRaPacketParams::with_payload_len(0x00);
+        self.send_command(cmd)?;
+        self.send_command(SetRx::SINGLE)?;
+
+        Ok(())
+    }
+
+    pub fn tx_bytes(&mut self, data: &[u8]) -> Result<(), spi::Error> {
         self.write_buffer(0x00, data)?;
 
-        self.send_command(SetPacketParams::LoRa {
-            preamble_len: 8,
-            header_type: LoRaHeaderType::VarLen,
-            payload_len: data.len() as _,
-            crc: false,
-            invert_iq: false,
-        })?;
+        self.send_command(SetLoRaPacketParams::with_payload_len(data.len() as u8))?;
 
         // no timeout
         self.send_command(SetTx::default())?;
@@ -823,6 +1186,11 @@ impl SX1268 {
         self.send_command(GetIrqStatus)
     }
 
+    pub fn clear_irq_status(&mut self, mask: u16) -> Result<(), spi::Error> {
+        self.send_command(ClearIrqStatus(mask))?;
+        Ok(())
+    }
+
     pub fn get_status(&mut self) -> Result<Status, spi::Error> {
         self.send_command(GetStatus)
     }
@@ -831,7 +1199,11 @@ impl SX1268 {
         self.send_command(GetStats)
     }
 
-    fn send_command<C: Command>(&mut self, cmd: C) -> Result<C::Response, spi::Error> {
+    pub fn get_rx_buffer_status(&mut self) -> Result<(u8, u8), spi::Error> {
+        self.send_command(GetRxBufferStatus)
+    }
+
+    pub fn send_command<C: Command>(&mut self, cmd: C) -> Result<C::Response, spi::Error> {
         let mut buf = [0u8; 255];
         let len = cmd.encode(&mut buf);
         let resp_len = C::Response::expected_len();
@@ -840,25 +1212,53 @@ impl SX1268 {
         if resp_len != 0 {
             let total_len = len + 1 + C::Response::expected_len();
 
-            self.cs.set_low();
+            let _ = self.cs.set_low();
             self.spi.transfer_in_place(&mut buf[..total_len])?;
-            self.cs.set_high();
+            let _ = self.cs.set_high();
 
             let reply = &buf[len + 1..];
-            //hal::println!("!! out: {:02x?}", &buf[..total_len]);
+            // hal::println!("!! out: {:02x?}", &buf[..total_len]);
             Ok(C::Response::decode(reply))
         } else {
-            self.cs.set_low();
+            let _ = self.cs.set_low();
             self.spi.transfer_in_place(&mut buf[..len])?;
-            self.cs.set_high();
-            //hal::println!("!! out: {:02x?}", &buf[..len]);
+            let _ = self.cs.set_high();
+            // hal::println!("!! out: {:02x?}", &buf[..len]);
             Ok(C::Response::decode(&[]))
         }
     }
 
-    pub fn write_register(&mut self, address: u16, data: &[u8]) -> Result<(), spi::Error> {
+    pub fn set_lora_sync_word(&mut self, sync_word: u16) -> Result<(), spi::Error> {
+        self.write_register(regs::LORA_SYNC_WORD_MSB, (sync_word >> 8) as u8)?;
+        self.write_register(regs::LORA_SYNC_WORD_LSB, sync_word as u8)?;
+
+        Ok(())
+    }
+
+    pub fn get_rssi_dbm(&mut self) -> Result<i8, spi::Error> {
+        // Signal power in dBm = –RssiInst/2 (dBm)
+        self.send_command(GetRssiInst).map(|x| x / 2)
+    }
+
+    /// 0x18 60mA
+    /// 0x38 140mA
+    pub fn set_pa_ocp(&mut self, ma: u8) -> Result<(), spi::Error> {
+        self.write_register(regs::OCP_CONFIGURATION, ma)?;
+        Ok(())
+    }
+
+    // helpers
+    pub fn write_registers(&mut self, address: u16, data: &[u8]) -> Result<(), spi::Error> {
         self.send_command(WriteRegister { address, data })?;
         Ok(())
+    }
+
+    pub fn get_device_errors(&mut self) -> Result<u16, spi::Error> {
+        self.send_command(GetDeviceErrors)
+    }
+
+    pub fn write_register(&mut self, address: u16, data: u8) -> Result<(), spi::Error> {
+        self.write_registers(address, &[data])
     }
 
     pub fn write_buffer(&mut self, offset: u8, data: &[u8]) -> Result<(), spi::Error> {
@@ -866,7 +1266,7 @@ impl SX1268 {
         Ok(())
     }
 
-    pub fn read_register(&mut self, address: u16, data: &mut [u8]) -> Result<(), spi::Error> {
+    pub fn read_registers(&mut self, address: u16, data: &mut [u8]) -> Result<(), spi::Error> {
         let mut out = [cmds::READ_REGISTER, (address >> 8) as u8, address as u8, cmds::NOP];
 
         self.cs.set_low();
@@ -877,13 +1277,29 @@ impl SX1268 {
         Ok(())
     }
 
-    pub fn read_buffer(&mut self, offset: u8, data: &mut [u8]) -> Result<(), spi::Error> {
-        let mut out = [cmds::READ_BUFFER, offset, cmds::NOP];
+    pub fn read_register(&mut self, address: u16) -> Result<u8, spi::Error> {
+        let mut out = [
+            cmds::READ_REGISTER,
+            (address >> 8) as u8,
+            address as u8,
+            cmds::NOP,
+            cmds::NOP,
+        ];
 
         self.cs.set_low();
         self.spi.blocking_transfer_in_place(&mut out[..])?;
-        self.spi.blocking_transfer_in_place(data)?;
         self.cs.set_high();
+
+        Ok(out[4])
+    }
+
+    pub fn read_buffer(&mut self, offset: u8, data: &mut [u8]) -> Result<(), spi::Error> {
+        let mut out = [cmds::READ_BUFFER, offset, cmds::NOP];
+
+        let _ = self.cs.set_low();
+        self.spi.blocking_transfer_in_place(&mut out[..])?;
+        self.spi.blocking_transfer_in_place(data)?;
+        let _ = self.cs.set_high();
 
         Ok(())
     }
