@@ -138,6 +138,8 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         // CH32V2, CH32V3
         scl.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
         sda.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
+        //sda.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        //scl.set_as_af_output(AFType::OutputPushPull, Speed::High);
 
         let mut this = Self {
             _peri: peri,
@@ -172,7 +174,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         let freq_in = T::frequency().0;
         let freq_range = freq_in / 1_000_000;
 
-        assert!(freq_range >= 2 && freq_range <= 36); // MHz
+        // assert!(freq_range >= 2 && freq_range <= 36); // MHz
 
         regs.ctlr2().modify(|w| w.set_freq(freq_range as u8)); // set i2c clock in
 
@@ -181,6 +183,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
             let tmp = freq_in / (i2c_clk * 2);
             let tmp = u32::max(tmp, 0x04);
 
+            #[cfg(i2c_v3)]
             regs.rtr().write(|w| w.set_trise((freq_range + 1) as u8));
             regs.ckcfgr().write(|w| {
                 // w.set_f_s(false);
@@ -195,6 +198,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
             };
             let tmp = u32::max(tmp, 0x01);
 
+            #[cfg(i2c_v3)]
             regs.rtr().write(|w| w.set_trise((freq_range * 300 / 1000 + 1) as u8));
             regs.ckcfgr().write(|w| {
                 w.set_f_s(true);
@@ -211,6 +215,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         // cleared otherwise, there may be an inherent race condition and flags may be missed.
         let star1 = T::regs().star1().read();
 
+        #[cfg(i2c_v3)]
         if star1.timeout() {
             T::regs().star1().modify(|w| w.set_timeout(false));
             return Err(Error::Timeout);
