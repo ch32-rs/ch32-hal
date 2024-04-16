@@ -56,12 +56,12 @@ pub use crate::_generated::interrupt;
 
 #[derive(Default)]
 pub struct Config {
-    pub clock: rcc::Config,
+    pub rcc: rcc::Config,
 }
 
 pub fn init(config: Config) -> Peripherals {
     unsafe {
-        rcc::init(config.clock);
+        rcc::init(config.rcc);
 
         #[cfg(systick_rv2)]
         delay::Delay::init();

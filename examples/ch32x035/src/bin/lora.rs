@@ -25,7 +25,7 @@ use hal::{peripherals, println, spi};
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
-    config.clock = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
+    config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
     let p = hal::init(config);
     hal::embassy::init();
 
@@ -74,37 +74,37 @@ async fn main(spawner: Spawner) -> ! {
     nrst.set_high();
     Timer::after_millis(20).await;
 
-    let mut sx1268 = SX1268::new(spi, cs, busy);
+    let mut sx1268 = SX1268::new(spi, cs);
 
-    sx1268.init(Config {}, &mut delay).unwrap();
-
-    // sx1268.read_register(0x0320, &mut buf[..]).unwrap();
-    // println!("buf: {:?}", buf);
-
-    //let irq_status = sx1268.send_command(GetIrqStatus).unwrap();
-    //println!("irq_status: {:?}", irq_status);
+    sx1268.init(Config { freq: 444_500_000 }, &mut delay).unwrap();
 
     println!("init ok");
 
-    //let mut buf = [0u8; 16];
-    //sx1268.read_register(regs::CHIP_REV, &mut buf).unwrap();
-   // println!("CHIP_REV: {:?}", core::str::from_utf8(&buf[..]).unwrap());
+    let mut buf = [0u8; 16];
+    sx1268.read_registers(regs::CHIP_REV, &mut buf).unwrap();
+    println!("CHIP_REV: {:?}", core::str::from_utf8(&buf[..]).unwrap());
 
-    loop {
+    if false {
         Timer::after_millis(1000).await;
-        println!("-------------");
+        println!("-------------begin tx");
 
         // active low
         led.set_low();
 
-        sx1268.tx_bytes(b"Hello From ch32-hal!!!\0", &mut delay).unwrap();
-        sx1268.busy.wait_for_low().await;
-        println!("busy low");
+        sx1268
+            .tx_bytes(
+                b"Hello From ch32-hal!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\0",
+                &mut delay,
+            )
+            .unwrap();
+        busy.wait_for_low().await;
+        dio1.wait_for_high().await;
 
-        // dio1.wait_for_high().await;
-        let irq_status = sx1268.get_irq_status().unwrap();
+        let mask = sx1268.get_irq_status().unwrap();
         //  println!("dio1 high");
-        println!("irq_status: {:?}", irq_status);
+        println!("irq_status: {:?}", mask);
+        sx1268.clear_irq_status(mask).unwrap();
+
         let status = sx1268.get_status().unwrap();
         println!("status: {:?}", status);
 

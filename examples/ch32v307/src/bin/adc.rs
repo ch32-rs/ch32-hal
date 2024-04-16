@@ -13,7 +13,7 @@ use hal::println;
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
-    config.clock = hal::rcc::Config::SYSCLK_FREQ_96MHZ_HSI;
+    config.rcc = hal::rcc::Config::SYSCLK_FREQ_96MHZ_HSI;
     let p = hal::init(config);
     hal::embassy::init();
 

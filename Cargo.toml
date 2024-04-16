@@ -22,10 +22,10 @@ ch32-metapac = { version = "0.0.5", features = [
     "rt",
 ], path = "../ch32-data/build/ch32-metapac" }
 
-qingke = { version = "0.1.9", features = ["critical-section-impl"] }
-qingke-rt = "0.1.9"
-# qingke-rt = { version = "0.1.9", path = "../../../qingke/qingke-rt", features = ["critical-section-impl"] }
-# qingke = { version = "0.1.9", path = "../../../qingke" }
+qingke = { version = "0.1.10", features = ["critical-section-impl"] }
+qingke-rt = "0.1.10"
+# qingke-rt = { version = "0.1.10", path = "../qingke/qingke-rt" }
+# qingke = { version = "0.1.10", path = "../qingke", features = ["critical-section-impl"] }
 
 
 embedded-hal-02 = { package = "embedded-hal", version = "0.2.6", features = [

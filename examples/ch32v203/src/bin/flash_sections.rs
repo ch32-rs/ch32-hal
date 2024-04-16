@@ -29,7 +29,7 @@ fn hello() {
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(spawner: Spawner) -> ! {
     let mut config = hal::Config::default();
-    config.clock = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSI;
+    config.rcc = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSI;
     let p = hal::init(config);
     hal::embassy::init();
 

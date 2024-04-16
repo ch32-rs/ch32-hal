@@ -780,14 +780,14 @@ impl SX1268 {
     pub fn init(&mut self, _config: Config, delay: &mut impl DelayNs) -> Result<(), spi::Error> {
         self.send_command(SetStandby::XOSC)?;
         self.send_command(SetPacketType::LORA)?;
-        self.send_command(SetRfFrequency::hz(433_450_000))?;
+        self.send_command(SetRfFrequency::hz(475_500_000))?;
         self.send_command(SetDIO3AsTCXOCtrl {
             voltage: TxcoVoltage::V3_3,
             delay: 500,
         })?;
 
         self.send_command(Calibrate::default())?;
-        self.send_command(CalibrateImage::BAND_430_440)?;
+        self.send_command(CalibrateImage::BAND_470_510)?;
 
         self.send_command(SetPaConfig::POWER_22DBM)?;
 
@@ -812,6 +812,12 @@ impl SX1268 {
 
     pub fn set_tx(&mut self, delay: &mut impl DelayNs) -> Result<(), spi::Error> {
         todo!();
+    }
+
+    pub fn set_lora_sync_word(&mut self, sync_word: u16) -> Result<(), spi::Error> {
+        self.write_register(regs::LORA_SYNC_WORD_LSB, &[(sync_word >> 8) as u8, sync_word as u8])?;
+
+        Ok(())
     }
 
     pub fn tx_bytes(&mut self, data: &[u8], delay: &mut impl DelayNs) -> Result<(), spi::Error> {
@@ -872,7 +878,7 @@ impl SX1268 {
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
-    config.clock = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
+    config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
     let p = hal::init(config);
     hal::embassy::init();
 
@@ -939,7 +945,7 @@ async fn main(spawner: Spawner) -> ! {
         //    println!("dio1: {:?}", dio1.is_high());
     }
 
-    loop {
+    if false {
         Timer::after_millis(1000).await;
 
         // active low
@@ -961,13 +967,12 @@ async fn main(spawner: Spawner) -> ! {
         led.set_high();
     }
 
-    /*
     println!("begin rx");
     sx1268.set_rx(&mut Delay).unwrap();
 
     loop {
         Timer::after_millis(1000).await;
-        println!("irq pin: {:?}", irq.is_high());
+        println!("irq pin: {:?}", dio1.is_high());
 
         let irq_status = sx1268.send_command(GetIrqStatus).unwrap();
         println!("irq_status: {:?}", irq_status);
@@ -979,7 +984,6 @@ async fn main(spawner: Spawner) -> ! {
         // println!("buf: {:?}", &buf[4..]);
         led.toggle();
     }
-    */
 }
 
 #[embassy_executor::task]

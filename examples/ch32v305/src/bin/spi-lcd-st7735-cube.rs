@@ -1,15 +1,13 @@
 //! TFT LCD ST7735, 160x80
 //!
-//! All crate.io drivers suck!
-//! Let's create our own!
-//! Check how to write one in 100 lines of code,
-//! instead of introduce a 1000+ lines of unmaintained code.
+//! Animated 3D cube
 
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
 use core::fmt::Write;
 
+use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::mono_font::ascii::FONT_9X18;
@@ -25,7 +23,7 @@ use hal::gpio::{AnyPin, Level, Output, Pin};
 use hal::prelude::*;
 use hal::spi::Spi;
 use hal::{peripherals, println};
-use {ch32_hal as hal, panic_halt as _};
+use micromath::F32Ext;
 
 #[embassy_executor::task]
 async fn blink(pin: AnyPin) {
@@ -81,7 +79,7 @@ pub enum Instruction {
 }
 
 pub struct ST7735<const WIDTH: u16, const HEIGHT: u16, const OFFSETX: u16, const OFFSETY: u16> {
-    spi: Spi<'static, peripherals::SPI1, NoDma, NoDma>,
+    spi: Spi<'static, peripherals::SPI2, NoDma, NoDma>,
     dc: Output<'static>,
     // _marker: core::marker::PhantomData<(OFFSETX, OFFSETY)>,
 }
@@ -89,7 +87,7 @@ pub struct ST7735<const WIDTH: u16, const HEIGHT: u16, const OFFSETX: u16, const
 impl<const WIDTH: u16, const HEIGHT: u16, const OFFSETX: u16, const OFFSETY: u16>
     ST7735<WIDTH, HEIGHT, OFFSETX, OFFSETY>
 {
-    pub fn new(spi: Spi<'static, peripherals::SPI1, NoDma, NoDma>, dc: Output<'static>) -> Self {
+    pub fn new(spi: Spi<'static, peripherals::SPI2, NoDma, NoDma>, dc: Output<'static>) -> Self {
         Self {
             spi,
             dc,
@@ -255,22 +253,46 @@ impl<const WIDTH: u16, const HEIGHT: u16, const OFFSETX: u16, const OFFSETY: u16
 }
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
-async fn main(spawner: Spawner) -> ! {
+async fn main(_spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
+    println!("ok");
     let mut config = hal::Config::default();
-    config.rcc = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSI;
+    {
+        use hal::rcc::v3::{AHBPrescaler, APBPrescaler, Hse, HseMode, Pll, PllMul, PllPreDiv, PllSource, Sysclk};
+        use hal::rcc::*;
+
+        config.rcc = Config {
+            hse: Some(Hse {
+                freq: Hertz::mhz(12),
+                mode: HseMode::Oscillator,
+            }),
+            pll_src: PllSource::HSE,
+            pll: Some(Pll {
+                prediv: PllPreDiv::DIV1,
+                mul: PllMul::MUL12, // 12 * 12 = max 144MHz, or else overclock
+            }),
+            sys: Sysclk::PLL,
+            ahb_pre: AHBPrescaler::DIV1,
+            apb1_pre: APBPrescaler::DIV4, // 144 / 4 = 36MHz, max input clock of i2c is 36MHz
+            apb2_pre: APBPrescaler::DIV1,
+
+            ..Default::default()
+        }
+    }
     let p = hal::init(config);
     hal::embassy::init();
 
-    // SPI1, remap 0
-    let cs = p.PA4;
-    let sck = p.PA5;
-    let sda = p.PA7;
+    // SPI2
+    let cs = p.PB12;
+    let sck = p.PB13;
+    let _miso = p.PB14;
+    let mosi = p.PB15;
 
-    let rst = p.PB0;
-    let dc = p.PB1;
+    let rst = p.PC6;
+    let dc = p.PB7;
 
-    let led = p.PB8;
+    // let led = p.PB8;
+    let mut led = Output::new(p.PC9, Level::Low, Default::default());
 
     let mut cs = Output::new(cs, Level::High, Default::default());
     let dc = Output::new(dc.degrade(), Level::High, Default::default());
@@ -281,7 +303,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut spi_config = hal::spi::Config::default();
     spi_config.frequency = Hertz::mhz(24);
 
-    let spi = Spi::new_txonly(p.SPI1, sck, sda, NoDma, NoDma, spi_config);
+    let spi = Spi::new_txonly(p.SPI2, sck, mosi, NoDma, NoDma, spi_config);
 
     rst.set_low();
     Timer::after_millis(120).await;
@@ -293,9 +315,6 @@ async fn main(spawner: Spawner) -> ! {
     println!("display init ...");
     display.init();
     println!("display init ok");
-
-    // GPIO, // T1C4
-    spawner.spawn(blink(led.degrade())).unwrap();
 
     display.clear(Rgb565::BLACK).unwrap();
 
@@ -316,24 +335,122 @@ async fn main(spawner: Spawner) -> ! {
         .draw(&mut display)
         .unwrap();
 
-    let mut buf = heapless::String::<128>::new();
-    let mut i = 0;
+    const POINTS: usize = 8;
+    // A 3D cube has 8 points, each point has 3 values (x, y, z)
+    let orig_points: [[f32; 3]; POINTS] = [
+        [1.0, 1.0, 1.0],
+        [1.0, -1.0, 1.0],
+        [-1.0, -1.0, 1.0],
+        [-1.0, 1.0, 1.0],
+        [1.0, 1.0, -1.0],
+        [1.0, -1.0, -1.0],
+        [-1.0, -1.0, -1.0],
+        [-1.0, 1.0, -1.0],
+    ];
+
+    // Perspective Projection:
+    // distance to project plane
+    let mut d = 1.4;
+
+    let z_offset = -3.0; // offset on z axis, leave object
+
+    let cube_size = 30.0;
+    let screen_offset_x = 160.0 / 2.0;
+    let screen_offset_y = 80.0 / 2.0;
+    let mut rotate_angle = 0.0_f32;
+
+    let mut rotated_points = [[0.0; 3]; POINTS];
+    let mut projected_points = [[0.0; 2]; POINTS];
+    let mut points = [[0_i32; 2]; POINTS];
+
+    let mut inc = true;
+
+    let mut text_style = MonoTextStyle::new(&FONT_9X18, Rgb565::CSS_TOMATO);
+
     loop {
-        buf.clear();
-        core::write!(buf, "Hello, {}", i).unwrap();
+        for (i, [x, y, z]) in orig_points.iter().copied().enumerate() {
+            // rotate around y axis
+            rotated_points[i][0] = x * rotate_angle.cos() + z * rotate_angle.sin();
+            rotated_points[i][1] = y;
+            rotated_points[i][2] = -x * rotate_angle.sin() + z * rotate_angle.cos();
 
-        i += 1;
+            let rx = rotated_points[i][0];
+            let ry = rotated_points[i][1];
+            let rz = rotated_points[i][2] + z_offset; // offset on z axis, leave object
 
-        let mut character_style = MonoTextStyle::new(&FONT_9X18, Rgb565::CSS_TOMATO);
-        character_style.background_color = Some(Rgb565::CSS_DARK_SLATE_BLUE);
+            /*
+            x' = (d * x) / z
+            y' = (d * y) / z
+             */
+            projected_points[i][0] = (d * rx) / rz;
+            projected_points[i][1] = (d * ry) / rz;
+        }
 
-        Text::with_alignment(
-            buf.as_str(),
-            display.bounding_box().center(),
-            character_style,
-            Alignment::Center,
-        )
-        .draw(&mut display)
-        .unwrap();
+        for (i, [x, y]) in projected_points.iter().enumerate() {
+            let x: f32 = (x * cube_size) + screen_offset_x;
+            let y: f32 = (y * cube_size) + screen_offset_y;
+
+            // manually round
+            points[i][0] = (x + 0.5) as i32;
+            points[i][1] = (y + 0.5) as i32;
+        }
+
+        display.clear(Rgb565::BLACK);
+        for ([idx, idy], color) in [
+            // use different colors for each connected line
+            ([0, 1], Rgb565::CSS_ALICE_BLUE),
+            ([1, 2], Rgb565::GREEN),
+            ([2, 3], Rgb565::BLUE),
+            ([3, 0], Rgb565::CSS_SALMON),
+            ([4, 5], Rgb565::YELLOW),
+            ([5, 6], Rgb565::CYAN),
+            ([6, 7], Rgb565::MAGENTA),
+            ([7, 4], Rgb565::CSS_KHAKI),
+            ([0, 4], Rgb565::CSS_BEIGE),
+            ([1, 5], Rgb565::RED),
+            ([2, 6], Rgb565::CSS_CORNFLOWER_BLUE),
+            ([3, 7], Rgb565::CSS_SILVER),
+        ]
+        .iter()
+        {
+            Line::new(
+                Point::new(points[*idx][0], points[*idx][1]),
+                Point::new(points[*idy][0], points[*idy][1]),
+            )
+            .into_styled(PrimitiveStyle::with_stroke(*color, 1))
+            .draw(&mut display)
+            .unwrap();
+        }
+
+        //Text::new("@andelf", Point::new(2, 10), text_style)
+        //    .draw(&mut display)
+        //    .unwrap();
+
+        //    display.f(&mut delay);
+        Timer::after(Duration::from_micros(20)).await;
+        rotate_angle += 0.05;
+
+        if rotate_angle > 2.0 * 3.1415 {
+            rotate_angle = 0.0;
+        }
+        if inc {
+            d += 0.01;
+            if d > 2.0 {
+                inc = false;
+            }
+        } else {
+            d -= 0.01;
+            if d < 0.5 {
+                inc = true;
+            }
+        }
+        led.toggle();
     }
+}
+
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    let _ = println!("\n\n\n{}", info);
+
+    loop {}
 }

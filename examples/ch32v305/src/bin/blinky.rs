@@ -2,11 +2,10 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use hal::gpio::{AnyPin, Level, Output, Pin};
-use hal::println;
+use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::task(pool_size = 3)]
 async fn blink(pin: AnyPin, interval_ms: u64) {
@@ -22,30 +21,13 @@ async fn blink(pin: AnyPin, interval_ms: u64) {
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(spawner: Spawner) -> ! {
-    hal::debug::SDIPrint::enable();
-    println!("clock init");
-    let mut config = hal::Config::default();
-    config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
-    let p = hal::init(config);
+    let p = hal::init(Default::default());
     hal::embassy::init();
 
-    let reason = hal::rcc::x0::reset_resona();
-
-    println!("reset reason: {:?}", reason);
-
     // GPIO
-    spawner.spawn(blink(p.PB12.degrade(), 1000)).unwrap();
-
+    spawner.spawn(blink(p.PC9.degrade(), 400)).unwrap();
+    // spawner.spawn(blink(p.PB8.degrade(), 100)).unwrap();
     loop {
-        Timer::after_millis(1000).await;
-
-        let tick = hal::pac::SYSTICK.cnt().read();
-        println!("tick: {:?}", tick);
+        Timer::after_millis(2000).await;
     }
-}
-
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    println!("panic: {:?}", _info);
-    loop {}
 }

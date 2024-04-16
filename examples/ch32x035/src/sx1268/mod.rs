@@ -1162,17 +1162,16 @@ impl<CS: embedded_hal::digital::OutputPin> SX1268<CS> {
 
         // set oscillator
         if let Some((voltage, delay)) = config.dio3_as_txco_ctrl {
+            self.send_command(ClearDeviceErrors)?;
             hal::println!("[init] DIO3 as TXCO CTRL");
             self.send_command(SetDIO3AsTCXOCtrl::new(voltage, 500))?;
-            Delay.delay_ms(600);
             self.write_register(regs::XTA_TRIM, 0x2F)?; // 补偿33.4pf电容器
 
-            self.send_command(ClearDeviceErrors)?;
-
             self.send_command(Calibrate::ALL)?; // must for rx, or else IMG_CALIB_ERR
+            Delay.delay_ms(600);
         }
 
-        self.send_command(SetStandby::XOSC)?;
+        // self.send_command(SetStandby::XOSC)?;
 
         // set regulator mode
         if config.use_dcdc {
@@ -1205,9 +1204,7 @@ impl<CS: embedded_hal::digital::OutputPin> SX1268<CS> {
         }
 
         self.send_command(CalibrateImage::for_freq(rf_config.freq))?;
-        Delay.delay_ms(100);
-
-        self.send_command(SetRfFrequency::hz(rf_config.freq))?;
+        Delay.delay_ms(500);
 
         // set_modulation_params
         self.send_command(rf_config.modulation_params)?;
@@ -1257,8 +1254,9 @@ impl<CS: embedded_hal::digital::OutputPin> SX1268<CS> {
             self.send_command(SetStandby::RC)?;
         }
 
-        self.send_command(SetDIO3AsTCXOCtrl::new(TxcoVoltage::V3_3, 500))?;
-        self.send_command(SetStandby::XOSC)?;
+        // self.send_command(SetDIO3AsTCXOCtrl::new(TxcoVoltage::V3_3, 500))?;
+        //self.send_command(SetStandby::XOSC)?;
+        //Delay.delay_ms(1000);
 
         self.send_command(CalibrateImage::for_freq(rf_config.freq))?;
 
@@ -1271,11 +1269,11 @@ impl<CS: embedded_hal::digital::OutputPin> SX1268<CS> {
 
         self.send_command(SetRfFrequency::hz(rf_config.freq))?;
 
-        self.send_command(SetDioIrqParams::DEFAULT)?;
-
         self.send_command(StopTimerOnPreamble::YES)?;
 
-        self.send_command(SetRx { timeout: 0 })?;
+        self.send_command(SetDioIrqParams::DEFAULT)?;
+
+        self.send_command(SetRx { timeout: 0xFF_00_00 })?;
 
         Ok(())
     }
@@ -1678,13 +1676,13 @@ impl<CS: embedded_hal::digital::OutputPin> SX1268<CS> {
             let _ = self.cs.set_high();
 
             let reply = &buf[len + 1..];
-            // hal::println!("!! out: {:02x?}", &buf[..total_len]);
+            hal::println!("!! out: {:02x?}", &buf[..total_len]);
             Ok(C::Response::decode(reply))
         } else {
             let _ = self.cs.set_low();
             self.spi.transfer_in_place(&mut buf[..len])?;
             let _ = self.cs.set_high();
-            // hal::println!("!! out: {:02x?}", &buf[..len]);
+            hal::println!("!! out: {:02x?}", &buf[..len]);
             Ok(C::Response::decode(&[]))
         }
     }

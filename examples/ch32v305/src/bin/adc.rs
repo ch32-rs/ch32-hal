@@ -13,7 +13,6 @@ use hal::println;
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
-    config.rcc = hal::rcc::Config::SYSCLK_FREQ_96MHZ_HSI;
     let p = hal::init(config);
     hal::embassy::init();
 
@@ -21,10 +20,10 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut adc = hal::adc::Adc::new(p.ADC1, Default::default());
 
-    let mut ch = p.PA1;
+    let mut ch = p.PA5;
 
     // GPIO
-    let mut led = Output::new(p.PB0, Level::Low, Default::default());
+    let mut led = Output::new(p.PC9, Level::Low, Default::default());
 
     loop {
         led.set_high();
