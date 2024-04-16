@@ -24,7 +24,7 @@ async fn blink(pin: AnyPin, interval_ms: u64) {
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let config = hal::Config {
-        clock: hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE,
+        rcc: hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE,
     };
     let p = hal::init(config);
     hal::embassy::init();
