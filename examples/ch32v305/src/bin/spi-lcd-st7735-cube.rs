@@ -5,8 +5,6 @@
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
-use core::fmt::Write;
-
 use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_time::{Delay, Duration, Timer};
@@ -16,7 +14,6 @@ use embedded_graphics::pixelcolor::raw::ToBytes;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle};
-use embedded_graphics::text::{Alignment, Text};
 use embedded_hal::delay::DelayNs;
 use hal::dma::NoDma;
 use hal::gpio::{AnyPin, Level, Output, Pin};
@@ -266,7 +263,7 @@ async fn main(_spawner: Spawner) -> ! {
                 freq: Hertz::mhz(12),
                 mode: HseMode::Oscillator,
             }),
-            pll_src: PllSource::HSE,
+            pll_src: PllSource::HSI,
             pll: Some(Pll {
                 prediv: PllPreDiv::DIV1,
                 mul: PllMul::MUL12, // 12 * 12 = max 144MHz, or else overclock

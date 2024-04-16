@@ -11,7 +11,7 @@ use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::task]
 async fn blink(pin: AnyPin) {
-    let mut led = Output::new(pin, Level::Low);
+    let mut led = Output::new(pin, Level::Low, Default::default());
 
     loop {
         led.set_high();
@@ -27,14 +27,14 @@ async fn main(spawner: Spawner) -> ! {
     hal::embassy::init();
 
     // GPIO
-    spawner.spawn(blink(p.PA0.degrade())).unwrap();
+    spawner.spawn(blink(p.PC9.degrade())).unwrap();
 
-    let mut cfg = usart::Config::default();
-    let mut uart = UartTx::new(p.USART1, p.PA9, cfg).unwrap();
+    let cfg = usart::Config::default();
+    let mut uart = UartTx::new(p.USART3, p.PB10, cfg).unwrap();
 
     loop {
         Timer::after_millis(2000).await;
 
-        uart.blocking_write(b"hello world from embassy main\r\n");
+        uart.blocking_write(b"hello world from embassy main\r\n").unwrap();
     }
 }

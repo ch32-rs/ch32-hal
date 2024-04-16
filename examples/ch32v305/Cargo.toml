@@ -30,6 +30,7 @@ embedded-graphics = "0.8.1"
 embedded-hal-bus = "0.1.0"
 embedded-hal = "1.0.0"
 micromath = "2.1.0"
+nb = "1.1.0"
 
 
 [profile.release]
