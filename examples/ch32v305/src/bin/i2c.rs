@@ -115,7 +115,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // on APB1
     let mut i2c_config = hal::i2c::Config::default();
-  //  i2c_config.scl_pullup = true;
+    //  i2c_config.scl_pullup = true;
     //i2c_config.sda_pullup = true;
     let mut i2c = I2c::new(p.I2C2, scl, sda, NoDma, NoDma, Hertz::hz(400_000), Default::default());
 

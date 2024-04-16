@@ -8,10 +8,11 @@
 use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_time::{Delay, Duration, Timer};
+use embedded_graphics::framebuffer::Framebuffer;
 use embedded_graphics::mono_font::ascii::FONT_9X18;
 use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::pixelcolor::raw::ToBytes;
-use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::pixelcolor::raw::{LittleEndian, ToBytes};
+use embedded_graphics::pixelcolor::{BinaryColor, Rgb565};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle};
 use embedded_hal::delay::DelayNs;
@@ -145,6 +146,13 @@ impl<const WIDTH: u16, const HEIGHT: u16, const OFFSETX: u16, const OFFSETY: u16
                 ((oy + h - 1) & 0xFF) as u8,
             ],
         );
+    }
+
+    pub fn write_raw_framebuffer(&mut self, raw: &[u8]) {
+        self.set_update_window(0, 0, WIDTH, HEIGHT);
+
+        self.send_command(Instruction::RAMWR);
+        self.send_data(raw);
     }
 
     pub fn write_raw_pixel(&mut self, x: u16, y: u16, data: &[u8]) {
@@ -312,24 +320,33 @@ async fn main(_spawner: Spawner) -> ! {
     println!("display init ...");
     display.init();
     println!("display init ok");
-
     display.clear(Rgb565::BLACK).unwrap();
+
+    let mut fb = Framebuffer::<
+        Rgb565,
+        _,
+        LittleEndian,
+        160,
+        80,
+        { embedded_graphics::framebuffer::buffer_size::<Rgb565>(160, 80) },
+    >::new();
+    fb.clear(Rgb565::BLACK).unwrap();
 
     Line::new(Point::new(0, 0), Point::new(159, 0))
         .into_styled(PrimitiveStyle::with_stroke(Rgb565::RED, 1))
-        .draw(&mut display)
+        .draw(&mut fb)
         .unwrap();
     Line::new(Point::new(0, 0), Point::new(0, 79))
         .into_styled(PrimitiveStyle::with_stroke(Rgb565::GREEN, 1))
-        .draw(&mut display)
+        .draw(&mut fb)
         .unwrap();
     Line::new(Point::new(159, 0), Point::new(159, 79))
         .into_styled(PrimitiveStyle::with_stroke(Rgb565::BLUE, 1))
-        .draw(&mut display)
+        .draw(&mut fb)
         .unwrap();
     Line::new(Point::new(0, 79), Point::new(159, 79))
         .into_styled(PrimitiveStyle::with_stroke(Rgb565::WHITE, 1))
-        .draw(&mut display)
+        .draw(&mut fb)
         .unwrap();
 
     const POINTS: usize = 8;
@@ -392,7 +409,7 @@ async fn main(_spawner: Spawner) -> ! {
             points[i][1] = (y + 0.5) as i32;
         }
 
-        display.clear(Rgb565::BLACK);
+        // fb.clear(Rgb565::BLACK);
         for ([idx, idy], color) in [
             // use different colors for each connected line
             ([0, 1], Rgb565::CSS_ALICE_BLUE),
@@ -415,17 +432,20 @@ async fn main(_spawner: Spawner) -> ! {
                 Point::new(points[*idy][0], points[*idy][1]),
             )
             .into_styled(PrimitiveStyle::with_stroke(*color, 1))
-            .draw(&mut display)
+            .draw(&mut fb)
             .unwrap();
         }
+
+        display.write_raw_framebuffer(fb.data());
+        fb.clear(Rgb565::BLACK).unwrap();
 
         //Text::new("@andelf", Point::new(2, 10), text_style)
         //    .draw(&mut display)
         //    .unwrap();
 
         //    display.f(&mut delay);
-        Timer::after(Duration::from_micros(20)).await;
-        rotate_angle += 0.05;
+        Timer::after(Duration::from_micros(1)).await;
+        rotate_angle += 0.1;
 
         if rotate_angle > 2.0 * 3.1415 {
             rotate_angle = 0.0;
