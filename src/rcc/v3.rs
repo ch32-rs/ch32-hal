@@ -1,7 +1,7 @@
 //! CH32V2, CH32V3
 use core::ops;
 
-use crate::pac::rcc::vals::{
+pub use crate::pac::rcc::vals::{
     Hpre as AHBPrescaler, PllMul, PllxMul, Ppre as APBPrescaler, Prediv as PllPreDiv, Sw as Sysclk, Usbpre,
 };
 use crate::pac::{EXTEND, FLASH, RCC};
@@ -287,7 +287,7 @@ pub(crate) unsafe fn init(config: Config) {
     // Configure sysclk
     let sys = match config.sys {
         Sysclk::HSI => hsi.unwrap(),
-        Sysclk::HSE => hsi.unwrap(),
+        Sysclk::HSE => hse.unwrap(),
         Sysclk::PLL => pll_clk.unwrap(),
         _ => unreachable!(),
     };

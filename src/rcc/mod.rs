@@ -33,11 +33,11 @@ pub fn clocks() -> &'static Clocks {
 }
 
 #[cfg(ch32v0)]
-mod v0;
+pub mod v0;
 #[cfg(ch32v1)]
-mod v1;
+pub mod v1;
 #[cfg(any(ch32v2, ch32v3, ch32f2))]
-mod v3;
+pub mod v3;
 #[cfg(ch32x0)]
 pub mod x0;
 
