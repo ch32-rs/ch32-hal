@@ -486,14 +486,32 @@ pub(crate) mod sealed {
         #[inline]
         fn set_high(&self) {
             let n = self._pin() as _;
+            #[cfg(not(gpio_x0))]
             self.block().bshr().write(|w| w.set_bs(n, true));
+            #[cfg(gpio_x0)]
+            {
+                if n >= 16 {
+                    self.block().bsxr().write(|w| w.set_bs(n - 16, true)); // extended BS
+                } else {
+                    self.block().bshr().write(|w| w.set_bs(n, true));
+                }
+            }
         }
 
         /// Set the output as low.
         #[inline]
         fn set_low(&self) {
             let n = self._pin() as _;
+            #[cfg(not(gpio_x0))]
             self.block().bshr().write(|w| w.set_br(n, true));
+            #[cfg(gpio_x0)]
+            {
+                if n >= 16 {
+                    self.block().bsxr().write(|w| w.set_br(n - 16, true)); // extended BS
+                } else {
+                    self.block().bshr().write(|w| w.set_br(n, true));
+                }
+            }
         }
 
         #[inline]

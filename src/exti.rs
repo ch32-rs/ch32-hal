@@ -20,15 +20,15 @@ pub unsafe fn on_irq() {
     // We don't handle or change any EXTI lines above 24.
     let bits = bits.0 & 0x00FFFFFF;
 
+    // Clear pending - Clears the EXTI's line pending bits.
+    exti.intfr().write(|w| w.0 = bits);
+
     exti.intenr().modify(|w| w.0 = w.0 & !bits);
 
     // Wake the tasks
     for pin in BitIter(bits) {
         EXTI_WAKERS[pin as usize].wake();
     }
-
-    // Clear pending - Clears the EXTI's line pending bits.
-    exti.intfr().write(|w| w.0 = bits);
 }
 
 struct BitIter(u32);
