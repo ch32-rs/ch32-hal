@@ -104,6 +104,12 @@ impl SystickDriver {
         // we never create one that's out of bounds.
         unsafe { self.alarms.borrow(cs).get_unchecked(alarm.id() as usize) }
     }
+
+    #[inline]
+    fn raw_cnt(&self) -> u64 {
+        let rb = crate::pac::SYSTICK;
+        rb.cnt().read()
+    }
 }
 
 impl Driver for SystickDriver {
@@ -143,9 +149,12 @@ impl Driver for SystickDriver {
             let alarm = self.get_alarm(cs, alarm);
             alarm.timestamp.set(timestamp);
 
-            let t = self.now();
+            let period = self.period.load(Ordering::Relaxed) as u64;
+
             // See-also: https://github.com/ch32-rs/ch32-hal/issues/4
-            if timestamp <= t + 1 {
+            let t = self.raw_cnt();
+            let timestamp = timestamp * period;
+            if timestamp <= t {
                 // If alarm timestamp has passed the alarm will not fire.
                 // Disarm the alarm and return `false` to indicate that.
                 rb.ctlr().modify(|w| w.set_stie(false));
@@ -155,9 +164,8 @@ impl Driver for SystickDriver {
                 return false;
             }
 
-            let period = self.period.load(Ordering::Relaxed) as u64;
-            let safe_timestamp = timestamp.saturating_add(1) * period;
-            rb.cmp().write_value(safe_timestamp);
+            let safe_cmp = timestamp.saturating_add(period);
+            rb.cmp().write_value(safe_cmp);
             rb.ctlr().modify(|w| w.set_stie(true));
 
             true
