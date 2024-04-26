@@ -72,6 +72,11 @@ pub trait BasicInstance: CoreInstance {}
 
 trait SealedGeneralInstance: BasicInstance {
     fn enable_outputs(&self) {}
+
+    fn get_counting_mode(&self) -> low_level::CountingMode {
+        // (vals::Cms::EDGEALIGNED, vals::Dir::UP),
+        low_level::CountingMode::EdgeAlignedUp
+    }
 }
 
 /// General-purpose 16-bit timer with 4 channels instance.
@@ -166,22 +171,49 @@ foreach_interrupt! {
                     .bdtr()
                     .modify(|w| w.set_moe(true));
             }
+            fn get_counting_mode(&self) -> low_level::CountingMode {
+                let regs = unsafe { crate::pac::timer::Adtm::from_ptr(Self::regs()) };
+                let cr1 = regs.ctlr1().read();
+                (cr1.cms(), cr1.dir()).into()
+            }
         }
         impl_general_16bit!($inst);
         impl_advanced!($inst);
     };
+}
 
+// GPTM is 2CH, no CTLR1.CMS and CTLR1.DIR
+#[cfg(timer_x0)]
+foreach_interrupt! {
     ($inst:ident, timer, GPTM, UP, $irq:ident) => {
         impl_core_timer!($inst, TimerBits::Bits16);
         impl BasicInstance for crate::peripherals::$inst {}
         impl SealedGeneralInstance for crate::peripherals::$inst {}
         impl_general_16bit!($inst);
     };
+}
+
+#[cfg(not(timer_x0))]
+foreach_interrupt! {
+    ($inst:ident, timer, GPTM, UP, $irq:ident) => {
+        impl_core_timer!($inst, TimerBits::Bits16);
+        impl BasicInstance for crate::peripherals::$inst {}
+        impl SealedGeneralInstance for crate::peripherals::$inst {
+            let regs = unsafe { crate::pac::timer::Gptm::from_ptr(Self::regs()) };
+            let cr1 = regs.ctlr1().read();
+            (cr1.cms(), cr1.dir()).into()
+        }
+        impl_general_16bit!($inst);
+    };
 
     ($inst:ident, timer, GPTM32, UP, $irq:ident) => {
         impl_core_timer!($inst, TimerBits::Bits32);
         impl BasicInstance for crate::peripherals::$inst {}
-        impl SealedGeneralInstance for crate::peripherals::$inst {}
+        impl SealedGeneralInstance for crate::peripherals::$inst {
+            let regs = unsafe { crate::pac::timer::Gptm::from_ptr(Self::regs()) };
+            let cr1 = regs.ctlr1().read();
+            (cr1.cms(), cr1.dir()).into()
+        }
         impl_general_16bit!($inst);
         impl GeneralInstance32bit for crate::peripherals::$inst {}
     };

@@ -374,10 +374,8 @@ impl<'d, T: GeneralInstance16bit> Timer<'d, T> {
     }
 
     /// Get counting mode.
-    #[cfg(not(timer_x0))]
     pub fn get_counting_mode(&self) -> CountingMode {
-        let cr1 = self.regs_gp16().ctlr1().read();
-        (cr1.cms(), cr1.dir()).into()
+        self.tim.get_counting_mode()
     }
 
     /// Set input capture filter.
@@ -618,13 +616,6 @@ impl<'d, T: AdvancedInstance> Timer<'d, T> {
 
         self.regs_advanced().ctlr1().modify(|r| r.set_dir(dir));
         self.regs_advanced().ctlr1().modify(|r| r.set_cms(cms))
-    }
-
-    /// Get counting mode.
-    pub fn get_counting_mode(&self) -> CountingMode {
-        let cr1 = self.regs_advanced().ctlr1().read();
-        // (vals::Cms::EDGEALIGNED, vals::Dir::UP),
-        (cr1.cms(), cr1.dir()).into()
     }
 
     pub fn enable_update_dma(&self, enable: bool) {

@@ -74,7 +74,7 @@ impl<'d, T: GeneralInstance16bit> SimplePwm<'d, T> {
 
         #[cfg(not(timer_x0))]
         this.inner.set_counting_mode(counting_mode);
-        #[cfg(timer_x0)]
+        #[cfg(timer_x0)] // accept default counting mode
         assert_eq!(counting_mode, CountingMode::EdgeAlignedUp);
 
         this.set_frequency(freq);
@@ -114,12 +114,11 @@ impl<'d, T: GeneralInstance16bit> SimplePwm<'d, T> {
     /// Note: when you call this, the max duty value changes, so you will have to
     /// call `set_duty` on all channels with the duty calculated based on the new max duty.
     pub fn set_frequency(&mut self, freq: Hertz) {
-        //  let multiplier = if self.inner.get_counting_mode().is_center_aligned() {
-        //    2u8
-        //} else {
-        //  1u8
-        //};
-        let multiplier = 1u8;
+        let multiplier = if self.inner.get_counting_mode().is_center_aligned() {
+            2u8
+        } else {
+            1u8
+        };
         self.inner.set_frequency(freq * multiplier);
     }
 
