@@ -8,6 +8,8 @@
 use crate::peripheral::RccPeripheral;
 use crate::{interrupt, RemapPeripheral};
 
+pub mod low_level;
+
 /// Timer channel.
 #[derive(Clone, Copy)]
 pub enum Channel {
@@ -87,7 +89,6 @@ pin_trait!(Channel3Pin, GeneralInstance16bit);
 pin_trait!(Channel4Pin, GeneralInstance16bit);
 pin_trait!(ExternalTriggerPin, GeneralInstance16bit);
 
-
 pin_trait!(Channel1ComplementaryPin, AdvancedInstance);
 pin_trait!(Channel2ComplementaryPin, AdvancedInstance);
 pin_trait!(Channel3ComplementaryPin, AdvancedInstance);
@@ -102,7 +103,6 @@ dma_trait!(Ch1Dma, GeneralInstance16bit);
 dma_trait!(Ch2Dma, GeneralInstance16bit);
 dma_trait!(Ch3Dma, GeneralInstance16bit);
 dma_trait!(Ch4Dma, GeneralInstance16bit);
-
 
 #[allow(unused)]
 macro_rules! impl_core_timer {
@@ -139,7 +139,6 @@ macro_rules! impl_advanced {
     };
 }
 
-
 foreach_interrupt! {
     ($inst:ident, timer, BCTM, UP, $irq:ident) => {
         impl_core_timer!($inst, TimerBits::Bits16);
@@ -160,7 +159,7 @@ foreach_interrupt! {
     };
 
     ($inst:ident, timer, GPTM32, UP, $irq:ident) => {
-        impl_core_timer!($inst, TimerBits::Bits16);
+        impl_core_timer!($inst, TimerBits::Bits32);
         impl BasicInstance for crate::peripherals::$inst {}
         impl_general_16bit!($inst);
         impl GeneralInstance32bit for crate::peripherals::$inst {}

@@ -322,6 +322,16 @@ fn main() {
         (("spi", "I2S_WS"), quote!(crate::spi::WsPin)), */
         (("i2c", "SDA"), quote!(crate::i2c::SdaPin)),
         (("i2c", "SCL"), quote!(crate::i2c::SclPin)),
+        (("timer", "CH1"), quote!(crate::timer::Channel1Pin)),
+        (("timer", "CH1N"), quote!(crate::timer::Channel1ComplementaryPin)),
+        (("timer", "CH2"), quote!(crate::timer::Channel2Pin)),
+        (("timer", "CH2N"), quote!(crate::timer::Channel2ComplementaryPin)),
+        (("timer", "CH3"), quote!(crate::timer::Channel3Pin)),
+        (("timer", "CH3N"), quote!(crate::timer::Channel3ComplementaryPin)),
+        (("timer", "CH4"), quote!(crate::timer::Channel4Pin)),
+        (("timer", "CH4N"), quote!(crate::timer::Channel4ComplementaryPin)),
+        (("timer", "ETR"), quote!(crate::timer::ExternalTriggerPin)),
+        (("timer", "BKIN"), quote!(crate::timer::BreakInputPin)),
     ]
     .into();
 
@@ -388,6 +398,7 @@ fn main() {
     // ========
     // Write foreach_foo! macrotables
     let mut peripherals_table: Vec<Vec<String>> = Vec::new();
+    let mut interrupts_table: Vec<Vec<String>> = Vec::new();
     let mut pins_table: Vec<Vec<String>> = Vec::new();
 
     let gpio_base = METADATA.peripherals.iter().find(|p| p.name == "GPIOA").unwrap().address as u32;
@@ -413,6 +424,17 @@ fn main() {
                 }
             }
 
+            for irq in p.interrupts {
+                let row = vec![
+                    p.name.to_string(),
+                    regs.kind.to_string(),
+                    regs.block.to_string(),
+                    irq.signal.to_string(),
+                    irq.interrupt.to_ascii_uppercase(),
+                ];
+                interrupts_table.push(row)
+            }
+
             let row = vec![regs.kind.to_string(), p.name.to_string()];
             peripherals_table.push(row);
         }
@@ -422,6 +444,8 @@ fn main() {
     let mut m = String::new();
 
     make_table(&mut m, "foreach_peripheral", &peripherals_table);
+    // name, kind, block, signal, interrupt
+    make_table(&mut m, "foreach_interrupt", &interrupts_table);
     // pin, port, exti
     make_table(&mut m, "foreach_pin", &pins_table);
 

@@ -22,20 +22,20 @@ mod interrupt_ext;
 
 pub use crate::_generated::{peripherals, Peripherals};
 
-pub mod dma;
 #[cfg(systick_rv2)]
 pub mod delay;
+pub mod dma;
 
 pub mod adc;
 pub mod exti;
 pub mod gpio;
 #[cfg(i2c)]
 pub mod i2c;
+#[cfg(rng)]
+pub mod rng;
 pub mod signature;
 pub mod spi;
 pub mod timer;
-#[cfg(rng)]
-pub mod rng;
 pub mod usart;
 
 #[cfg(feature = "embassy")]
