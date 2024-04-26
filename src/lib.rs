@@ -33,7 +33,7 @@ pub mod gpio;
 pub mod i2c;
 pub mod signature;
 pub mod spi;
-//pub mod timer;
+pub mod timer;
 #[cfg(rng)]
 pub mod rng;
 pub mod usart;
