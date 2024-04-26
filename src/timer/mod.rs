@@ -5,10 +5,17 @@
 //! - BasicInstance
 //! - GeneralInstance (16-bit or 32-bit)
 //! - AdvancedInstance
+//!
+//! Different vs embassy-stm32:
+//!
+//! - No too many levels of abstraction
+//! - 2CH GPTM instances are also have helper functions defined
+
 use crate::peripheral::RccPeripheral;
 use crate::{interrupt, RemapPeripheral};
 
 pub mod low_level;
+pub mod simple_pwm;
 
 /// Timer channel.
 #[derive(Clone, Copy)]
@@ -63,8 +70,13 @@ pub trait CoreInstance: RccPeripheral + RemapPeripheral + 'static {
 /// Basic timer instance, BCTM
 pub trait BasicInstance: CoreInstance {}
 
+trait SealedGeneralInstance: BasicInstance {
+    fn enable_outputs(&self) {}
+}
+
 /// General-purpose 16-bit timer with 4 channels instance.
-pub trait GeneralInstance16bit: BasicInstance {
+#[allow(private_bounds)]
+pub trait GeneralInstance16bit: SealedGeneralInstance {
     /// Capture compare interrupt for this timer.
     type CaptureCompareInterrupt: interrupt::typelevel::Interrupt;
 
@@ -148,6 +160,13 @@ foreach_interrupt! {
     ($inst:ident, timer, ADTM, UP, $irq:ident) => {
         impl_core_timer!($inst, TimerBits::Bits16);
         impl BasicInstance for crate::peripherals::$inst {}
+        impl SealedGeneralInstance for crate::peripherals::$inst {
+            fn enable_outputs(&self) {
+                unsafe { crate::pac::timer::Adtm::from_ptr(Self::regs()) }
+                    .bdtr()
+                    .modify(|w| w.set_moe(true));
+            }
+        }
         impl_general_16bit!($inst);
         impl_advanced!($inst);
     };
@@ -155,12 +174,14 @@ foreach_interrupt! {
     ($inst:ident, timer, GPTM, UP, $irq:ident) => {
         impl_core_timer!($inst, TimerBits::Bits16);
         impl BasicInstance for crate::peripherals::$inst {}
+        impl SealedGeneralInstance for crate::peripherals::$inst {}
         impl_general_16bit!($inst);
     };
 
     ($inst:ident, timer, GPTM32, UP, $irq:ident) => {
         impl_core_timer!($inst, TimerBits::Bits32);
         impl BasicInstance for crate::peripherals::$inst {}
+        impl SealedGeneralInstance for crate::peripherals::$inst {}
         impl_general_16bit!($inst);
         impl GeneralInstance32bit for crate::peripherals::$inst {}
     };

@@ -252,7 +252,7 @@ impl<'d, T: BasicInstance> Timer<'d, T> {
             TimerBits::Bits32 => {
                 let pclk_ticks_per_timer_period = (timer_f / f) as u64;
                 let psc: u16 = (((pclk_ticks_per_timer_period - 1) / (1 << 32)).try_into()).unwrap();
-                let arr: u32 = ((pclk_ticks_per_timer_period / (psc as u64 + 1)).try_into()).unwrap;
+                let arr: u32 = ((pclk_ticks_per_timer_period / (psc as u64 + 1)).try_into()).unwrap();
 
                 let regs = self.regs_gp32_unchecked();
                 regs.psc().write_value(psc);
@@ -497,6 +497,11 @@ impl<'d, T: GeneralInstance16bit> Timer<'d, T> {
             .modify(|w| w.set_ocpe(channel_index % 2, preload));
     }
 
+    /// Enable timer outputs.
+    pub fn enable_outputs(&self) {
+        self.tim.enable_outputs()
+    }
+
     // The following is not available in GPTM_2CH
 
     /// Get capture compare DMA selection
@@ -618,6 +623,7 @@ impl<'d, T: AdvancedInstance> Timer<'d, T> {
     /// Get counting mode.
     pub fn get_counting_mode(&self) -> CountingMode {
         let cr1 = self.regs_advanced().ctlr1().read();
+        // (vals::Cms::EDGEALIGNED, vals::Dir::UP),
         (cr1.cms(), cr1.dir()).into()
     }
 

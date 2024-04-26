@@ -35,6 +35,8 @@ pub mod i2c;
 pub mod rng;
 pub mod signature;
 pub mod spi;
+// TODO
+#[cfg(timer_x0)]
 pub mod timer;
 pub mod usart;
 
