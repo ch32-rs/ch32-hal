@@ -13,24 +13,26 @@ others should work if you are careful as most peripherals are similar enough.
 Keypoints:
 
 - embassy support
-- embassy as the first-class citizen
-- metapac approach
-- all in one crate
+- metapac approach, check [ch32-data](https://github.com/ch32-rs/ch32-data)
+- all in one crate, no need to create a new crate for each chip
+- async drivers
 
-## TODOs
+## Supported Devices and Peripherals
 
-| Family | Status       | Embassy | RCC | GPIO | UART | SPI | I2C | ADC | Timer(PWM) | EXTI* | RNG |
-|--------|--------------|---------|-----|------|------|-----|-----|-----|------------|-------------|-----|
-| V2/V3  |              | ✅       | ✅   | ✅    | ✅    | ✅   | ✅   | ✅   |            | ✅           | ✅   |
-| V1     |              | ✅       | ✅   | ✅    | ✅    | ✅   | ✅   | ✅   |            | ✅           |     |
-| V0     |              | ✅       | ✅   | ✅    | ✅    | ✅   | ✅   |     |            | ✅           |     |
-| X0     |              |         | ✅   | ✅    | ✅    | ✅   |     | ✅   | ✅          | ✅           |     |
-| L0     | No Dev Board |         |     |      |      |     |     |     |            |             |     |
-| CH641  | No Dev Board |         |     |      |      |     |     |     |            |             |     |
-| CH643  | No Dev Board |         |     |      |      |     |     |     |            |             |     |
-| CH645  | No Info      |         |     |      |      |     |     |     |            |             |     |
-|        |              |         |     |      |      |     |     |     |            |             |     |
-|        |              |         |     |      |      |     |     |     |            |             |     |
+| Family | Status | Embassy | RCC | GPIO | UART | SPI | I2C | ADC | Timer(PWM) | EXTI* | RNG |
+|--------|--------|---------|-----|------|------|-----|-----|-----|------------|-------|-----|
+| V2/V3  |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  |            | ✅    | ✅  |
+| V1     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  |            | ✅    |     |
+| V0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ❓  |            | ✅    |     |
+| X0     |        |         | ✅  | ✅   | ✅   | ✅  |     | ✅  | ✅         | ✅    |     |
+| L0     |        |         |     |      |      |     |     |     |            |       |     |
+| CH641  | N/A    |         |     |      |      |     |     |     |            |       |     |
+| CH643  | N/A    |         |     |      |      |     |     |     |            |       |     |
+| CH645  | N/A    |         |     |      |      |     |     |     |            |       |     |
+
+- ✅ : Works
+- ❓ : Not tested
+- `*` marks the async driver
 
 ## Minimum supported Rust version(MSRV)
 
