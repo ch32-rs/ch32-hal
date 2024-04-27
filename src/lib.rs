@@ -7,7 +7,30 @@ pub use ch32_metapac as pac;
 include!(concat!(env!("OUT_DIR"), "/_macros.rs"));
 
 pub mod time;
-mod traits;
+mod macros;
+/// Operating modes for peripherals.
+pub mod mode {
+    trait SealedMode {}
+
+    /// Operating mode for a peripheral.
+    #[allow(private_bounds)]
+    pub trait Mode: SealedMode {}
+
+    macro_rules! impl_mode {
+        ($name:ident) => {
+            impl SealedMode for $name {}
+            impl Mode for $name {}
+        };
+    }
+
+    /// Blocking mode.
+    pub struct Blocking;
+    /// Async mode.
+    pub struct Async;
+
+    impl_mode!(Blocking);
+    impl_mode!(Async);
+}
 
 pub mod rcc;
 
@@ -56,9 +79,18 @@ pub(crate) mod _generated {
 mod patches;
 pub use crate::_generated::interrupt;
 
-#[derive(Default)]
 pub struct Config {
     pub rcc: rcc::Config,
+    pub dma_interrupt_priority: interrupt::Priority,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            rcc: Default::default(),
+            dma_interrupt_priority: interrupt::Priority::P0,
+        }
+    }
 }
 
 pub fn init(config: Config) -> Peripherals {
@@ -71,6 +103,11 @@ pub fn init(config: Config) -> Peripherals {
 
     ::critical_section::with(|cs| unsafe {
         gpio::init(cs);
+
+        dma::init(
+            cs,
+            config.dma_interrupt_priority,
+        );
     });
 
     ::critical_section::with(|cs| unsafe {

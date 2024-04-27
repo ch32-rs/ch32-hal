@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::{env, fs};
@@ -379,6 +379,56 @@ fn main() {
     }
 
     // ========
+    // Generate dma_trait_impl!
+
+    let signals: HashMap<_, _> = [
+        // (kind, signal) => trait
+        (("usart", "RX"), quote!(crate::usart::RxDma)),
+        (("usart", "TX"), quote!(crate::usart::TxDma)),
+        (("spi", "RX"), quote!(crate::spi::RxDma)),
+        (("spi", "TX"), quote!(crate::spi::TxDma)),
+        (("i2c", "RX"), quote!(crate::i2c::RxDma)),
+        (("i2c", "TX"), quote!(crate::i2c::TxDma)),
+        (("timer", "CH1"), quote!(crate::timer::Ch1Dma)),
+        (("timer", "CH2"), quote!(crate::timer::Ch2Dma)),
+        (("timer", "CH3"), quote!(crate::timer::Ch3Dma)),
+        (("timer", "CH4"), quote!(crate::timer::Ch4Dma)),
+    ]
+    .into();
+
+    for p in METADATA.peripherals {
+        if let Some(regs) = &p.registers {
+            let mut dupe = HashSet::new();
+            for ch in p.dma_channels {
+                // Some chips have multiple request numbers for the same (peri, signal, channel) combos.
+                // Ignore the dupes, picking the first one. Otherwise this causes conflicting trait impls
+                let key = (ch.signal, ch.channel);
+                if !dupe.insert(key) {
+                    continue;
+                }
+
+                if let Some(tr) = signals.get(&(regs.kind, ch.signal)) {
+                    let peri = format_ident!("{}", p.name);
+
+                    let channel = if let Some(channel) = &ch.channel {
+                        // Chip with DMA/BDMA, without DMAMUX
+                        let channel = format_ident!("{}", channel);
+                        quote!({channel: #channel})
+                    } else {
+                        unreachable!();
+                    };
+
+                    let request = quote!(());
+
+                    g.extend(quote! {
+                        dma_trait_impl!(#tr, #peri, #channel, #request);
+                    });
+                }
+            }
+        }
+    }
+
+    // ========
     // Write peripheral_interrupts module.
     let mut mt = TokenStream::new();
     for p in METADATA.peripherals {
@@ -439,6 +489,83 @@ fn main() {
             peripherals_table.push(row);
         }
     }
+
+    // DMA
+    let mut dmas = TokenStream::new();
+
+    for (ch_idx, ch) in METADATA.dma_channels.iter().enumerate() {
+        let name = format_ident!("{}", ch.name);
+        let idx = ch_idx as u8;
+        g.extend(quote!(dma_channel_impl!(#name, #idx);));
+
+        let dma = format_ident!("{}", ch.dma);
+        let ch_num = ch.channel as usize;
+
+        let dma_peri = METADATA.peripherals.iter().find(|p| p.name == ch.dma).unwrap();
+        let bi = dma_peri.registers.as_ref().unwrap();
+
+        let dma_info = match bi.kind {
+            "dma" => quote!(crate::dma::DmaInfo::Dma(crate::pac::#dma)),
+            "bdma" => quote!(crate::dma::DmaInfo::Bdma(crate::pac::#dma)),
+            "gpdma" => quote!(crate::pac::#dma),
+            _ => panic!("bad dma channel kind {}", bi.kind),
+        };
+
+        let dmamux = quote!();
+
+        dmas.extend(quote! {
+            crate::dma::ChannelInfo {
+                dma: #dma_info,
+                num: #ch_num,
+                #dmamux
+            },
+        });
+    }
+
+    // ========
+    // Generate DMA IRQs.
+
+    let mut dma_irqs: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+
+    for p in METADATA.peripherals {
+        if let Some(r) = &p.registers {
+            if r.kind == "dma" {
+                for irq in p.interrupts {
+                    let ch_name = format!("{}_{}", p.name, irq.signal);
+                    // let ch = METADATA.dma_channels.iter().find(|c| c.name == ch_name).unwrap();
+
+                    dma_irqs.entry(irq.interrupt).or_default().push(ch_name);
+                }
+            }
+        }
+    }
+
+    let dma_irqs: TokenStream = dma_irqs
+        .iter()
+        .map(|(irq, channels)| {
+            let irq = format_ident!("{}", irq);
+
+            let channels = channels.iter().map(|c| format_ident!("{}", c));
+
+            quote! {
+                #[cfg(feature = "rt")]
+                #[crate::interrupt]
+                unsafe fn #irq () {
+                    #(
+                        <crate::peripherals::#channels as crate::dma::ChannelInterrupt>::on_irq();
+                    )*
+                }
+            }
+        })
+        .collect();
+
+    g.extend(dma_irqs);
+
+    g.extend(quote! {
+        pub(crate) const DMA_CHANNELS: &[crate::dma::ChannelInfo] = &[#dmas];
+    });
+
+    // ...
 
     // _macros.rs
     let mut m = String::new();
