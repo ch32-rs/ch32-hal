@@ -19,26 +19,18 @@ Keypoints:
 
 ## TODOs
 
-- [x] Embassy timer driver using Systick
-- [x] SDI Debug
-- [x] GPIO
-  - [x] Interrupts using EXTI (async)
-- [x] UART
-  - [x] Half-duplex
-  - [ ] UART async (DMA)
-- [x] SPI
-  - [x] blocking API
-  - [ ] async API
-- [x] I2C
-  - [x] blocking API
-  - [ ] async API
-- [x] ADC
-  - [x] blocking API, for CH32V2, CH32V3
-  - [ ] async API
-- [ ] OPA
-- [ ] USB
-- [x] RNG
-- More to come
+| Family | Status       | Embassy | RCC | GPIO | UART | SPI | I2C | ADC | Timer(PWM) | EXIT(Async) | RNG |
+|--------|--------------|---------|-----|------|------|-----|-----|-----|------------|-------------|-----|
+| V2/V3  |              | ✅       | ✅   | ✅    | ✅    | ✅   | ✅   | ✅   |            | ✅           | ✅   |
+| V1     |              | ✅       | ✅   | ✅    | ✅    | ✅   | ✅   | ✅   |            | ✅           |     |
+| V0     |              | ✅       | ✅   | ✅    | ✅    | ✅   | ✅   |     |            | ✅           |     |
+| X0     |              |         | ✅   | ✅    | ✅    | ✅   |     | ✅   | ✅          | ✅           |     |
+| L0     | No Dev Board |         |     |      |      |     |     |     |            |             |     |
+| CH641  | No Dev Board |         |     |      |      |     |     |     |            |             |     |
+| CH643  | No Dev Board |         |     |      |      |     |     |     |            |             |     |
+| CH645  | No Info      |         |     |      |      |     |     |     |            |             |     |
+|        |              |         |     |      |      |     |     |     |            |             |     |
+|        |              |         |     |      |      |     |     |     |            |             |     |
 
 ## Minimum supported Rust version(MSRV)
 
