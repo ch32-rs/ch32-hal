@@ -19,7 +19,7 @@ Keypoints:
 
 ## TODOs
 
-| Family | Status       | Embassy | RCC | GPIO | UART | SPI | I2C | ADC | Timer(PWM) | EXIT(Async) | RNG |
+| Family | Status       | Embassy | RCC | GPIO | UART | SPI | I2C | ADC | Timer(PWM) | EXTI* | RNG |
 |--------|--------------|---------|-----|------|------|-----|-----|-----|------------|-------------|-----|
 | V2/V3  |              | ✅       | ✅   | ✅    | ✅    | ✅   | ✅   | ✅   |            | ✅           | ✅   |
 | V1     |              | ✅       | ✅   | ✅    | ✅    | ✅   | ✅   | ✅   |            | ✅           |     |
