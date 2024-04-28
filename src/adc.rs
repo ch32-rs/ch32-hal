@@ -57,7 +57,8 @@ impl<'d, T: Instance> Adc<'d, T> {
         T::enable_and_reset();
 
         // TODO: ADCPRE
-        #[cfg(not(adc_v0))]
+        // CTLR3 not avaiable to CH3V0, CH32V1
+        #[cfg(any(adc_v3, adc_x0))]
         T::regs().ctlr3().modify(|w| w.set_clk_div(config.clkdiv));
 
         // clear, only independent mode is supported
