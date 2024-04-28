@@ -1,6 +1,6 @@
 use core::future::{poll_fn, Future};
 use core::pin::Pin;
-use core::sync::atomic::{fence, AtomicUsize, Ordering};
+use core::sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering};
 use core::task::{Context, Poll, Waker};
 
 use embassy_sync::waitqueue::AtomicWaker;
@@ -183,19 +183,19 @@ impl AnyChannel {
                 state.complete_count.store(0, Ordering::Release);
                 self.clear_irqs();
 
-                ch.par().write_value(peri_addr as u32);
-                ch.mar().write_value(mem_addr as u32);
-                ch.ndtr().write(|w| w.set_ndt(mem_len as u16));
+                ch.par().write_value(peri_addr as u32); // PADDR
+                ch.mar().write_value(mem_addr as u32); // MADDR
+                ch.ndtr().write(|w| w.set_ndt(mem_len as u16)); // CNTR
                 ch.cr().write(|w| {
                     w.set_psize(data_size.into());
                     w.set_msize(data_size.into());
                     w.set_minc(incr_mem);
                     w.set_dir(dir.into());
-                    w.set_teie(true);
-                    w.set_tcie(options.complete_transfer_ir);
-                    w.set_htie(options.half_transfer_ir);
-                    w.set_circ(options.circular);
-                    w.set_pl(options.priority.into());
+                    w.set_teie(true); // error
+                    w.set_tcie(options.complete_transfer_ir); // tx complete
+                    w.set_htie(options.half_transfer_ir); // half
+                    w.set_circ(options.circular); // circular
+                    w.set_pl(options.priority.into()); // priority
                     w.set_en(false); // don't start yet
                 });
             }
@@ -269,7 +269,6 @@ impl AnyChannel {
     }
 
     fn poll_stop(&self) -> Poll<()> {
-        use core::sync::atomic::compiler_fence;
         compiler_fence(Ordering::SeqCst);
 
         if !self.is_running() {

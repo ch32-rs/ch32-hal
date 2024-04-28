@@ -548,9 +548,8 @@ fn main() {
             let channels = channels.iter().map(|c| format_ident!("{}", c));
 
             quote! {
-                #[cfg(feature = "rt")]
-                #[crate::interrupt]
-                unsafe fn #irq () {
+                #[no_mangle]
+                unsafe extern "C" fn #irq () {
                     #(
                         <crate::peripherals::#channels as crate::dma::ChannelInterrupt>::on_irq();
                     )*

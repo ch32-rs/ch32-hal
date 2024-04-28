@@ -107,9 +107,7 @@ pub fn init(config: Config) -> Peripherals {
         gpio::init(cs);
 
         dma::init(cs, config.dma_interrupt_priority);
-    });
 
-    ::critical_section::with(|cs| unsafe {
         exti::init(cs);
     });
 
