@@ -199,9 +199,11 @@ foreach_interrupt! {
         impl_core_timer!($inst, TimerBits::Bits16);
         impl BasicInstance for crate::peripherals::$inst {}
         impl SealedGeneralInstance for crate::peripherals::$inst {
-            let regs = unsafe { crate::pac::timer::Gptm::from_ptr(Self::regs()) };
-            let cr1 = regs.ctlr1().read();
-            (cr1.cms(), cr1.dir()).into()
+            fn get_counting_mode(&self) -> low_level::CountingMode {
+                let regs = unsafe { crate::pac::timer::Gptm::from_ptr(Self::regs()) };
+                let cr1 = regs.ctlr1().read();
+                (cr1.cms(), cr1.dir()).into()
+            }
         }
         impl_general_16bit!($inst);
     };
@@ -210,9 +212,11 @@ foreach_interrupt! {
         impl_core_timer!($inst, TimerBits::Bits32);
         impl BasicInstance for crate::peripherals::$inst {}
         impl SealedGeneralInstance for crate::peripherals::$inst {
-            let regs = unsafe { crate::pac::timer::Gptm::from_ptr(Self::regs()) };
-            let cr1 = regs.ctlr1().read();
-            (cr1.cms(), cr1.dir()).into()
+            fn get_counting_mode(&self) -> low_level::CountingMode {
+                let regs = unsafe { crate::pac::timer::Gptm::from_ptr(Self::regs()) };
+                let cr1 = regs.ctlr1().read();
+                (cr1.cms(), cr1.dir()).into()
+            }
         }
         impl_general_16bit!($inst);
         impl GeneralInstance32bit for crate::peripherals::$inst {}
