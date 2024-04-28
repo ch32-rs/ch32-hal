@@ -115,7 +115,8 @@ impl<const WIDTH: u16, const HEIGHT: u16, const OFFSETX: u16, const OFFSETY: u16
         self.send_command_data(Instruction::VMCTR1, &[0x0E]);
 
         // Some displays are INVON
-        self.send_command(Instruction::INVOFF);
+        //        self.send_command(Instruction::INVOFF);
+        self.send_command(Instruction::INVON);
 
         // BITS:
         // MY, MX, MV, ML, RGB, MV, _, _
@@ -269,7 +270,8 @@ async fn main(spawner: Spawner) -> ! {
     let sda = p.PA7;
 
     let rst = p.PA1;
-    let dc = p.PA2;
+    //let dc = p.PA2;
+    let dc = p.PA0;
 
     let led = p.PB12;
     let button = p.PC3;
@@ -292,7 +294,7 @@ async fn main(spawner: Spawner) -> ! {
     rst.set_high();
     Timer::after_millis(20).await;
 
-    let mut display: ST7735<160, 80, 0, 24> = ST7735::new(spi, dc);
+    let mut display: ST7735<160, 80, 1, 26> = ST7735::new(spi, dc);
 
     println!("display init ...");
     display.init();

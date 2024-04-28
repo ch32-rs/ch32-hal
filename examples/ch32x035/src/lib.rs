@@ -2,4 +2,4 @@
 
 pub use ch32_hal as hal;
 
-pub mod sx1268;
+pub mod st7735;
