@@ -284,6 +284,7 @@ macro_rules! peripherals {
 macro_rules! into_ref {
     ($($name:ident),*) => {
         $(
+            #[allow(unused_mut)]
             let mut $name = $name.into_ref();
         )*
     }
