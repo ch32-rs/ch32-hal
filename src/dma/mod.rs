@@ -1,3 +1,7 @@
+//! DMA
+//!
+//! TODO: DMA2 with CH8 to CH11, which are handled in Exxx registers
+
 #![macro_use]
 
 use core::mem;

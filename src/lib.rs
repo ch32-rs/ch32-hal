@@ -6,8 +6,10 @@ pub use ch32_metapac as pac;
 // This must go FIRST so that all the other modules see its macros.
 include!(concat!(env!("OUT_DIR"), "/_macros.rs"));
 
-pub mod time;
+pub(crate) mod internal;
+
 mod macros;
+pub mod time;
 /// Operating modes for peripherals.
 pub mod mode {
     trait SealedMode {}
@@ -104,10 +106,7 @@ pub fn init(config: Config) -> Peripherals {
     ::critical_section::with(|cs| unsafe {
         gpio::init(cs);
 
-        dma::init(
-            cs,
-            config.dma_interrupt_priority,
-        );
+        dma::init(cs, config.dma_interrupt_priority);
     });
 
     ::critical_section::with(|cs| unsafe {

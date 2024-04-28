@@ -45,6 +45,10 @@ embassy-time = { version = "0.3.0", features = [
 ], optional = true }
 nb = "1.1.0"
 embedded-hal-nb = "1.0.0"
+futures = { version = "0.3.17", default-features = false, features = [
+    "async-await",
+] }
+
 
 rand_core = "0.6.3"
 

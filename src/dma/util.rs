@@ -1,7 +1,6 @@
-use crate::PeripheralRef;
-
 use super::word::Word;
 use super::{AnyChannel, Request, Transfer, TransferOptions};
+use crate::PeripheralRef;
 
 /// Convenience wrapper, contains a channel and a request number.
 ///
