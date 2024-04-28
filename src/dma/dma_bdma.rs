@@ -144,9 +144,9 @@ impl AnyChannel {
                 } else if isr.tcif(info.num) && cr.read().tcie() {
                     // Acknowledge transfer complete interrupt
                     r.ifcr().write(|w| w.set_tcif(info.num, true));
-                    #[cfg(not(armv6m))]
+                    #[cfg(not(ch32v0))]
                     state.complete_count.fetch_add(1, Ordering::Release);
-                    #[cfg(armv6m)]
+                    #[cfg(ch32v0)]
                     critical_section::with(|_| {
                         let x = state.complete_count.load(Ordering::Relaxed);
                         state.complete_count.store(x + 1, Ordering::Release);
@@ -477,9 +477,9 @@ impl<'a> DmaCtrl for DmaCtrlImpl<'a> {
 
     fn reset_complete_count(&mut self) -> usize {
         let state = &STATE[self.0.id as usize];
-        #[cfg(not(armv6m))]
+        #[cfg(not(ch32v0))]
         return state.complete_count.swap(0, Ordering::AcqRel);
-        #[cfg(armv6m)]
+        #[cfg(ch32v0)]
         return critical_section::with(|_| {
             let x = state.complete_count.load(Ordering::Acquire);
             state.complete_count.store(0, Ordering::Release);
