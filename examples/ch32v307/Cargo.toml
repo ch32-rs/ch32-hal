@@ -14,10 +14,10 @@ embassy-executor = { version = "0.5.0", features = [
 embassy-time = { version = "0.3.0", features = ["tick-hz-1_000_000"] }
 nb = "1.1.0"
 
-qingke-rt = { version = "0.1.10" }
-qingke = { version = "0.1.10" }
-# qingke-rt = { version = "0.1.10", path = "../../../qingke/qingke-rt" }
-# qingke = { version = "0.1.10", path = "../../../qingke" }
+qingke-rt = { version = "0.1.11" }
+qingke = { version = "0.1.11" }
+# qingke-rt = { version = "0.1.11", path = "../../../qingke/qingke-rt" }
+# qingke = { version = "0.1.11", path = "../../../qingke" }
 
 # Not working for now
 # defmt = "0.3"
