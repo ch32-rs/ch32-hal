@@ -23,16 +23,23 @@ Keypoints:
 |--------|--------|---------|-----|------|------|-----|-----|-----|------------|-------|-----|
 | V2/V3  |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  |            | ✅    | ✅  |
 | V1     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  |            | ✅    |     |
-| V0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ❓  |            | ✅    |     |
+| V0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ❓  | ❓         | ✅    |     |
 | X0     |        |         | ✅  | ✅   | ✅   | ✅  |     | ✅  | ✅         | ✅    |     |
-| L0     |        |         |     |      |      |     |     |     |            |       |     |
+| L0     | N/A    |         |     |      |      |     |     |     |            |       |     |
 | CH641  | N/A    |         |     |      |      |     |     |     |            |       |     |
 | CH643  | N/A    |         |     |      |      |     |     |     |            |       |     |
 | CH645  | N/A    |         |     |      |      |     |     |     |            |       |     |
 
-- ✅ : Works
+- ✅ : Expected to work
 - ❓ : Not tested
 - `*` marks the async driver
+- N/A: I haven't got a dev board yet, so I can't test it.
+
+## Built with ch32-hal ✨
+
+This is a list for awesome projects that are built using ch32-hal
+
+- ... not yet :(
 
 ## Minimum supported Rust version(MSRV)
 
@@ -42,7 +49,15 @@ Feel free to change this if you did some testing with some version of Rust.
 
 ## Contributing
 
-TODO. All kinds of contributions are welcome.
+All kinds of contributions are welcome.
+
+- Share your project at [Discussions](https://github.com/ch32-rs/ch32-hal/discussions)
+  - if your project is an open-source project, consider adding it to the list above
+- README and Documentation, including doc comments in code
+- Writing demo code for peripherals
+- Revising the peripheral definitions at [ch32-data](https://github.com/ch32-rs/ch32-data)
+- Adding new peripheral drivers - This is difficult to make it compatible with all chips, but you can try.
+- ...
 
 ## License
 
