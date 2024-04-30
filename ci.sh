@@ -3,6 +3,6 @@
 set -ex
 set -o pipefail
 
-for d in $(find examples -type d -depth 1); do
+for d in $(find examples -depth 1 -type d); do
     (cd $d && cargo build --release)
 done
