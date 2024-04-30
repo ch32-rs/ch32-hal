@@ -1,19 +1,16 @@
 # ch32-hal
 
-Demo Code Building Status [![Github Actions][badge-actions]][actions-build]
+[![Demo Code Github Actions][badge-actions]][actions-build]
 
-[badge-actions]: https://img.shields.io/github/actions/workflow/status/ch32-rs/ch32-hal/build.yml?style=for-the-badge
+[badge-actions]: https://img.shields.io/github/actions/workflow/status/ch32-rs/ch32-hal/build.yml?style=for-the-badge&label=Demo%20Code%20Build
 [actions-build]: https://github.com/ch32-rs/ch32-hal/actions/workflows/build.yml
 
 Rust HAL(Hardware Abstraction Layer) crate for WCH's 32-bit RISC-V microcontrollers.
 
-This HAL crates is the [Embassy](https://github.com/embassy-rs/embassy) Framework driver for WCH's 32-bit RISC-V microcontrollers.
+This HAL crates is the [Embassy](https://github.com/embassy-rs/embassy) framework driver for WCH's 32-bit RISC-V microcontrollers.
 
 This HAL crates uses the metapac approach to support multiple chips in the same crate.
 The metapac is maintained in the [ch32-rs/ch32-data](https://github.com/ch32-rs/ch32-data) repository, published as a crate `ch32-metapac`.
-
-Currently, supported chips are listed in `Cargo.toml` as feature flags,
-others should work if you are careful as most peripherals are similar enough.
 
 Keypoints:
 
@@ -24,6 +21,9 @@ Keypoints:
 - Write once, run on all supported chips(should be)
 
 ## Supported Devices and Peripherals
+
+Currently, supported chips are listed in `Cargo.toml` as feature flags,
+others should work if you are careful as most peripherals are similar enough.
 
 | Family | Status | Embassy | RCC | GPIO | UART | SPI | I2C | ADC | Timer(PWM) | EXTI* | RNG | DMA* |
 |--------|--------|---------|-----|------|------|-----|-----|-----|------------|-------|-----|------|
