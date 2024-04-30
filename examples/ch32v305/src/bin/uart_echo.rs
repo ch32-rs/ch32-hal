@@ -20,23 +20,24 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut cfg = usart::Config::default();
     cfg.baudrate = 115200;
-    let mut uart = Uart::new(p.USART3, p.PB10, p.PB11, cfg).unwrap();
+    let mut uart = Uart::new_blocking(p.USART3, p.PB11, p.PB10, cfg).unwrap();
 
     uart.blocking_write(b"Init ok\r\n");
 
+    // FIXME: no time slice for embassy executor
+    let mut buf = [0u8; 1];
     loop {
-        // Timer::after_millis(2000).await;
-        while let Ok(b) = nb::block!(uart.nb_read()) {
-            if b == b'\r' {
-                uart.blocking_write(b"\r\n");
-            } else {
-                uart.blocking_write(&[b]);
-            }
+        uart.blocking_read(&mut buf).unwrap();
+
+        if buf[0] >= b'a' && buf[0] <= b'z' {
+            buf[0] -= 32;
         }
 
-        led.toggle();
-
-        //uart.blocking_write(b"Hello from serial\r\n");
-        // println!("fuck");
+        if buf[0] == b'\r' {
+            uart.blocking_write(b"\r\n").unwrap();
+            led.toggle();
+        } else {
+            uart.blocking_write(&buf).unwrap();
+        }
     }
 }

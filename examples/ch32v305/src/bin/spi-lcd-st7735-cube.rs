@@ -293,8 +293,9 @@ async fn main(_spawner: Spawner) -> ! {
     let _miso = p.PB14;
     let mosi = p.PB15;
 
+    let dc = p.PA5;
     let rst = p.PC6;
-    let dc = p.PB7;
+    // let dc = p.PB7;
 
     // let led = p.PB8;
     let mut led = Output::new(p.PC9, Level::Low, Default::default());

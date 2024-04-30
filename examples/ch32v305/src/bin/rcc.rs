@@ -37,8 +37,9 @@ async fn main(spawner: Spawner) -> ! {
             pll_src: PllSource::HSE,
             pll: Some(Pll {
                 prediv: PllPreDiv::DIV1,
-                mul: PllMul::MUL12, // 12 * 12 = max 144MHz
-                                    // use MUL16 to overclock to 192MHz
+                // 12 * 12 = max 144MHz
+                // use MUL16 to overclock to 192MHz
+                mul: PllMul::MUL12,
             }),
             sys: Sysclk::PLL,
             ..Default::default()

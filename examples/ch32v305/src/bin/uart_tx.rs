@@ -30,7 +30,7 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(blink(p.PC9.degrade())).unwrap();
 
     let cfg = usart::Config::default();
-    let mut uart = UartTx::new(p.USART3, p.PB10, cfg).unwrap();
+    let mut uart = UartTx::new_blocking(p.USART3, p.PB10, cfg).unwrap();
 
     loop {
         Timer::after_millis(2000).await;
