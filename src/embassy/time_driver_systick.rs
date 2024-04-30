@@ -61,12 +61,13 @@ impl SystickDriver {
 
         // UNDOCUMENTED:  Avoid initial interrupt
         rb.cmp().write(|w| *w = u64::MAX - 1);
+        rb.cmp().write_value(0);
         critical_section::with(|_| {
             rb.sr().write(|w| w.set_cntif(false)); // clear
 
             // Configration: Upcount, No reload, HCLK as clock source
             rb.ctlr().modify(|w| {
-                w.set_init(true);
+                //  w.set_init(true);
                 w.set_mode(vals::Mode::UPCOUNT);
                 w.set_stre(false);
                 w.set_stclk(vals::Stclk::HCLK);
@@ -78,12 +79,20 @@ impl SystickDriver {
     #[inline(always)]
     fn on_interrupt(&self) {
         let rb = &crate::pac::SYSTICK;
-        rb.ctlr().modify(|w| w.set_stie(false)); // disable interrupt
         rb.sr().write(|w| w.set_cntif(false)); // clear IF
 
-        critical_section::with(|cs| {
+        let next_timestamp = critical_section::with(|cs| {
+            let next = self.alarms.borrow(cs)[0].timestamp.get();
+            if next > self.now() {
+                return next;
+            }
             self.trigger_alarm(cs);
+            return u64::MAX;
         });
+
+        let period = self.period.load(Ordering::Relaxed) as u64;
+        let new_cmp = u64::min(self.raw_cnt().wrapping_add(period), next_timestamp * period);
+        rb.cmp().write_value(new_cmp);
     }
 
     fn trigger_alarm(&self, cs: CriticalSection) {
@@ -157,15 +166,12 @@ impl Driver for SystickDriver {
             if timestamp <= t {
                 // If alarm timestamp has passed the alarm will not fire.
                 // Disarm the alarm and return `false` to indicate that.
-                rb.ctlr().modify(|w| w.set_stie(false));
 
                 alarm.timestamp.set(u64::MAX);
 
                 return false;
             }
 
-            let safe_cmp = timestamp.saturating_add(period);
-            rb.cmp().write_value(safe_cmp);
             rb.ctlr().modify(|w| w.set_stie(true));
 
             true
