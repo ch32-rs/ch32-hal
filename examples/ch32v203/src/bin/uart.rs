@@ -17,7 +17,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut led = Output::new(p.PB8, Level::Low, Default::default());
 
     let mut cfg = usart::Config::default();
-    let mut uart = UartTx::new(p.USART1, p.PA9, cfg).unwrap();
+    let mut uart = UartTx::new_blocking(p.USART1, p.PA9, cfg).unwrap();
 
     loop {
         Timer::after_millis(1000).await;
