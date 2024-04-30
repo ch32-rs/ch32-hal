@@ -15,7 +15,7 @@ embassy-executor = { version = "0.5.0", features = [
     "arch-riscv32",
     "executor-thread",
 ] }
-embassy-time = { version = "0.3.0", features = ["tick-hz-1_000_000"] }
+embassy-time = { version = "0.3.0" }
 
 qingke-rt = { version = "0.1.11" }
 qingke = { version = "0.1.11" }

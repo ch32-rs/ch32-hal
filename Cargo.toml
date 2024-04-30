@@ -38,10 +38,10 @@ defmt = { version = "0.3.5", optional = true }
 embassy-sync = { version = "0.5.0", optional = true }
 embassy-futures = { version = "0.1.1", optional = true }
 embassy-time-driver = { version = "0.1.0", features = [
-    "tick-hz-100_000",
+    "tick-hz-10_000",
 ], optional = true }
 embassy-time = { version = "0.3.0", features = [
-    "tick-hz-100_000",
+    "tick-hz-10_000",
 ], optional = true }
 nb = "1.1.0"
 embedded-hal-nb = "1.0.0"
