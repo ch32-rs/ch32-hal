@@ -30,5 +30,4 @@ jobs:
           cd ../ch32-data/build/
           git clone https://github.com/ch32-rs/ch32-metapac.git
       - name: Build Only
-        run: |
-          ./ci.sh
+        run: ./ci.sh
