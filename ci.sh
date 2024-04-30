@@ -3,6 +3,6 @@
 set -ex
 set -o pipefail
 
-for d in $(ls -1 examples); do
-    (cd $d && cargo build --release)
+for d in $(ls -1 ./examples); do
+    (cd ./examples/$d && cargo build --release)
 done
