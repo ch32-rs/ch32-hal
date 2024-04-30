@@ -21,6 +21,7 @@ jobs:
       - name: Use nightly Rust
         run: |
           rustup default nightly
+          rustup component add rust-src
           rustup target add riscv32imac-unknown-none-elf
           rustup target add riscv32imafc-unknown-none-elf
           rustup target add riscv32i-unknown-none-elf
