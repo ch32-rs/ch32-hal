@@ -33,7 +33,14 @@ Keypoints:
 - ✅ : Expected to work
 - ❓ : Not tested
 - `*` marks the async driver
-- N/A: I haven't got a dev board yet, so I can't test it.
+- N/A: I haven't got a dev board yet, help-wanted
+
+### TODOs
+
+This section lists some key items that are not implemented yet. And should be noted when using this crate.
+
+- PLL2 for CH32V3
+- DMA2 for CH32V3 (requires special handling of high DMA channels)
 
 ## Built with ch32-hal ✨
 
