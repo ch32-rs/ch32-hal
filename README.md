@@ -1,10 +1,15 @@
 # ch32-hal
 
-WIP hal crate for WCH's 32-bit RISC-V microcontrollers.
+Demo Code Building Status [![Github Actions][badge-actions]][actions-build]
 
-This hal crates is the [embassy](https://github.com/embassy-rs/embassy) driver for WCH's 32-bit RISC-V microcontrollers.
+[badge-actions]: https://img.shields.io/github/actions/workflow/status/ch32-rs/ch32-hal/build.yml?style=for-the-badge
+[actions-build]: https://github.com/ch32-rs/ch32-hal/actions/workflows/build.yml
 
-This hal crates uses the metapac approach to support multiple chips in the same crate.
+Rust HAL(Hardware Abstraction Layer) crate for WCH's 32-bit RISC-V microcontrollers.
+
+This HAL crates is the [Embassy](https://github.com/embassy-rs/embassy) Framework driver for WCH's 32-bit RISC-V microcontrollers.
+
+This HAL crates uses the metapac approach to support multiple chips in the same crate.
 The metapac is maintained in the [ch32-rs/ch32-data](https://github.com/ch32-rs/ch32-data) repository, published as a crate `ch32-metapac`.
 
 Currently, supported chips are listed in `Cargo.toml` as feature flags,
@@ -12,10 +17,11 @@ others should work if you are careful as most peripherals are similar enough.
 
 Keypoints:
 
-- embassy support
-- metapac approach, check [ch32-data](https://github.com/ch32-rs/ch32-data)
-- all in one crate, no need to create a new crate for each chip
-- async drivers
+- Embassy support
+- All-in-one metapac for peripheral register access, check [ch32-data](https://github.com/ch32-rs/ch32-data) for more
+- All-in-one HAL crate, no need to create a new crate for each chip
+- Async drivers, with async/await support, DMA support
+- Write once, run on all supported chips(should be)
 
 ## Supported Devices and Peripherals
 
