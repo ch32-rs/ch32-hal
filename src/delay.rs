@@ -1,4 +1,4 @@
-//! Simple busy-loop delay provider
+//! SYSTICK based delay implementation for Qingke V2
 
 use pac::systick::vals;
 
