@@ -23,9 +23,9 @@ async fn blink(pin: AnyPin, interval_ms: u64) {
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
-    let config = hal::Config {
-        rcc: hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE,
-    };
+    let mut config = hal::Config::default();
+    config.rcc = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE;
+
     let p = hal::init(config);
     hal::embassy::init();
 

@@ -17,7 +17,7 @@ async fn main(spawner: Spawner) -> ! {
     let p = hal::init(config);
     hal::embassy::init();
 
-    let mut delay = Delay;
+    let delay = Delay;
 
     let mut adc = hal::adc::Adc::new(p.ADC1, Default::default());
 
