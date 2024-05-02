@@ -54,8 +54,15 @@ impl SystickDriver {
         let rb = &crate::pac::SYSTICK;
         let hclk = crate::rcc::clocks().hclk.0 as u64;
 
-        let cnt_per_second = hclk; // not HCLK/8
+        let cnt_per_second = hclk / 8; // HCLK/8
         let cnt_per_tick = cnt_per_second / embassy_time_driver::TICK_HZ;
+
+        crate::println!(
+            "using systick: hclk={} cnt_per_second={} cnt_per_tick={}",
+            hclk,
+            cnt_per_second,
+            cnt_per_tick
+        );
 
         self.period.store(cnt_per_tick as u32, Ordering::Relaxed);
 
@@ -70,7 +77,7 @@ impl SystickDriver {
                 //  w.set_init(true);
                 w.set_mode(vals::Mode::UPCOUNT);
                 w.set_stre(false);
-                w.set_stclk(vals::Stclk::HCLK);
+                w.set_stclk(vals::Stclk::HCLK_DIV8);
                 w.set_ste(true);
             });
         })
@@ -81,18 +88,19 @@ impl SystickDriver {
         let rb = &crate::pac::SYSTICK;
         rb.sr().write(|w| w.set_cntif(false)); // clear IF
 
+        let period = self.period.load(Ordering::Relaxed) as u64;
+
         let next_timestamp = critical_section::with(|cs| {
             let next = self.alarms.borrow(cs)[0].timestamp.get();
-            if next > self.now() {
+            if next > self.now() + 1 {
                 return next;
             }
             self.trigger_alarm(cs);
             return u64::MAX;
         });
 
-        let period = self.period.load(Ordering::Relaxed) as u64;
-        let new_cmp = u64::min(self.raw_cnt().wrapping_add(period), next_timestamp.wrapping_mul(period));
-        rb.cmp().write_value(new_cmp);
+        let new_cmp = u64::min(next_timestamp * period, self.raw_cnt().wrapping_add(period));
+        rb.cmp().write_value(new_cmp + 1);
     }
 
     fn trigger_alarm(&self, cs: CriticalSection) {
