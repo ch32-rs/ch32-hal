@@ -624,6 +624,18 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
     }
 }
 
+impl<'d, T: Instance, M: PeriMode> Drop for Spi<'d, T, M> {
+    fn drop(&mut self) {
+        use crate::gpio::sealed::Pin;
+
+        self.sck.as_ref().map(|x| x.set_as_disconnected());
+        self.mosi.as_ref().map(|x| x.set_as_disconnected());
+        self.miso.as_ref().map(|x| x.set_as_disconnected());
+
+        T::disable();
+    }
+}
+
 // Get CTRL1.BR
 #[inline]
 fn calculate_baud_rate(hclk: u32, clk: u32) -> BaudRate {
