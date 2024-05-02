@@ -16,14 +16,15 @@
 use core::marker::PhantomData;
 use core::ptr;
 
+use embassy_futures::join::join;
 use embedded_hal::spi::{Mode, Phase, Polarity, MODE_0};
 use pac::spi::vals::BaudRate;
 use pac::spi::Spi as Regs;
 
-use crate::dma::{word, ChannelAndRequest};
+use crate::dma::{slice_ptr_parts, word, ChannelAndRequest};
 use crate::gpio::sealed::AFType;
 use crate::gpio::{AnyPin, Pull, Speed};
-use crate::mode::{Blocking, Mode as PeriMode};
+use crate::mode::{Async, Blocking, Mode as PeriMode};
 use crate::time::Hertz;
 use crate::{into_ref, pac, peripherals, Peripheral, PeripheralRef};
 
@@ -147,7 +148,7 @@ pub struct Spi<'d, T: Instance, M: PeriMode> {
 }
 
 impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
-    fn new_inner<const REMAP: u8>(
+    fn new_inner(
         peri: impl Peripheral<P = T> + 'd,
         sck: Option<PeripheralRef<'d, AnyPin>>,
         mosi: Option<PeripheralRef<'d, AnyPin>>,
@@ -168,7 +169,7 @@ impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
         T::enable_and_reset();
 
         // high speed mode
-        if config.frequency.0 >= 36_000_000 && div == BaudRate::DIV_2 {
+        if config.frequency.0 >= 36_000_000 && div == BaudRate::DIV_2 && miso.is_some() {
             regs.hscr().write(|w| w.set_hsrxen(true));
         }
 
@@ -312,7 +313,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
         miso.set_as_input(Pull::None);
 
-        Self::new_inner::<REMAP>(
+        Self::new_inner(
             peri,
             Some(sck.map_into()),
             Some(mosi.map_into()),
@@ -337,7 +338,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
         miso.set_as_input(Pull::None);
 
-        Self::new_inner::<REMAP>(
+        Self::new_inner(
             peri,
             Some(sck.map_into()),
             None,
@@ -362,7 +363,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
         mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
 
-        Self::new_inner::<REMAP>(
+        Self::new_inner(
             peri,
             Some(sck.map_into()),
             Some(mosi.map_into()),
@@ -387,7 +388,239 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
 
         mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
 
-        Self::new_inner::<REMAP>(peri, None, Some(mosi.map_into()), None, None, None, config)
+        Self::new_inner(peri, None, Some(mosi.map_into()), None, None, None, config)
+    }
+}
+
+impl<'d, T: Instance> Spi<'d, T, Async> {
+    /// Create a new SPI driver.
+    pub fn new<const REMAP: u8>(
+        peri: impl Peripheral<P = T> + 'd,
+        sck: impl Peripheral<P = impl SckPin<T, REMAP>> + 'd,
+        mosi: impl Peripheral<P = impl MosiPin<T, REMAP>> + 'd,
+        miso: impl Peripheral<P = impl MisoPin<T, REMAP>> + 'd,
+        tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
+        rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
+        config: Config,
+    ) -> Self {
+        into_ref!(sck, mosi, miso);
+
+        T::set_remap(REMAP);
+
+        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        miso.set_as_input(Pull::None);
+
+        Self::new_inner(
+            peri,
+            Some(sck.map_into()),
+            Some(mosi.map_into()),
+            Some(miso.map_into()),
+            new_dma!(tx_dma),
+            new_dma!(rx_dma),
+            config,
+        )
+    }
+
+    /// Create a new SPI driver, in RX-only mode (only MISO pin, no MOSI).
+    pub fn new_rxonly<const REMAP: u8>(
+        peri: impl Peripheral<P = T> + 'd,
+        sck: impl Peripheral<P = impl SckPin<T, REMAP>> + 'd,
+        miso: impl Peripheral<P = impl MisoPin<T, REMAP>> + 'd,
+        rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
+        config: Config,
+    ) -> Self {
+        into_ref!(sck, miso);
+
+        T::set_remap(REMAP);
+
+        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        miso.set_as_input(Pull::None);
+
+        Self::new_inner(
+            peri,
+            Some(sck.map_into()),
+            None,
+            Some(miso.map_into()),
+            None,
+            new_dma!(rx_dma),
+            config,
+        )
+    }
+
+    /// Create a new SPI driver, in TX-only mode (only MOSI pin, no MISO).
+    pub fn new_txonly<const REMAP: u8>(
+        peri: impl Peripheral<P = T> + 'd,
+        sck: impl Peripheral<P = impl SckPin<T, REMAP>> + 'd,
+        mosi: impl Peripheral<P = impl MosiPin<T, REMAP>> + 'd,
+        tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
+        config: Config,
+    ) -> Self {
+        into_ref!(sck, mosi);
+
+        T::set_remap(REMAP);
+
+        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
+
+        Self::new_inner(
+            peri,
+            Some(sck.map_into()),
+            Some(mosi.map_into()),
+            None,
+            new_dma!(tx_dma),
+            None,
+            config,
+        )
+    }
+
+    /// Create a new SPI driver, in TX-only mode, without SCK pin.
+    ///
+    /// This can be useful for bit-banging non-SPI protocols.
+    pub fn new_txonly_nosck<const REMAP: u8>(
+        peri: impl Peripheral<P = T> + 'd,
+        mosi: impl Peripheral<P = impl MosiPin<T, REMAP>> + 'd,
+        tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
+        config: Config,
+    ) -> Self {
+        into_ref!(mosi);
+
+        T::set_remap(REMAP);
+
+        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
+
+        Self::new_inner(peri, None, Some(mosi.map_into()), None, new_dma!(tx_dma), None, config)
+    }
+
+    /// SPI write, using DMA.
+    pub async fn write<W: Word>(&mut self, data: &[W]) -> Result<(), Error> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        self.set_word_size(W::CONFIG);
+        T::REGS.ctlr1().modify(|w| {
+            w.set_spe(false);
+        });
+
+        let tx_dst = T::REGS.datar().as_ptr();
+        let tx_f = unsafe {
+            self.tx_dma
+                .as_mut()
+                .unwrap()
+                .write(data, tx_dst as *mut _, Default::default())
+        };
+
+        T::REGS.ctlr2().modify(|w| w.set_txdmaen(true)); // set txdma en
+        T::REGS.ctlr1().modify(|w| {
+            w.set_spe(true);
+        });
+
+        tx_f.await;
+
+        finish_dma(T::REGS);
+
+        Ok(())
+    }
+
+    /// SPI read, using DMA.
+    pub async fn read<W: Word>(&mut self, data: &mut [W]) -> Result<(), Error> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        self.set_word_size(W::CONFIG);
+        T::REGS.ctlr1().modify(|w| {
+            w.set_spe(false);
+        });
+
+        flush_rx_fifo(T::REGS);
+
+        T::REGS.ctlr2().modify(|w| w.set_rxdmaen(true)); // set rxdma en
+
+        let clock_byte_count = data.len();
+
+        let rx_src = T::REGS.datar().as_ptr() as *mut _;
+        let rx_f = unsafe { self.rx_dma.as_mut().unwrap().read(rx_src, data, Default::default()) };
+
+        let tx_dst = T::REGS.datar().as_ptr() as *mut _;
+        let clock_byte = 0x00u8;
+        let tx_f = unsafe {
+            self.tx_dma
+                .as_mut()
+                .unwrap()
+                .write_repeated(&clock_byte, clock_byte_count, tx_dst, Default::default())
+        };
+
+        T::REGS.ctlr2().modify(|w| w.set_txdmaen(true));
+
+        T::REGS.ctlr1().modify(|w| {
+            w.set_spe(true);
+        });
+
+        join(tx_f, rx_f).await;
+
+        finish_dma(T::REGS);
+
+        Ok(())
+    }
+
+    async fn transfer_inner<W: Word>(&mut self, read: *mut [W], write: *const [W]) -> Result<(), Error> {
+        let (_, rx_len) = slice_ptr_parts(read);
+        let (_, tx_len) = slice_ptr_parts(write);
+        assert_eq!(rx_len, tx_len);
+        if rx_len == 0 {
+            return Ok(());
+        }
+
+        self.set_word_size(W::CONFIG);
+        T::REGS.ctlr1().modify(|w| {
+            w.set_spe(false);
+        });
+
+        // SPIv3 clears rxfifo on SPE=0
+        flush_rx_fifo(T::REGS);
+
+        T::REGS.ctlr2().modify(|w| w.set_rxdmaen(true));
+
+        let rx_src = T::REGS.datar().as_ptr() as *mut _;
+        let rx_f = unsafe { self.rx_dma.as_mut().unwrap().read_raw(rx_src, read, Default::default()) };
+
+        let tx_dst = T::REGS.datar().as_ptr() as *mut _;
+        let tx_f = unsafe {
+            self.tx_dma
+                .as_mut()
+                .unwrap()
+                .write_raw(write, tx_dst, Default::default())
+        };
+
+        T::REGS.ctlr2().modify(|w| w.set_txdmaen(true));
+        T::REGS.ctlr1().modify(|w| {
+            w.set_spe(true);
+        });
+
+        join(tx_f, rx_f).await;
+
+        finish_dma(T::REGS);
+
+        Ok(())
+    }
+
+    /// Bidirectional transfer, using DMA.
+    ///
+    /// This transfers both buffers at the same time, so it is NOT equivalent to `write` followed by `read`.
+    ///
+    /// The transfer runs for `max(read.len(), write.len())` bytes. If `read` is shorter extra bytes are ignored.
+    /// If `write` is shorter it is padded with zero bytes.
+    pub async fn transfer<W: Word>(&mut self, read: &mut [W], write: &[W]) -> Result<(), Error> {
+        self.transfer_inner(read, write).await
+    }
+
+    /// In-place bidirectional transfer, using DMA.
+    ///
+    /// This writes the contents of `data` on MOSI, and puts the received data on MISO in `data`, at the same time.
+    pub async fn transfer_in_place<W: Word>(&mut self, data: &mut [W]) -> Result<(), Error> {
+        self.transfer_inner(data, data).await
     }
 }
 
@@ -453,6 +686,22 @@ fn flush_rx_fifo(regs: pac::spi::Spi) {
     while regs.statr().read().rxne() {
         let _ = regs.datar().read();
     }
+}
+
+fn finish_dma(regs: Regs) {
+    while regs.statr().read().bsy() {}
+
+    // Disable the spi peripheral
+    regs.ctlr1().modify(|w| {
+        w.set_spe(false);
+    });
+
+    // The peripheral automatically disables the DMA stream on completion without error,
+    // but it does not clear the RXDMAEN/TXDMAEN flag in CR2.
+    regs.ctlr2().modify(|reg| {
+        reg.set_txdmaen(false);
+        reg.set_rxdmaen(false);
+    });
 }
 
 fn transfer_word<W: Word>(regs: &pac::spi::Spi, tx_word: W) -> Result<W, Error> {
