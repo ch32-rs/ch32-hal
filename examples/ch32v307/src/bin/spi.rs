@@ -2,7 +2,6 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use ch32_hal::dma::NoDma;
 use ch32_hal::spi;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -35,7 +34,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut spi_config = spi::Config::default();
     spi_config.frequency = Hertz::khz(375);
-    let mut spi = spi::Spi::new(p.SPI1, sck, mosi, miso, NoDma, NoDma, spi_config);
+    let mut spi = spi::Spi::new_blocking(p.SPI1, sck, mosi, miso, spi_config);
 
     loop {
         Timer::after_millis(2000).await;
