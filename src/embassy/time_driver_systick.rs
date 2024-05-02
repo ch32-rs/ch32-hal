@@ -91,7 +91,7 @@ impl SystickDriver {
         });
 
         let period = self.period.load(Ordering::Relaxed) as u64;
-        let new_cmp = u64::min(self.raw_cnt().wrapping_add(period), next_timestamp * period);
+        let new_cmp = u64::min(self.raw_cnt().wrapping_add(period), next_timestamp.wrapping_mul(period));
         rb.cmp().write_value(new_cmp);
     }
 
