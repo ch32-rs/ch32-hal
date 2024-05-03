@@ -651,7 +651,8 @@ fn calculate_baud_rate(hclk: u32, clk: u32) -> BaudRate {
         33..=64 => BaudRate::DIV_64,
         65..=128 => BaudRate::DIV_128,
         129..=256 => BaudRate::DIV_256,
-        // default to div256
+        // fallback to the lowest baudrate
+        0 => BaudRate::DIV_2,
         _ => BaudRate::DIV_256,
     }
 }
