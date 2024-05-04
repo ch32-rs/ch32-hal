@@ -47,7 +47,7 @@ mod interrupt_ext;
 
 pub use crate::_generated::{peripherals, Peripherals};
 
-#[cfg(systick_rv2)]
+#[cfg(any(systick_rv2, systick_rv3))]
 pub mod delay;
 pub mod dma;
 
@@ -61,11 +61,11 @@ pub mod rng;
 pub mod signature;
 pub mod spi;
 // TODO
+#[cfg(sdio_v3)]
+pub mod sdio;
 #[cfg(any(timer_x0, timer_v3))]
 pub mod timer;
 pub mod usart;
-#[cfg(sdio_v3)]
-pub mod sdio;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;
@@ -101,7 +101,7 @@ pub fn init(config: Config) -> Peripherals {
     unsafe {
         rcc::init(config.rcc);
 
-        #[cfg(systick_rv2)]
+        #[cfg(any(systick_rv2, systick_rv3))]
         delay::Delay::init();
     }
 
