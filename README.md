@@ -25,21 +25,22 @@ Keypoints:
 Currently, supported chips are listed in `Cargo.toml` as feature flags,
 others should work if you are careful as most peripherals are similar enough.
 
-| Family | Status | Embassy | RCC | GPIO | UART | SPI* | I2C | ADC | Timer(PWM) | EXTI* | RNG | DMA* |
-|--------|--------|---------|-----|------|------|-----|-----|-----|------------|-------|-----|-------|
-| V2/V3  |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ✅    | ✅  | ✅    |
-| V1     |        |         | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  |            | ✅    |     |       |
-| V0     |        |         | ✅  | ✅   | ✅   | ✅  | ✅  | ❓  | ❓         | ✅    |     |       |
-| X0     |        | ✅      | ✅  | ✅   | ✅*  | ✅  |     | ✅  | ✅         | ✅    |     | ✅    |
-| L0     | N/A    |         |     |      |      |     |     |     |            |       |     |       |
-| CH641  | N/A    |         |     |      |      |     |     |     |            |       |     |       |
-| CH643  | N/A    |         |     |      |      |     |     |     |            |       |     |       |
-| CH645  | N/A    |         |     |      |      |     |     |     |            |       |     |       |
+| Family | Status | Embassy | RCC | GPIO | UART | SPI* | I2C | ADC | Timer(PWM) | EXTI* | RNG | DMA* | Delay |
+|--------|--------|---------|-----|------|------|-----|-----|-----|------------|-------|-----|-------|-------|
+| V2/V3  |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ✅    | ✅  | ✅    |       |
+| V1     |        |         |     | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         |       |     |       | ✅    |
+| V0     |        |         | ✅  | ✅   | ✅   | ✅  | ✅  | ❓  | ❓         |       |     |       | ✅    |
+| X0     |        | ✅      | ✅  | ✅   | ✅*  | ✅  |     | ✅  | ✅         | ✅    |     | ✅    |       |
+| L0     | TODO   |         |     |      |      |     |     |     |            |       |     |       |       |
+| CH641  | TODO   |         |     |      |      |     |     |     |            |       |     |       |       |
+| CH643  | TODO   |         |     |      |      |     |     |     |            |       |     |       |       |
+| CH645  | TODO   |         |     |      |      |     |     |     |            |       |     |       |       |
 
 - ✅ : Expected to work
 - ❓ : Not tested
 - `*` marks the async driver
-- N/A: I haven't got a dev board yet, help-wanted
+- TODO: I haven't got a dev board yet, help-wanted
+- N/A: Not available
 
 ### TODOs
 
