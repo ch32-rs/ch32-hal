@@ -61,7 +61,7 @@ pub mod rng;
 pub mod signature;
 pub mod spi;
 // TODO
-#[cfg(any(timer_x0, timer_common))]
+#[cfg(any(timer_x0, timer_v3))]
 pub mod timer;
 pub mod usart;
 

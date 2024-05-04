@@ -188,9 +188,9 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
         Self { tim }
     }
 
-    #[cfg(not(stm32l0))]
-    fn regs_gp32_unchecked(&self) -> crate::pac::timer::Gptm {
-        unsafe { crate::pac::timer::Gptm::from_ptr(T::regs()) }
+    #[cfg(any(ch32l0, ch32v3))]
+    fn regs_gp32_unchecked(&self) -> crate::pac::timer::Gptm32 {
+        unsafe { crate::pac::timer::Gptm32::from_ptr(T::regs()) }
     }
 }
 

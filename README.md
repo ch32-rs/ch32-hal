@@ -27,7 +27,7 @@ others should work if you are careful as most peripherals are similar enough.
 
 | Family | Status | Embassy | RCC | GPIO | UART | SPI | I2C | ADC | Timer(PWM) | EXTI* | RNG | DMA* |
 |--------|--------|---------|-----|------|------|-----|-----|-----|------------|-------|-----|------|
-| V2/V3  |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  |            | ✅    | ✅  |      |
+| V2/V3  |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ✅    | ✅  |      |
 | V1     |        |         | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  |            | ✅    |     |      |
 | V0     |        |         | ✅  | ✅   | ✅   | ✅  | ✅  | ❓  | ❓         | ✅    |     |      |
 | X0     |        | ✅      | ✅  | ✅   | ✅*  | ✅  |     | ✅  | ✅         | ✅    |     | ✅   |

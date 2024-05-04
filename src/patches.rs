@@ -45,3 +45,27 @@ mod spi2 {
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::SPI2 {}
 }
+
+#[cfg(all(peri_tim5))]
+mod tim5 {
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::TIM5 {
+        fn set_remap(_remap: u8) {}
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::TIM5 {}
+}
+
+#[cfg(all(peri_tim6))]
+mod tim6 {
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::TIM6 {
+        fn set_remap(_remap: u8) {}
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::TIM6 {}
+}
+
+#[cfg(all(peri_tim7))]
+mod tim7 {
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::TIM7 {
+        fn set_remap(_remap: u8) {}
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::TIM7 {}
+}
