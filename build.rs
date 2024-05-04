@@ -332,6 +332,18 @@ fn main() {
         (("timer", "CH4N"), quote!(crate::timer::Channel4ComplementaryPin)),
         (("timer", "ETR"), quote!(crate::timer::ExternalTriggerPin)),
         (("timer", "BKIN"), quote!(crate::timer::BreakInputPin)),
+        // sdio is the sdmmc(v1) in stm32
+        (("sdio", "CK"), quote!(crate::sdio::CkPin)),
+        (("sdio", "CMD"), quote!(crate::sdio::CmdPin)),
+        (("sdio", "D0"), quote!(crate::sdio::D0Pin)),
+        (("sdio", "D1"), quote!(crate::sdio::D1Pin)),
+        (("sdio", "D2"), quote!(crate::sdio::D2Pin)),
+        (("sdio", "D3"), quote!(crate::sdio::D3Pin)),
+        (("sdio", "D4"), quote!(crate::sdio::D4Pin)),
+        (("sdio", "D5"), quote!(crate::sdio::D5Pin)),
+        (("sdio", "D6"), quote!(crate::sdio::D6Pin)),
+        (("sdio", "D6"), quote!(crate::sdio::D7Pin)),
+        (("sdio", "D8"), quote!(crate::sdio::D8Pin)),
     ]
     .into();
 
@@ -393,6 +405,8 @@ fn main() {
         (("timer", "CH2"), quote!(crate::timer::Ch2Dma)),
         (("timer", "CH3"), quote!(crate::timer::Ch3Dma)),
         (("timer", "CH4"), quote!(crate::timer::Ch4Dma)),
+
+        (("sdio", "SDIO"), quote!(crate::sdio::SdmmcDma))
     ]
     .into();
 
