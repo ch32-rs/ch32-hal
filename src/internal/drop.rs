@@ -1,3 +1,4 @@
+#![allow(unused)]
 //! Types for controlling when drop is invoked.
 use core::mem;
 use core::mem::MaybeUninit;

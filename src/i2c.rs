@@ -12,7 +12,7 @@ use crate::gpio::sealed::AFType;
 use crate::gpio::Speed;
 // use crate::interrupt::Interrupt;
 use crate::time::Hertz;
-use crate::{interrupt, into_ref, pac, peripherals, Peripheral, PeripheralRef};
+use crate::{interrupt, into_ref, peripherals, Peripheral, PeripheralRef};
 
 /// I2C error.
 #[derive(Debug, PartialEq, Eq)]
