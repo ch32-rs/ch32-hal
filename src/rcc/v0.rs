@@ -157,7 +157,7 @@ pub(crate) unsafe fn init(config: Config) {
     super::CLOCKS.pclk2 = pclk2;
 
     super::CLOCKS.pclk1_tim = Hertz(sysclk);
-    super::CLOCKS.pclk2_tim = hHertz(sysclk);
+    super::CLOCKS.pclk2_tim = Hertz(sysclk);
 }
 
 impl ops::Div<APBPrescaler> for Hertz {

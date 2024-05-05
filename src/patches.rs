@@ -70,7 +70,6 @@ mod tim7 {
     impl crate::peripheral::RemapPeripheral for crate::peripherals::TIM7 {}
 }
 
-
 #[cfg(all(peri_sdio))]
 mod sdio {
     impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::SDIO {
