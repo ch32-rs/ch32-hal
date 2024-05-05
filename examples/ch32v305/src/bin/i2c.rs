@@ -2,8 +2,6 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use core::fmt::Write as _;
-
 use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_time::Timer;
@@ -77,7 +75,6 @@ async fn main(spawner: Spawner) -> ! {
     let _ = spawner;
     let mut config = hal::Config::default();
     {
-        use hal::rcc::v3::{AHBPrescaler, APBPrescaler, Hse, HseMode, Pll, PllMul, PllPreDiv, PllSource, Sysclk};
         use hal::rcc::*;
 
         config.rcc = Config {

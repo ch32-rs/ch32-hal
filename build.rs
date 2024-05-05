@@ -127,11 +127,7 @@ fn main() {
                     }
                     singletons.push(p.name.to_string());
                 }
-                //"dbgmcu" => {}
-                //"syscfg" => {}
-                //"dma" => {}
-                //"bdma" => {}
-                //"dmamux" => {}
+                // "dma" => {}
 
                 // For other peripherals, one singleton per peri
                 _ => singletons.push(p.name.to_string()),

@@ -8,7 +8,7 @@ rustflags = [
 # runner = "riscv64-unknown-elf-gdb -q -x openocd.gdb"
 # runner = "riscv-none-embed-gdb -q -x openocd.gdb"
 # runner = "gdb -q -x openocd.gdb"
-runner = "wlink -v flash"
+# runner = "wlink -v flash"
 
-# runner = "wlink -v flash --enable-sdi-print --watch-serial --erase"
+runner = "wlink -v flash --enable-sdi-print --watch-serial"
 # runner = "wlink -v flash"
