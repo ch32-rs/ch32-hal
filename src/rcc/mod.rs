@@ -1,11 +1,5 @@
 use crate::time::Hertz;
 
-// const HSI_FREQUENCY: Hertz = Hertz(48_000_000);
-
-// const LSI_FREQUENCY: Hertz = Hertz(40_000);
-// CH32FV208 use 32.768KHz LSI
-
-// Power on default: HPRE = 0b0101 = Div6
 const DEFAULT_FREQUENCY: Hertz = Hertz(8_000_000);
 
 static mut CLOCKS: Clocks = Clocks {
@@ -41,6 +35,7 @@ pub fn clocks() -> &'static Clocks {
 #[cfg(ch32v0)]
 #[path = "v0.rs"]
 mod rcc_impl;
+
 #[cfg(ch32v1)]
 #[path = "v1.rs"]
 mod rcc_impl;
@@ -48,6 +43,7 @@ mod rcc_impl;
 #[cfg(any(ch32v2, ch32v3, ch32f2))]
 #[path = "v3.rs"]
 mod rcc_impl;
+
 #[cfg(ch32x0)]
 #[path = "x0.rs"]
 mod rcc_impl;
