@@ -36,9 +36,6 @@ impl<T: Instance> InterruptHandler<T> {
             #[cfg(sdio_v3)]
             // w.set_stbiterre(enable);
             w.set_stbiterrie(enable);
-
-            #[cfg(sdmmc_v2)]
-            w.set_dabortie(enable);
         });
     }
 }
@@ -207,33 +204,8 @@ fn clk_div(ker_ck: Hertz, sdmmc_ck: u32) -> Result<(bool, u8, Hertz), Error> {
     Ok((false, clk_div, clk_f))
 }
 
-/// Calculate clock divisor. Returns a SDMMC_CK less than or equal to
-/// `sdmmc_ck` in Hertz.
-///
-/// Returns `(bypass, clk_div, clk_f)`, where `bypass` enables clock divisor bypass (only sdio_v3),
-/// `clk_div` is the divisor register value and `clk_f` is the resulting new clock frequency.
-#[cfg(sdmmc_v2)]
-fn clk_div(ker_ck: Hertz, sdmmc_ck: u32) -> Result<(bool, u16, Hertz), Error> {
-    // `ker_ck / sdmmc_ck` rounded up
-    match (ker_ck.0 + sdmmc_ck - 1) / sdmmc_ck {
-        0 | 1 => Ok((false, 0, ker_ck)),
-        x @ 2..=2046 => {
-            // SDMMC_CK frequency = SDMMCCLK / [CLKDIV * 2]
-            let clk_div = ((x + 1) / 2) as u16;
-            let clk = Hertz(ker_ck.0 / (clk_div as u32 * 2));
-
-            Ok((false, clk_div, clk))
-        }
-        _ => Err(Error::BadClock),
-    }
-}
-
 #[cfg(sdio_v3)]
 type Transfer<'a> = crate::dma::Transfer<'a>;
-#[cfg(sdmmc_v2)]
-struct Transfer<'a> {
-    _dummy: PhantomData<&'a ()>,
-}
 
 const DMA_TRANSFER_OPTIONS: crate::dma::TransferOptions = crate::dma::TransferOptions {
     priority: crate::dma::Priority::VeryHigh,
@@ -261,7 +233,7 @@ impl Default for Config {
 }
 
 /// Sdmmc device
-pub struct Sdmmc<'d, T: Instance, Dma: SdmmcDma<T> = NoDma> {
+pub struct Sdmmc<'d, T: Instance, Dma: SdioDma<T> = NoDma> {
     _peri: PeripheralRef<'d, T>,
     #[allow(unused)]
     dma: PeripheralRef<'d, Dma>,
@@ -283,7 +255,7 @@ pub struct Sdmmc<'d, T: Instance, Dma: SdmmcDma<T> = NoDma> {
 }
 
 #[cfg(sdio_v3)]
-impl<'d, T: Instance, Dma: SdmmcDma<T>> Sdmmc<'d, T, Dma> {
+impl<'d, T: Instance, Dma: SdioDma<T>> Sdmmc<'d, T, Dma> {
     /// Create a new SDMMC driver, with 1 data lane.
     pub fn new_1bit(
         sdmmc: impl Peripheral<P = T> + 'd,
@@ -353,87 +325,7 @@ impl<'d, T: Instance, Dma: SdmmcDma<T>> Sdmmc<'d, T, Dma> {
     }
 }
 
-#[cfg(sdmmc_v2)]
-impl<'d, T: Instance> Sdmmc<'d, T, NoDma> {
-    /// Create a new SDMMC driver, with 1 data lane.
-    pub fn new_1bit(
-        sdmmc: impl Peripheral<P = T> + 'd,
-        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        clk: impl Peripheral<P = impl CkPin<T>> + 'd,
-        cmd: impl Peripheral<P = impl CmdPin<T>> + 'd,
-        d0: impl Peripheral<P = impl D0Pin<T>> + 'd,
-        config: Config,
-    ) -> Self {
-        into_ref!(clk, cmd, d0);
-
-        critical_section::with(|_| {
-            clk.set_as_af_pull(clk.af_num(), AFType::OutputPushPull, Pull::None);
-            cmd.set_as_af_pull(cmd.af_num(), AFType::OutputPushPull, Pull::Up);
-            d0.set_as_af_pull(d0.af_num(), AFType::OutputPushPull, Pull::Up);
-
-            clk.set_speed(Speed::VeryHigh);
-            cmd.set_speed(Speed::VeryHigh);
-            d0.set_speed(Speed::VeryHigh);
-        });
-
-        Self::new_inner(
-            sdmmc,
-            NoDma.into_ref(),
-            clk.map_into(),
-            cmd.map_into(),
-            d0.map_into(),
-            None,
-            None,
-            None,
-            config,
-        )
-    }
-
-    /// Create a new SDMMC driver, with 4 data lanes.
-    pub fn new_4bit(
-        sdmmc: impl Peripheral<P = T> + 'd,
-        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        clk: impl Peripheral<P = impl CkPin<T>> + 'd,
-        cmd: impl Peripheral<P = impl CmdPin<T>> + 'd,
-        d0: impl Peripheral<P = impl D0Pin<T>> + 'd,
-        d1: impl Peripheral<P = impl D1Pin<T>> + 'd,
-        d2: impl Peripheral<P = impl D2Pin<T>> + 'd,
-        d3: impl Peripheral<P = impl D3Pin<T>> + 'd,
-        config: Config,
-    ) -> Self {
-        into_ref!(clk, cmd, d0, d1, d2, d3);
-
-        critical_section::with(|_| {
-            clk.set_as_af_pull(clk.af_num(), AFType::OutputPushPull, Pull::None);
-            cmd.set_as_af_pull(cmd.af_num(), AFType::OutputPushPull, Pull::Up);
-            d0.set_as_af_pull(d0.af_num(), AFType::OutputPushPull, Pull::Up);
-            d1.set_as_af_pull(d1.af_num(), AFType::OutputPushPull, Pull::Up);
-            d2.set_as_af_pull(d2.af_num(), AFType::OutputPushPull, Pull::Up);
-            d3.set_as_af_pull(d3.af_num(), AFType::OutputPushPull, Pull::Up);
-
-            clk.set_speed(Speed::VeryHigh);
-            cmd.set_speed(Speed::VeryHigh);
-            d0.set_speed(Speed::VeryHigh);
-            d1.set_speed(Speed::VeryHigh);
-            d2.set_speed(Speed::VeryHigh);
-            d3.set_speed(Speed::VeryHigh);
-        });
-
-        Self::new_inner(
-            sdmmc,
-            NoDma.into_ref(),
-            clk.map_into(),
-            cmd.map_into(),
-            d0.map_into(),
-            Some(d1.map_into()),
-            Some(d2.map_into()),
-            Some(d3.map_into()),
-            config,
-        )
-    }
-}
-
-impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
+impl<'d, T: Instance, Dma: SdioDma<T> + 'd> Sdmmc<'d, T, Dma> {
     fn new_inner(
         sdmmc: impl Peripheral<P = T> + 'd,
         dma: impl Peripheral<P = Dma> + 'd,
@@ -461,8 +353,6 @@ impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
             // See chip erratas for more details.
             #[cfg(sdio_v3)]
             w.set_hwfc_en(false);
-            #[cfg(sdmmc_v2)]
-            w.set_hwfc_en(true);
 
             #[cfg(sdio_v3)]
             w.set_clken(true);
@@ -498,8 +388,6 @@ impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
         let status = regs.sta().read();
         #[cfg(sdio_v3)]
         return status.rxact() || status.txact();
-        #[cfg(sdmmc_v2)]
-        return status.dpsmact();
     }
 
     /// Coammand transfer is in progress
@@ -510,8 +398,6 @@ impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
         let status = regs.sta().read();
         #[cfg(sdio_v3)]
         return status.cmdact();
-        #[cfg(sdmmc_v2)]
-        return status.cpsmact();
     }
 
     /// Wait idle on CMDACT, RXACT and TXACT (v1) or DOSNACT and CPSMACT (v2)
@@ -550,14 +436,6 @@ impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
                 buffer,
                 DMA_TRANSFER_OPTIONS,
             )
-        };
-        #[cfg(sdmmc_v2)]
-        let transfer = {
-            regs.idmabase0r().write(|w| w.set_idmabase0(buffer.as_mut_ptr() as u32));
-            regs.idmactrlr().modify(|w| w.set_idmaen(true));
-            Transfer {
-                _dummy: core::marker::PhantomData,
-            }
         };
 
         regs.dctrl().modify(|w| {
@@ -599,14 +477,6 @@ impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
                 DMA_TRANSFER_OPTIONS,
             )
         };
-        #[cfg(sdmmc_v2)]
-        let transfer = {
-            regs.idmabase0r().write(|w| w.set_idmabase0(buffer.as_ptr() as u32));
-            regs.idmactrlr().modify(|w| w.set_idmaen(true));
-            Transfer {
-                _dummy: core::marker::PhantomData,
-            }
-        };
 
         regs.dctrl().modify(|w| {
             w.set_dblocksize(block_size);
@@ -630,8 +500,6 @@ impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
             w.set_dmaen(false);
             w.set_dten(false);
         });
-        #[cfg(sdmmc_v2)]
-        regs.idmactrlr().modify(|w| w.set_idmaen(false));
     }
 
     /// Sets the CLKDIV field in CLKCR. Updates clock field in self
@@ -843,19 +711,6 @@ impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
             w.set_sdioitc(true);
             #[cfg(sdio_v3)]
             w.set_stbiterrc(true);
-
-            #[cfg(sdmmc_v2)]
-            {
-                w.set_dholdc(true);
-                w.set_dabortc(true);
-                w.set_busyd0endc(true);
-                w.set_ackfailc(true);
-                w.set_acktimeoutc(true);
-                w.set_vswendc(true);
-                w.set_ckstopc(true);
-                w.set_idmatec(true);
-                w.set_idmabtcc(true);
-            }
         });
     }
 
@@ -927,15 +782,6 @@ impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
             w.set_waitresp(cmd.resp as u8);
             w.set_cmdindex(cmd.cmd);
             w.set_cpsmen(true);
-
-            #[cfg(sdmmc_v2)]
-            {
-                // Special mode in CP State Machine
-                // CMD12: Stop Transmission
-                let cpsm_stop_transmission = cmd.cmd == 12;
-                w.set_cmdstop(cpsm_stop_transmission);
-                w.set_cmdtrans(data);
-            }
         });
 
         let mut retries = 0x00010000;
@@ -984,12 +830,6 @@ impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
                 w.set_waitresp(Response::Short as u8);
                 w.set_cmdindex(12);
                 w.set_cpsmen(true);
-
-                #[cfg(sdmmc_v2)]
-                {
-                    w.set_cmdstop(true);
-                    w.set_cmdtrans(false);
-                }
             });
 
             // Wait for the abort
@@ -1225,9 +1065,6 @@ impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
         let transfer = self.prepare_datapath_write(buffer, 512, 9);
         InterruptHandler::<T>::data_interrupts(true);
 
-        #[cfg(sdmmc_v2)]
-        Self::cmd(Cmd::write_single_block(address), true)?;
-
         let res = poll_fn(|cx| {
             T::state().register(cx.waker());
             let status = regs.sta().read();
@@ -1291,7 +1128,7 @@ impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Sdmmc<'d, T, Dma> {
     }
 }
 
-impl<'d, T: Instance, Dma: SdmmcDma<T> + 'd> Drop for Sdmmc<'d, T, Dma> {
+impl<'d, T: Instance, Dma: SdioDma<T> + 'd> Drop for Sdmmc<'d, T, Dma> {
     fn drop(&mut self) {
         T::Interrupt::disable();
         Self::on_drop();
@@ -1426,16 +1263,7 @@ pin_trait!(D6Pin, Instance);
 pin_trait!(D7Pin, Instance);
 
 #[cfg(sdio_v3)]
-dma_trait!(SdmmcDma, Instance);
-
-/// DMA instance trait.
-///
-/// This is only implemented for `NoDma`, since SDMMCv2 has DMA built-in, instead of
-/// using ST's system-wide DMA peripheral.
-#[cfg(sdmmc_v2)]
-pub trait SdmmcDma<T: Instance> {}
-#[cfg(sdmmc_v2)]
-impl<T: Instance> SdmmcDma<T> for NoDma {}
+dma_trait!(SdioDma, Instance);
 
 foreach_peripheral!(
     (sdio, $inst:ident) => {
