@@ -4,9 +4,9 @@ use crate::pac::rcc::vals::{Hpre as AHBPrescaler, Pllsrc as PllSource, Ppre as A
 use crate::pac::{AFIO, FLASH, RCC};
 use crate::time::Hertz;
 
-const HSI_FREQUENCY: Hertz = Hertz(24_000_000);
+pub const HSI_FREQUENCY: Hertz = Hertz(24_000_000);
 
-const LSI_FREQUENCY: Hertz = Hertz(128_000);
+pub const LSI_FREQUENCY: Hertz = Hertz(128_000);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum HseMode {
@@ -125,6 +125,10 @@ pub(crate) unsafe fn init(config: Config) {
         }
         _ => unreachable!(),
     };
+
+    if sysclk >= 24_000_000 {
+        FLASH.actlr().modify(|w| w.set_latency(0b01)); // 1 等待（24MHz<HCLK≤48MHz）
+    }
 
     RCC.cfgr0().modify(|w| {
         w.set_hpre(config.ahb_pre);
