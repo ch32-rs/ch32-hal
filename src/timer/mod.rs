@@ -16,9 +16,10 @@ use crate::{interrupt, RemapPeripheral};
 
 pub mod low_level;
 pub mod simple_pwm;
+pub mod complementary_pwm;
 
 /// Timer channel.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum Channel {
     /// Channel 1.
     Ch1,
@@ -109,7 +110,8 @@ pin_trait!(ExternalTriggerPin, GeneralInstance16bit);
 pin_trait!(Channel1ComplementaryPin, AdvancedInstance);
 pin_trait!(Channel2ComplementaryPin, AdvancedInstance);
 pin_trait!(Channel3ComplementaryPin, AdvancedInstance);
-pin_trait!(Channel4ComplementaryPin, AdvancedInstance);
+// No Channel4ComplementaryPin for ADTM
+// pin_trait!(Channel4ComplementaryPin, AdvancedInstance);
 
 pin_trait!(BreakInputPin, AdvancedInstance);
 
