@@ -26,7 +26,6 @@ async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
     {
-        use hal::rcc::v3::{Hse, HseMode, Pll, PllMul, PllPreDiv, PllSource, Sysclk};
         use hal::rcc::*;
 
         config.rcc = Config {

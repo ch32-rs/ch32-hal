@@ -58,10 +58,10 @@ pub mod gpio;
 pub mod i2c;
 #[cfg(rng)]
 pub mod rng;
-pub mod signature;
-pub mod spi;
 #[cfg(sdio_v3)]
 pub mod sdio;
+pub mod signature;
+pub mod spi;
 #[cfg(any(timer_x0, timer_v3))]
 pub mod timer;
 pub mod usart;

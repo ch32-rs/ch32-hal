@@ -263,7 +263,6 @@ async fn main(_spawner: Spawner) -> ! {
     println!("ok");
     let mut config = hal::Config::default();
     {
-        use hal::rcc::v3::{AHBPrescaler, APBPrescaler, Hse, HseMode, Pll, PllMul, PllPreDiv, PllSource, Sysclk};
         use hal::rcc::*;
 
         config.rcc = Config {
