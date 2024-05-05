@@ -65,6 +65,8 @@ pub mod spi;
 #[cfg(any(timer_x0, timer_v3))]
 pub mod timer;
 pub mod usart;
+#[cfg(peri_dac1)]
+pub mod dac;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;
