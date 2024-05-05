@@ -25,16 +25,16 @@ Keypoints:
 Currently, supported chips are listed in `Cargo.toml` as feature flags,
 others should work if you are careful as most peripherals are similar enough.
 
-| Family | Status | Embassy | RCC | GPIO | UART* | SPI* | I2C | ADC | Timer(PWM) | EXTI* | RNG | DMA* | Delay |
-|--------|--------|---------|-----|------|-------|-----|-----|-----|------------|-------|-----|-------|-------|
-| V2/V3  |        | ✅      | ✅  | ✅   | ✅    | ✅  | ✅  | ✅  | ✅         | ✅    | ✅  | ✅    |       |
-| V1     |        |         | ✅  | ✅   | ✅    | ✅  | ✅  | ✅  | ✅         |       |     |       | ✅    |
-| V0     |        |         | ✅  | ✅   | ✅    | ✅  | ✅  | ❓  | ❓         |       |     |       | ✅    |
-| X0     |        | ✅      | ✅  | ✅   | ✅    | ✅  |     | ✅  | ✅         | ✅    |     | ✅    |       |
-| L0     | TODO   |         |     |      |       |     |     |     |            |       |     |       |       |
-| CH641  | TODO   |         |     |      |       |     |     |     |            |       |     |       |       |
-| CH643  | TODO   |         |     |      |       |     |     |     |            |       |     |       |       |
-| CH645  | TODO   |         |     |      |       |     |     |     |            |       |     |       |       |
+| Family | Status | Embassy | RCC | GPIO | UART*| SPI*| I2C | ADC | Timer(PWM) | EXTI*| RTC | DMA*| Delay | Others |
+|--------|--------|---------|-----|------|------|-----|-----|-----|------------|------|-----|-----|-------| ------ |
+| V2/V3  |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ✅   |     | ✅  |       | RNG |
+| V1     |        |         | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         |      |     |     | ✅    | |
+| V0     |        |         | ✅  | ✅   | ✅   | ✅  | ✅  | ❓  | ✅         |      |     |     | ✅    | |
+| X0     |        | ✅      | ✅  | ✅   | ✅   | ✅  |     | ✅  | ✅         | ✅   |     | ✅  |       | |
+| L0     | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
+| CH641  | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
+| CH643  | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
+| CH645  | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
 
 - ✅ : Expected to work
 - ❓ : Not tested
