@@ -314,6 +314,9 @@ pub(crate) unsafe fn init(config: Config) {
     super::CLOCKS.hclk = hclk;
     super::CLOCKS.pclk1 = pclk1;
     super::CLOCKS.pclk2 = pclk2;
+
+    super::CLOCKS.pclk1_tim = pclk1_tim;
+    super::CLOCKS.pclk2_tim = pclk2_tim;
 }
 
 fn calc_pclk<D>(hclk: Hertz, ppre: D) -> (Hertz, Hertz)

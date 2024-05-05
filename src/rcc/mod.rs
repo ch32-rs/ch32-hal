@@ -14,6 +14,9 @@ static mut CLOCKS: Clocks = Clocks {
     hclk: DEFAULT_FREQUENCY,
     pclk1: DEFAULT_FREQUENCY,
     pclk2: DEFAULT_FREQUENCY,
+
+    pclk1_tim: DEFAULT_FREQUENCY,
+    pclk2_tim: DEFAULT_FREQUENCY,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -25,6 +28,9 @@ pub struct Clocks {
     pub pclk1: Hertz,
     /// APB2 clock
     pub pclk2: Hertz,
+
+    pub(crate) pclk1_tim: Hertz,
+    pub(crate) pclk2_tim: Hertz,
 }
 
 #[inline]
@@ -33,22 +39,20 @@ pub fn clocks() -> &'static Clocks {
 }
 
 #[cfg(ch32v0)]
-pub mod v0;
+#[path = "v0.rs"]
+mod rcc_impl;
 #[cfg(ch32v1)]
-pub mod v1;
-#[cfg(any(ch32v2, ch32v3, ch32f2))]
-pub mod v3;
-#[cfg(ch32x0)]
-pub mod x0;
+#[path = "v1.rs"]
+mod rcc_impl;
 
-#[cfg(ch32v0)]
-pub use v0::Config;
-#[cfg(ch32v1)]
-pub use v1::Config;
-#[cfg(any(ch32v2, ch32v3))]
-pub use v3::Config;
+#[cfg(any(ch32v2, ch32v3, ch32f2))]
+#[path = "v3.rs"]
+mod rcc_impl;
 #[cfg(ch32x0)]
-pub use x0::Config;
+#[path = "x0.rs"]
+mod rcc_impl;
+
+pub use rcc_impl::*;
 
 #[cfg(not(ch32v208))]
 pub const LSI_FREQ: Hertz = Hertz(40_000);
@@ -70,7 +74,8 @@ pub struct LseConfig {
 pub enum RtcClockSource {
     LSE,
     LSI,
-    HSE_DIV_128,
+    // HSE divided by 128
+    HSE,
     DISABLE,
 }
 
@@ -122,12 +127,5 @@ impl LsConfig {
 }
 
 pub unsafe fn init(config: Config) {
-    #[cfg(any(ch32v3, ch32v2))]
-    v3::init(config);
-
-    #[cfg(ch32v0)]
-    v0::init(config);
-
-    #[cfg(ch32x0)]
-    x0::init(config);
+    rcc_impl::init(config);
 }

@@ -78,6 +78,9 @@ pub(crate) unsafe fn init(config: Config) {
     super::CLOCKS.hclk = hclk;
     super::CLOCKS.pclk1 = hclk;
     super::CLOCKS.pclk2 = hclk;
+
+    super::CLOCKS.pclk1_tim = hclk;
+    super::CLOCKS.pclk2_tim = hclk;
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
