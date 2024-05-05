@@ -1,5 +1,5 @@
 #![no_std]
-#![allow(static_mut_refs)]
+#![allow(static_mut_refs, unexpected_cfgs)]
 
 pub use ch32_metapac as pac;
 
