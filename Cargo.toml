@@ -13,21 +13,23 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# ch32-metapac = { version = "0.0.5", features = [
+# ch32-metapac = { version = "0.1.0", features = [
 #     "memory-x",
 #     "rt",
 # ], git = "https://github.com/ch32-rs/ch32-metapac.git" }
-ch32-metapac = { version = "0.0.5", features = [
+ch32-metapac = { version = "0.1.0", features = [
     "memory-x",
     "rt",
 ], path = "../ch32-data/build/ch32-metapac" }
 
-qingke = { version = "0.1.11", features = ["critical-section-impl"] }
-qingke-rt = "0.1.10"
-# qingke-rt = { version = "0.1.11", path = "../qingke/qingke-rt" }
-# qingke = { version = "0.1.11", path = "../qingke", features = ["critical-section-impl"] }
+qingke = { version = "0.2.0", features = ["critical-section-impl"] }
+qingke-rt = "0.2.0"
+# qingke-rt = { version = "0.2.0", path = "../qingke/qingke-rt" }
+# qingke = { version = "0.2.0", path = "../qingke", features = [
+#     "critical-section-impl",
+# ] }
 
-
+# TODO: remove this
 embedded-hal-02 = { package = "embedded-hal", version = "0.2.6", features = [
     "unproven",
 ] }
@@ -49,22 +51,22 @@ futures = { version = "0.3.17", default-features = false, features = [
     "async-await",
 ] }
 
-
 rand_core = "0.6.3"
 sdio-host = "0.5.0"
 
 [build-dependencies]
 proc-macro2 = "1.0.78"
 quote = "1.0"
-#ch32-metapac = { version = "0.0.5", default-features = false, features = [
+#ch32-metapac = { version = "0.1.0", default-features = false, features = [
 #    "metadata",
 #], git = "https://github.com/ch32-rs/ch32-metapac.git" }
-ch32-metapac = { version = "0.0.5", default-features = false, features = [
+ch32-metapac = { version = "0.1.0", default-features = false, features = [
     "metadata",
 ], path = "../ch32-data/build/ch32-metapac" }
 
 [features]
-default = ["embassy"]
+default = ["embassy", "rt"]
+rt = []
 highcode = ["qingke-rt/highcode"]
 embassy = [
     "dep:embassy-sync",
@@ -74,46 +76,70 @@ embassy = [
 ]
 defmt = ["dep:defmt"]
 
+# Features starting with `_` are for internal use only. They're not intended
+# to be enabled by other crates, and are not covered by semver guarantees.
+_time-driver = []
+
+## Use any time driver
+time-driver-any = ["_time-driver"]
+## Use TIM1 as time driver
+time-driver-tim1 = ["_time-driver"]
+## Use TIM2 as time driver
+time-driver-tim2 = ["_time-driver"]
+## Use TIM3 as time driver
+time-driver-tim3 = ["_time-driver"]
+## Use TIM4 as time driver
+time-driver-tim4 = ["_time-driver"]
+## Use TIM5 as time driver
+time-driver-tim5 = ["_time-driver"]
+## Use TIM8 as time driver
+time-driver-tim8 = ["_time-driver"]
+## Use TIM9 as time driver
+time-driver-tim9 = ["_time-driver"]
+## Use TIM10 as time driver
+time-driver-tim10 = ["_time-driver"]
+
 # Chip-selection features
-ch32v003a4m6 = ["ch32-metapac/ch32v003a4m6"]
-ch32v003f4p6 = ["ch32-metapac/ch32v003f4p6"]
-ch32v003f4u6 = ["ch32-metapac/ch32v003f4u6"]
-ch32v003j4m6 = ["ch32-metapac/ch32v003j4m6"]
-ch32v103c6t6 = ["ch32-metapac/ch32v103c6t6"]
-ch32v103c8t6 = ["ch32-metapac/ch32v103c8t6"]
-ch32v103c8u6 = ["ch32-metapac/ch32v103c8u6"]
-ch32v103r8t6 = ["ch32-metapac/ch32v103r8t6"]
-ch32v203c6t6 = ["ch32-metapac/ch32v203c6t6"]
-ch32v203c8t6 = ["ch32-metapac/ch32v203c8t6"]
-ch32v203c8u6 = ["ch32-metapac/ch32v203c8u6"]
-ch32v203f6p6 = ["ch32-metapac/ch32v203f6p6"]
-ch32v203f8p6 = ["ch32-metapac/ch32v203f8p6"]
-ch32v203f8u6 = ["ch32-metapac/ch32v203f8u6"]
-ch32v203g6u6 = ["ch32-metapac/ch32v203g6u6"]
-ch32v203g8r6 = ["ch32-metapac/ch32v203g8r6"]
-ch32v203k6t6 = ["ch32-metapac/ch32v203k6t6"]
-ch32v203k8t6 = ["ch32-metapac/ch32v203k8t6"]
-ch32v203rbt6 = ["ch32-metapac/ch32v203rbt6"]
-ch32v208cbu6 = ["ch32-metapac/ch32v208cbu6"]
-ch32v208gbu6 = ["ch32-metapac/ch32v208gbu6"]
-ch32v208rbt6 = ["ch32-metapac/ch32v208rbt6"]
-ch32v208wbu6 = ["ch32-metapac/ch32v208wbu6"]
-ch32v303cbt6 = ["ch32-metapac/ch32v303cbt6"]
-ch32v303rbt6 = ["ch32-metapac/ch32v303rbt6"]
-ch32v303rct6 = ["ch32-metapac/ch32v303rct6"]
-ch32v303vct6 = ["ch32-metapac/ch32v303vct6"]
-ch32v305fbp6 = ["ch32-metapac/ch32v305fbp6"]
-ch32v305gbu6 = ["ch32-metapac/ch32v305gbu6"]
-ch32v305rbt6 = ["ch32-metapac/ch32v305rbt6"]
-ch32v307rct6 = ["ch32-metapac/ch32v307rct6"]
-ch32v307vct6 = ["ch32-metapac/ch32v307vct6"]
-ch32v307wcu6 = ["ch32-metapac/ch32v307wcu6"]
-ch32x033f8p6 = ["ch32-metapac/ch32x033f8p6"]
-ch32x034f8p6 = ["ch32-metapac/ch32x034f8p6"]
-ch32x034f8u6 = ["ch32-metapac/ch32x034f8u6"]
-ch32x035c8t6 = ["ch32-metapac/ch32x035c8t6"]
-ch32x035f7p6 = ["ch32-metapac/ch32x035f7p6"]
-ch32x035f8u6 = ["ch32-metapac/ch32x035f8u6"]
-ch32x035g8r6 = ["ch32-metapac/ch32x035g8r6"]
-ch32x035g8u6 = ["ch32-metapac/ch32x035g8u6"]
-ch32x035r8t6 = ["ch32-metapac/ch32x035r8t6"]
+
+ch32v003a4m6 = ["ch32-metapac/ch32v003a4m6", "qingke-rt/v2"]
+ch32v003f4p6 = ["ch32-metapac/ch32v003f4p6", "qingke-rt/v2"]
+ch32v003f4u6 = ["ch32-metapac/ch32v003f4u6", "qingke-rt/v2"]
+ch32v003j4m6 = ["ch32-metapac/ch32v003j4m6", "qingke-rt/v2"]
+ch32v103c6t6 = ["ch32-metapac/ch32v103c6t6", "qingke-rt/v3"]
+ch32v103c8t6 = ["ch32-metapac/ch32v103c8t6", "qingke-rt/v3"]
+ch32v103c8u6 = ["ch32-metapac/ch32v103c8u6", "qingke-rt/v3"]
+ch32v103r8t6 = ["ch32-metapac/ch32v103r8t6", "qingke-rt/v3"]
+ch32v203c6t6 = ["ch32-metapac/ch32v203c6t6", "qingke-rt/v4"]
+ch32v203c8t6 = ["ch32-metapac/ch32v203c8t6", "qingke-rt/v4"]
+ch32v203c8u6 = ["ch32-metapac/ch32v203c8u6", "qingke-rt/v4"]
+ch32v203f6p6 = ["ch32-metapac/ch32v203f6p6", "qingke-rt/v4"]
+ch32v203f8p6 = ["ch32-metapac/ch32v203f8p6", "qingke-rt/v4"]
+ch32v203f8u6 = ["ch32-metapac/ch32v203f8u6", "qingke-rt/v4"]
+ch32v203g6u6 = ["ch32-metapac/ch32v203g6u6", "qingke-rt/v4"]
+ch32v203g8r6 = ["ch32-metapac/ch32v203g8r6", "qingke-rt/v4"]
+ch32v203k6t6 = ["ch32-metapac/ch32v203k6t6", "qingke-rt/v4"]
+ch32v203k8t6 = ["ch32-metapac/ch32v203k8t6", "qingke-rt/v4"]
+ch32v203rbt6 = ["ch32-metapac/ch32v203rbt6", "qingke-rt/v4"]
+ch32v208cbu6 = ["ch32-metapac/ch32v208cbu6", "qingke-rt/v4"]
+ch32v208gbu6 = ["ch32-metapac/ch32v208gbu6", "qingke-rt/v4"]
+ch32v208rbt6 = ["ch32-metapac/ch32v208rbt6", "qingke-rt/v4"]
+ch32v208wbu6 = ["ch32-metapac/ch32v208wbu6", "qingke-rt/v4"]
+ch32v303cbt6 = ["ch32-metapac/ch32v303cbt6", "qingke-rt/v4"]
+ch32v303rbt6 = ["ch32-metapac/ch32v303rbt6", "qingke-rt/v4"]
+ch32v303rct6 = ["ch32-metapac/ch32v303rct6", "qingke-rt/v4"]
+ch32v303vct6 = ["ch32-metapac/ch32v303vct6", "qingke-rt/v4"]
+ch32v305fbp6 = ["ch32-metapac/ch32v305fbp6", "qingke-rt/v4"]
+ch32v305gbu6 = ["ch32-metapac/ch32v305gbu6", "qingke-rt/v4"]
+ch32v305rbt6 = ["ch32-metapac/ch32v305rbt6", "qingke-rt/v4"]
+ch32v307rct6 = ["ch32-metapac/ch32v307rct6", "qingke-rt/v4"]
+ch32v307vct6 = ["ch32-metapac/ch32v307vct6", "qingke-rt/v4"]
+ch32v307wcu6 = ["ch32-metapac/ch32v307wcu6", "qingke-rt/v4"]
+ch32x033f8p6 = ["ch32-metapac/ch32x033f8p6", "qingke-rt/v4"]
+ch32x034f8p6 = ["ch32-metapac/ch32x034f8p6", "qingke-rt/v4"]
+ch32x034f8u6 = ["ch32-metapac/ch32x034f8u6", "qingke-rt/v4"]
+ch32x035c8t6 = ["ch32-metapac/ch32x035c8t6", "qingke-rt/v4"]
+ch32x035f7p6 = ["ch32-metapac/ch32x035f7p6", "qingke-rt/v4"]
+ch32x035f8u6 = ["ch32-metapac/ch32x035f8u6", "qingke-rt/v4"]
+ch32x035g8r6 = ["ch32-metapac/ch32x035g8r6", "qingke-rt/v4"]
+ch32x035g8u6 = ["ch32-metapac/ch32x035g8u6", "qingke-rt/v4"]
+ch32x035r8t6 = ["ch32-metapac/ch32x035r8t6", "qingke-rt/v4"]

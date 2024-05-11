@@ -1,5 +1,6 @@
 //! SysTick-based time driver.
 
+use core::arch::asm;
 use core::cell::Cell;
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use core::{mem, ptr};
@@ -10,8 +11,9 @@ use pac::systick::vals;
 use qingke::interrupt::Priority;
 #[cfg(feature = "highcode")]
 use qingke_rt::highcode;
+use qingke_rt::interrupt;
 
-use crate::pac;
+use crate::{pac, println};
 
 pub const ALARM_COUNT: usize = 1;
 
@@ -56,13 +58,6 @@ impl SystickDriver {
 
         let cnt_per_second = hclk / 8; // HCLK/8
         let cnt_per_tick = cnt_per_second / embassy_time_driver::TICK_HZ;
-
-        crate::println!(
-            "using systick: hclk={} cnt_per_second={} cnt_per_tick={}",
-            hclk,
-            cnt_per_second,
-            cnt_per_tick
-        );
 
         self.period.store(cnt_per_tick as u32, Ordering::Relaxed);
 
@@ -187,9 +182,8 @@ impl Driver for SystickDriver {
     }
 }
 
-#[no_mangle]
-#[cfg_attr(feature = "highcode", highcode)]
-extern "C" fn SysTick() {
+#[interrupt(core)]
+fn SysTick() {
     DRIVER.on_interrupt();
 }
 
@@ -199,7 +193,7 @@ pub(crate) fn init() {
 
     // enable interrupt
     unsafe {
-        qingke::pfic::set_priority(CoreInterrupt::SysTick as u8 as u8, Priority::P15 as _);
+        qingke::pfic::set_priority(CoreInterrupt::SysTick as u8, Priority::P15 as u8);
         qingke::pfic::enable_interrupt(CoreInterrupt::SysTick as u8);
     }
 }

@@ -1,17 +1,20 @@
-#[cfg(qingke_v4)]
-pub mod time_driver_systick;
+///! The time driver for Embassy framework.
+///
+/// This module provides the time driver for the Embassy framework.
 
-//#[cfg(qingke_v3)]
-// pub mod time_driver_systick_qingke_v3;
+#[cfg(all(qingke_v4, not(time_driver_timer)))]
+#[path = "time_driver_systick.rs"]
+pub mod time_driver_impl;
+
+#[cfg(time_driver_timer)]
+#[path = "time_driver_tim.rs"]
+pub mod time_driver_impl;
 
 // This should be called after global clocks inited
 pub fn init() {
-    #[cfg(qingke_v4)]
-    time_driver_systick::init();
+    #[cfg(all(qingke_v4, not(time_driver_timer)))]
+    time_driver_impl::init();
 
-    //#[cfg(qingke_v3)]
-    //time_driver_systick_qingke_v3::init();
-
-    #[cfg(qingke_v2)]
-    panic!("qingke_v2(rv32ec) is not supported");
+    #[cfg(time_driver_timer)]
+    critical_section::with(|cs| time_driver_impl::init(cs));
 }
