@@ -25,16 +25,17 @@ Keypoints:
 Currently, supported chips are listed in `Cargo.toml` as feature flags,
 others should work if you are careful as most peripherals are similar enough.
 
+For a full list of chip capabilities and peripherals, check the [ch32-data](https://github.com/ch32-rs/ch32-data) repository.
+
 | Family | Status | Embassy | RCC | GPIO | UART*| SPI*| I2C | ADC | Timer(PWM) | EXTI*| RTC | DMA*| Delay | Others |
 |--------|--------|---------|-----|------|------|-----|-----|-----|------------|------|-----|-----|-------| ------ |
 | V2/V3  |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ✅   |     | ✅  |       | RNG, SDIO |
-| V1     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         |      |     |     | ✅    | |
-| V0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         |      |     |     | ✅    | |
+| V1     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ❓   |     | ❓  | ✅    | |
+| V0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ❓   |     | ❓  | ✅    | |
 | X0     |        | ✅      | ✅  | ✅   | ✅   | ✅  |     | ✅  | ✅         | ✅   |     | ✅  |       | |
 | L0     | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
 | CH641  | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
 | CH643  | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
-| CH645  | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
 
 - ✅ : Expected to work
 - ❓ : Not tested
@@ -48,6 +49,12 @@ This section lists some key items that are not implemented yet. And should be no
 
 - PLL2 for CH32V3
 - DMA2 for CH32V3 (requires special handling of high DMA channels)
+
+### Coming New Chips - Help Wanted
+
+- CH32V002 / CH32V004 / CH32V005 / CH32V006 / CH32V007 / CH32M007, Qingke V2C
+- CH645, USB HUB, SerDes (V4C)
+- CH564, USBHS, 100M Ethernet (V4J)
 
 ## Built with ch32-hal ✨
 
