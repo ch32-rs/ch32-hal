@@ -3,6 +3,7 @@
 #![feature(naked_functions)]
 
 pub use ch32_metapac as pac;
+pub use qingke_rt::entry;
 
 // This must go FIRST so that all the other modules see its macros.
 include!(concat!(env!("OUT_DIR"), "/_macros.rs"));
