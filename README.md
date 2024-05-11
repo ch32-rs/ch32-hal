@@ -28,8 +28,8 @@ others should work if you are careful as most peripherals are similar enough.
 | Family | Status | Embassy | RCC | GPIO | UART*| SPI*| I2C | ADC | Timer(PWM) | EXTI*| RTC | DMA*| Delay | Others |
 |--------|--------|---------|-----|------|------|-----|-----|-----|------------|------|-----|-----|-------| ------ |
 | V2/V3  |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ✅   |     | ✅  |       | RNG, SDIO |
-| V1     |        |         | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         |      |     |     | ✅    | |
-| V0     |        |         | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         |      |     |     | ✅    | |
+| V1     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         |      |     |     | ✅    | |
+| V0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         |      |     |     | ✅    | |
 | X0     |        | ✅      | ✅  | ✅   | ✅   | ✅  |     | ✅  | ✅         | ✅   |     | ✅  |       | |
 | L0     | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
 | CH641  | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
