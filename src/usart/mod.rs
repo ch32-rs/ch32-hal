@@ -515,7 +515,7 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
 
         // clear ORE flag just before enabling DMA Rx Request: can be mandatory for the second transfer
         if !self.detect_previous_overrun {
-            let sr = r.statr().read();
+            let _sr = r.statr().read();
             // This read also clears the error and idle interrupt flags on v1.
             let _ = r.datar().read().dr();
             // clear_interrupt_flags(r, sr);
@@ -572,7 +572,7 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
 
         if enable_idle_line_detection {
             // clear idle flag
-            let sr = r.statr().read();
+            let _sr = r.statr().read();
             // This read also clears the error and idle interrupt flags on v1.
             let _ = r.datar().read().dr();
             // clear_interrupt_flags(r, sr);

@@ -52,6 +52,7 @@ pub struct Adc<'d, T: Instance> {
 }
 
 impl<'d, T: Instance> Adc<'d, T> {
+    #[allow(unused)]
     pub fn new(adc: impl Peripheral<P = T> + 'd, config: Config) -> Self {
         into_ref!(adc);
         T::enable_and_reset();

@@ -4,6 +4,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 
 use embassy_sync::waitqueue::AtomicWaker;
+use qingke_rt::interrupt;
 
 use crate::gpio::{AnyPin, Input, Level, Pin as GpioPin, Pull};
 use crate::{impl_peripheral, into_ref, peripherals, Peripheral};
@@ -279,16 +280,16 @@ EXTI25_16
 pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     use crate::pac::Interrupt;
 
-    #[no_mangle]
-    unsafe extern "C" fn EXTI7_0() {
+    #[interrupt]
+    unsafe fn EXTI7_0() {
         on_irq();
     }
-    #[no_mangle]
-    unsafe extern "C" fn EXTI15_8() {
+    #[interrupt]
+    unsafe fn EXTI15_8() {
         on_irq();
     }
-    #[no_mangle]
-    unsafe extern "C" fn EXTI25_16() {
+    #[interrupt]
+    unsafe fn EXTI25_16() {
         on_irq();
     }
 
@@ -299,34 +300,36 @@ pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
 
 #[cfg(gpio_v3)]
 pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
+    use qingke_rt::interrupt;
+
     use crate::pac::Interrupt;
 
-    #[no_mangle]
-    unsafe extern "C" fn EXTI0() {
+    #[interrupt]
+    unsafe fn EXTI0() {
         on_irq();
     }
-    #[no_mangle]
-    unsafe extern "C" fn EXTI1() {
+    #[interrupt]
+    unsafe fn EXTI1() {
         on_irq();
     }
-    #[no_mangle]
-    unsafe extern "C" fn EXTI2() {
+    #[interrupt]
+    unsafe fn EXTI2() {
         on_irq();
     }
-    #[no_mangle]
-    unsafe extern "C" fn EXTI3() {
+    #[interrupt]
+    unsafe fn EXTI3() {
         on_irq();
     }
-    #[no_mangle]
-    unsafe extern "C" fn EXTI4() {
+    #[interrupt]
+    unsafe fn EXTI4() {
         on_irq();
     }
-    #[no_mangle]
-    unsafe extern "C" fn EXTI9_5() {
+    #[interrupt]
+    unsafe fn EXTI9_5() {
         on_irq();
     }
-    #[no_mangle]
-    unsafe extern "C" fn EXTI15_10() {
+    #[interrupt]
+    unsafe fn EXTI15_10() {
         on_irq();
     }
 
@@ -343,8 +346,8 @@ pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
 pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     use crate::pac::Interrupt;
 
-    #[no_mangle]
-    unsafe extern "C" fn EXTI7_0() {
+    #[interrupt]
+    unsafe fn EXTI7_0() {
         on_irq();
     }
 

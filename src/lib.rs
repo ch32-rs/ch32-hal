@@ -1,5 +1,6 @@
 #![no_std]
 #![allow(static_mut_refs, unexpected_cfgs)]
+#![feature(naked_functions)]
 
 pub use ch32_metapac as pac;
 
@@ -52,6 +53,8 @@ pub mod delay;
 pub mod dma;
 
 pub mod adc;
+#[cfg(peri_dac1)]
+pub mod dac;
 pub mod exti;
 pub mod gpio;
 #[cfg(i2c)]
@@ -65,8 +68,6 @@ pub mod spi;
 #[cfg(any(timer_x0, timer_v3))]
 pub mod timer;
 pub mod usart;
-#[cfg(peri_dac1)]
-pub mod dac;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;
@@ -108,9 +109,7 @@ pub fn init(config: Config) -> Peripherals {
 
     ::critical_section::with(|cs| unsafe {
         gpio::init(cs);
-
         dma::init(cs, config.dma_interrupt_priority);
-
         exti::init(cs);
     });
 
