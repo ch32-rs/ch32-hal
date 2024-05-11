@@ -2,10 +2,8 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
-use embedded_hal::delay::DelayNs;
 use hal::delay::Delay;
 use hal::gpio::{Level, Output};
-use qingke::riscv;
 use {ch32_hal as hal, panic_halt as _};
 
 #[qingke_rt::entry]

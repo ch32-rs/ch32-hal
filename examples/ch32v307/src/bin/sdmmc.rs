@@ -44,7 +44,7 @@ async fn main(_spawner: Spawner) {
     // Should print 400kHz for initialization
     println!("Configured clock: {}", sdmmc.clock().0);
 
-    sdmmc.init_card(mhz(10)).await.unwrap();
+    sdmmc.init_card(mhz(24)).await.unwrap();
 
     println!("init ok");
 

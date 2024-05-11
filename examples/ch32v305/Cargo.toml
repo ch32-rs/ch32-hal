@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ch32-hal = { path = "../../", features = ["ch32v305fbp6", "defmt"] }
+ch32-hal = { path = "../../", features = ["ch32v305fbp6", "defmt", "rt"] }
 embassy-executor = { version = "0.5.0", features = [
     "nightly",
     "integrated-timers",
@@ -13,10 +13,10 @@ embassy-executor = { version = "0.5.0", features = [
 ] }
 embassy-time = { version = "0.3.0" }
 
-qingke-rt = { version = "0.1.11" }
-qingke = { version = "0.1.11" }
-# qingke-rt = { version = "0.1.11", path = "../../../qingke/qingke-rt" }
-# qingke = { version = "0.1.11", path = "../../../qingke" }
+qingke-rt = { version = "0.2.0" }
+qingke = { version = "0.2.0" }
+# qingke-rt = { version = "0.2.0", path = "../../../qingke/qingke-rt" }
+# qingke = { version = "0.2.0", path = "../../../qingke" }
 
 # Not working for now
 # defmt = "0.3"

@@ -14,9 +14,9 @@
 use crate::peripheral::RccPeripheral;
 use crate::{interrupt, RemapPeripheral};
 
+pub mod complementary_pwm;
 pub mod low_level;
 pub mod simple_pwm;
-pub mod complementary_pwm;
 
 /// Timer channel.
 #[derive(Clone, Copy, PartialEq)]

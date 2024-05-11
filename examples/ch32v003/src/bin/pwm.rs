@@ -14,20 +14,19 @@ fn main() -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
 
-    let pin = PwmPin::new_ch3::<3>(p.PD6);
+    let pin = PwmPin::new_ch4::<0>(p.PC4);
     let mut pwm = SimplePwm::new(
-        p.TIM2,
+        p.TIM1,
+        None,
         None,
         None,
         Some(pin),
-        None,
         Hertz::khz(1),
         CountingMode::default(),
     );
-    let ch = hal::timer::Channel::Ch3;
+    let ch = hal::timer::Channel::Ch4;
 
-    let max_duty = pwm.get_max_duty();
-    println!("max duty: {}", max_duty);
+    let _max_duty = pwm.get_max_duty();
     pwm.set_duty(ch, 2000);
     pwm.enable(ch);
 
