@@ -210,6 +210,10 @@ pub(crate) unsafe fn init(config: Config) {
 
             // Usb clock must be 48MHz
             let usb_pre = calc_usbpre(vco_freq);
+            if let Some(usb_pre) = usb_pre {
+                RCC.cfgr0().modify(|w| w.set_usbpre(usb_pre));
+            }
+            // TODO: handle USBHS clk
 
             RCC.cfgr0().modify(|w| w.set_pllmul(pll.mul));
 
@@ -278,6 +282,7 @@ pub(crate) unsafe fn init(config: Config) {
             // Enable PLL
             RCC.ctlr().modify(|w| w.set_pllon(true));
             while !RCC.ctlr().read().pllrdy() {}
+
             Some(vco_freq)
         } else {
             None
