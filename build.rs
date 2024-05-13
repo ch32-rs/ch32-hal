@@ -24,15 +24,15 @@ fn main() {
     .unwrap()
     .to_ascii_lowercase();
 
-    // Add family cfg flags on the fly
-    let chip_family = if chip_name.starts_with("ch32") {
-        // On of ch32x0, ch32v0, ch32v1, ch32v2, ch32v3, ch32l1
-        chip_name[..6].to_string()
+    // Add chip name and family cfg flags on the fly
+    let (chip_base_name, chip_family) = if chip_name.starts_with("ch32") {
+        (chip_name[..8].to_string(), chip_name[..6].to_string())
     } else {
         // On of ch643, ch641
-        chip_name[..4].to_string()
+        (chip_name[..4].to_string(), chip_name[..4].to_string())
     };
-    println!("cargo:rustc-cfg={}", chip_family);
+    println!("cargo:rustc-cfg={}", chip_base_name); // ch32v103, ch32v003, ch32x035, ch643, ch641, etc.
+    println!("cargo:rustc-cfg={}", chip_family); // On of ch32x0, ch32v0, ch32v1, ch32v2, ch32v3, ch32l1, ch643, ch641
 
     // Add Qingke IP core version cfg flags on the fly
     // qingke_v2, qingke_v3, qingke_v4
