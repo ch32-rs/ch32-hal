@@ -78,6 +78,16 @@ fn main() {
         if let Some(r) = &p.registers {
             println!("cargo:rustc-cfg={}", r.kind);
             println!("cargo:rustc-cfg={}_{}", r.kind, r.version);
+            println!("cargo:rustc-cfg=peri_{}", p.name.to_ascii_lowercase());
+        }
+    }
+
+    // Add cfg flag for any 32-bit timers
+    for p in METADATA.peripherals {
+        if let Some(r) = &p.registers {
+            if r.block == "GPTM32" {
+                println!("cargo:rustc-cfg=gptm32");
+            }
         }
     }
 
@@ -100,7 +110,6 @@ fn main() {
     let mut singletons: Vec<String> = Vec::new();
     for p in METADATA.peripherals {
         if let Some(r) = &p.registers {
-            println!("cargo:rustc-cfg=peri_{}", p.name.to_ascii_lowercase());
             match r.kind {
                 // Generate singletons per pin, not per port
                 "gpio" => {
