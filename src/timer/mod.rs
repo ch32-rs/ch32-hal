@@ -50,7 +50,7 @@ pub enum TimerBits {
     /// 16 bits.
     Bits16,
     /// 32 bits.
-    #[cfg(gptm32)]
+    #[cfg(any(ch32l1, ch32v208))]
     Bits32,
 }
 
