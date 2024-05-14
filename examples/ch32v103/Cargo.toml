@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 ch32-hal = { path = "../../", features = [
     "ch32v103r8t6",
-    "defmt",
     "rt",
     "time-driver-tim2",
 ] }
@@ -18,8 +17,8 @@ embassy-executor = { version = "0.5.0", features = [
 ] }
 embassy-time = { version = "0.3.0" }
 
-qingke-rt = { version = "0.2.0" }
-qingke = { version = "0.2.0" }
+qingke-rt = "0.2.1"
+qingke = "0.2.0"
 # qingke-rt = { version = "0.2.0", path = "../../../qingke/qingke-rt" }
 # qingke = { version = "0.2.0", path = "../../../qingke" }
 
