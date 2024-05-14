@@ -36,7 +36,7 @@ pub fn clocks() -> &'static Clocks {
 #[path = "v0.rs"]
 mod rcc_impl;
 
-#[cfg(ch32v1)]
+#[cfg(any(ch32v1, ch32l1))]
 #[path = "v1.rs"]
 mod rcc_impl;
 
