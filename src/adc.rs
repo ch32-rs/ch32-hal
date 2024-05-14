@@ -195,10 +195,98 @@ macro_rules! impl_adc_pin {
     };
 }
 
-// pub struct Vref;
-//impl<T: Instance> AdcPin<T> for Vref {}
-//impl<T: Instance> sealed::AdcPin<T> for Vref {
-//    fn channel(&self) -> u8 {
-//        15
-//    }
-//}
+#[cfg(adc_l1)]
+mod ch_internal {
+    use super::*;
+
+    pub struct VddaDiv2;
+    impl<T: Instance> AdcPin<T> for VddaDiv2 {}
+    impl<T: Instance> SealedAdcPin<T> for VddaDiv2 {
+        fn channel(&self) -> u8 {
+            18
+        }
+    }
+
+    pub struct VrefInt;
+    impl<T: Instance> AdcPin<T> for VrefInt {}
+    impl<T: Instance> SealedAdcPin<T> for VrefInt {
+        fn set_as_analog(&mut self) {
+            T::regs().ctlr2().modify(|w| w.set_tsvrefe(true));
+        }
+        fn channel(&self) -> u8 {
+            17
+        }
+    }
+
+    pub struct Temperature;
+    impl<T: Instance> AdcPin<T> for Temperature {}
+    impl<T: Instance> SealedAdcPin<T> for Temperature {
+        fn set_as_analog(&mut self) {
+            T::regs().ctlr2().modify(|w| w.set_tsvrefe(true));
+        }
+        fn channel(&self) -> u8 {
+            16
+        }
+    }
+}
+#[cfg(adc_x0)]
+mod ch_internal {
+    use super::*;
+
+    pub struct VrefInt;
+    impl<T: Instance> AdcPin<T> for VrefInt {}
+    impl<T: Instance> SealedAdcPin<T> for VrefInt {
+        fn channel(&self) -> u8 {
+            15
+        }
+    }
+}
+#[cfg(any(adc_v1, adc_v3))]
+mod ch_internal {
+    use super::*;
+
+    pub struct VrefInt;
+    impl<T: Instance> AdcPin<T> for VrefInt {}
+    impl<T: Instance> SealedAdcPin<T> for VrefInt {
+        fn set_as_analog(&mut self) {
+            T::regs().ctlr2().modify(|w| w.set_tsvrefe(true));
+        }
+        fn channel(&self) -> u8 {
+            17
+        }
+    }
+
+    pub struct Temperature;
+    impl<T: Instance> AdcPin<T> for Temperature {}
+    impl<T: Instance> SealedAdcPin<T> for Temperature {
+        fn set_as_analog(&mut self) {
+            T::regs().ctlr2().modify(|w| w.set_tsvrefe(true));
+        }
+        fn channel(&self) -> u8 {
+            16
+        }
+    }
+}
+
+#[cfg(adc_v0)]
+mod ch_internal {
+    use super::*;
+
+    pub struct Vref;
+    impl<T: Instance> AdcPin<T> for Vref {}
+    impl<T: Instance> SealedAdcPin<T> for Vref {
+        fn channel(&self) -> u8 {
+            8
+        }
+    }
+
+    pub struct Vcal;
+    impl<T: Instance> AdcPin<T> for Vcal {}
+    impl<T: Instance> SealedAdcPin<T> for Vcal {
+        fn channel(&self) -> u8 {
+            9
+        }
+    }
+}
+
+pub use ch_internal::*;
