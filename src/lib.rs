@@ -52,6 +52,7 @@ pub use crate::_generated::{peripherals, Peripherals};
 pub mod delay;
 pub mod dma;
 
+#[cfg(adc)]
 pub mod adc;
 #[cfg(peri_dac1)]
 pub mod dac;
@@ -68,6 +69,11 @@ pub mod spi;
 #[cfg(any(timer_x0, timer_v3))]
 pub mod timer;
 pub mod usart;
+
+#[cfg(usb)]
+pub mod usb;
+#[cfg(usbd)]
+pub mod usbd;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;
