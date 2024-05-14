@@ -89,3 +89,60 @@ mod sdio {
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::SDIO {}
 }
+
+#[cfg(ch32l1)]
+mod ch32l1 {
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::USART1 {
+        fn set_remap(remap: u8) {
+            let afio = &crate::pac::AFIO;
+            afio.pcfr2().modify(|w| w.set_usart1_rm_h((remap & 0b110) >> 1));
+            afio.pcfr1().modify(|w| w.set_usart1_rm(remap & 0b1 != 0));
+        }
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::USART1 {}
+
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::USART2 {
+        fn set_remap(remap: u8) {
+            let afio = &crate::pac::AFIO;
+            afio.pcfr2().modify(|w| w.set_usart2_rm_h(remap & 0b10 != 0));
+            afio.pcfr1().modify(|w| w.set_usart2_rm(remap & 0b1 != 0));
+        }
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::USART2 {}
+
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::SPI1 {
+        fn set_remap(remap: u8) {
+            let afio = &crate::pac::AFIO;
+            afio.pcfr2().modify(|w| w.set_spi1_rm_h(remap & 0b10 != 0));
+            afio.pcfr1().modify(|w| w.set_spi1_rm(remap & 0b1 != 0));
+        }
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::SPI1 {}
+
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::TIM1 {
+        fn set_remap(remap: u8) {
+            let afio = &crate::pac::AFIO;
+            afio.pcfr2().modify(|w| w.set_tim1_rm_h(remap & 0b100 != 0));
+            afio.pcfr1().modify(|w| w.set_tim1_rm(remap & 0b11));
+        }
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::TIM1 {}
+
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::TIM2 {
+        fn set_remap(remap: u8) {
+            let afio = &crate::pac::AFIO;
+            afio.pcfr2().modify(|w| w.set_tim2_rm_h(remap & 0b100 != 0));
+            afio.pcfr1().modify(|w| w.set_tim2_rm(remap & 0b11));
+        }
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::TIM2 {}
+
+    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::I2C1 {
+        fn set_remap(remap: u8) {
+            let afio = &crate::pac::AFIO;
+            afio.pcfr2().modify(|w| w.set_i2c1_rm_h(remap & 0b10 != 0));
+            afio.pcfr1().modify(|w| w.set_i2c1_rm(remap & 0b1 != 0));
+        }
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::I2C1 {}
+}

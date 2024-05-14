@@ -1,11 +1,21 @@
+//! RCC init for CH32V1, CH32L1.
+//!
+//! Differences:
+//!
+//! - USBPre is 2bit in CH32L1, 1bit in CH32V1.
+//! - PllMul is different.
+//! - Flash latency is different.
+
 use core::ops;
 
-use crate::pac::rcc::vals::{Hpre as AHBPrescaler, PllMul, Pllsrc as PllSource, Ppre as APBPrescaler, Sw as Sysclk};
+use crate::pac::rcc::vals::{
+    Hpre as AHBPrescaler, PllMul, Pllsrc as PllSource, Ppre as APBPrescaler, Sw as Sysclk, Usbpre,
+};
 use crate::pac::{EXTEND, FLASH, RCC};
 use crate::time::Hertz;
 
-const HSI_FREQUENCY: Hertz = Hertz(8_000_000);
-const LSI_FREQUENCY: Hertz = Hertz(40_000);
+pub const HSI_FREQUENCY: Hertz = Hertz(8_000_000);
+pub const LSI_FREQUENCY: Hertz = Hertz(40_000);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum HseMode {
@@ -68,6 +78,21 @@ impl Config {
         apb1_pre: APBPrescaler::DIV2,
         apb2_pre: APBPrescaler::DIV2,
     };
+    pub const SYSCLK_FREQ_96MHZ_HSE: Config = Self {
+        hse: Some(Hse {
+            freq: Hertz(8_000_000),
+            mode: HseMode::Oscillator,
+        }),
+        sys: Sysclk::PLL,
+        pll_src: PllSource::HSE,
+        pll: Some(Pll {
+            prediv: PllPreDiv::DIV1,
+            mul: PllMul::MUL12,
+        }),
+        ahb_pre: AHBPrescaler::DIV1,
+        apb1_pre: APBPrescaler::DIV2,
+        apb2_pre: APBPrescaler::DIV2,
+    };
 }
 
 impl Default for Config {
@@ -120,8 +145,10 @@ pub(crate) unsafe fn init(config: Config) {
                 let in_freq = pll_src / pll.prediv;
                 let vco_freq = in_freq * pll.mul;
 
-                // TODO: // Usb clock must be 48MHz
-                // let usb_pre = calc_usbpre(vco_freq);
+                // Usb clock must be 48MHz
+                if let Some(usb_pre) = calc_usbpre(vco_freq) {
+                    RCC.cfgr0().modify(|w| w.set_usbpre(usb_pre));
+                }
 
                 RCC.cfgr0().modify(|w| w.set_pllmul(pll.mul));
 
@@ -162,19 +189,20 @@ pub(crate) unsafe fn init(config: Config) {
     let (pclk2, pclk2_tim) = calc_pclk(hclk, config.apb2_pre);
 
     // flash latency
+    #[cfg(ch32v1)]
     match sys.0 {
         0..=24_000_000 => FLASH.actlr().modify(|w| w.set_latency(0)),
         24_000_001..=48_000_000 => FLASH.actlr().modify(|w| w.set_latency(1)),
         48_000_001..=72_000_000 => FLASH.actlr().modify(|w| w.set_latency(2)),
         _ => FLASH.actlr().modify(|w| w.set_latency(2)),
     }
-
-    /*
-    FLASH.ctlr().modify(|w| {
-        w.set_sckmode(sys.0 <= 72_000_000);
-        w.set_enhancemode(true);
-    });
-    */
+    #[cfg(ch32l1)]
+    match sys.0 {
+        0..=40_000_000 => FLASH.actlr().modify(|w| w.set_latency(0)),
+        40_000_001..=72_000_000 => FLASH.actlr().modify(|w| w.set_latency(1)),
+        72_000_001..=144_000_000 => FLASH.actlr().modify(|w| w.set_latency(2)),
+        _ => FLASH.actlr().modify(|w| w.set_latency(2)),
+    }
 
     RCC.cfgr0().modify(|w| {
         w.set_sw(config.sys);
@@ -202,6 +230,17 @@ where
     (pclk, pclk_tim)
 }
 
+fn calc_usbpre(pllclk: Hertz) -> Option<Usbpre> {
+    // output 48MHz
+    match pllclk.0 {
+        48_000_000 => Some(Usbpre::DIV1),
+        #[cfg(ch32l1)]
+        96_000_000 => Some(Usbpre::DIV2),
+        72_000_000 => Some(Usbpre::DIV1_5),
+        _ => None,
+    }
+}
+
 impl ops::Div<PllPreDiv> for Hertz {
     type Output = Hertz;
     fn div(self, rhs: PllPreDiv) -> Hertz {
@@ -215,8 +254,14 @@ impl ops::Div<PllPreDiv> for Hertz {
 impl ops::Mul<PllMul> for Hertz {
     type Output = Hertz;
     fn mul(self, rhs: PllMul) -> Hertz {
+        #[cfg(ch32v1)]
         match rhs {
             PllMul::MUL16_ALT => Hertz(self.0 * 16),
+            _ => Hertz(self.0 * (rhs as u32 + 2)),
+        }
+        #[cfg(ch32l1)]
+        match rhs {
+            PllMul::MUL18 => Hertz(self.0 * 18),
             _ => Hertz(self.0 * (rhs as u32 + 2)),
         }
     }
