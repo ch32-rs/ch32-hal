@@ -13,14 +13,14 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# ch32-metapac = { features = [
-#     "memory-x",
-#     "rt",
-# ], git = "https://github.com/ch32-rs/ch32-metapac.git", tag = "ch32-data-b6fa48d43f467e8e87ea826c2979ada86e0e6f02" }
 ch32-metapac = { features = [
     "memory-x",
     "rt",
-], path = "../ch32-data/build/ch32-metapac" }
+], git = "https://github.com/ch32-rs/ch32-metapac.git", tag = "ch32-data-e8b2ce41eb371ba77cf74b6c9142249bd50aa1a8" }
+# ch32-metapac = { features = [
+#     "memory-x",
+#     "rt",
+# ], path = "../ch32-data/build/ch32-metapac" }
 
 qingke = { version = "0.2.0", features = ["critical-section-impl"] }
 qingke-rt = "0.2.1"
@@ -59,12 +59,12 @@ sdio-host = "0.5.0"
 [build-dependencies]
 proc-macro2 = "1.0.78"
 quote = "1.0"
-# ch32-metapac = { features = [
-#     "metadata",
-# ], git = "https://github.com/ch32-rs/ch32-metapac.git", tag = "ch32-data-b6fa48d43f467e8e87ea826c2979ada86e0e6f02" }
-ch32-metapac = { default-features = false, features = [
+ch32-metapac = { features = [
     "metadata",
-], path = "../ch32-data/build/ch32-metapac" }
+], git = "https://github.com/ch32-rs/ch32-metapac.git", tag = "ch32-data-e8b2ce41eb371ba77cf74b6c9142249bd50aa1a8" }
+# ch32-metapac = { default-features = false, features = [
+#     "metadata",
+# ], path = "../ch32-data/build/ch32-metapac" }
 
 [features]
 default = ["embassy", "rt"]
