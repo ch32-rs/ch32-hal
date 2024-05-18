@@ -24,6 +24,7 @@ qingke = "0.2.0"
 # qingke = { version = "0.2.0", path = "../../../qingke" }
 
 panic-halt = "0.2.0"
+embedded-hal = "1.0.0"
 
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
