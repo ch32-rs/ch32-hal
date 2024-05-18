@@ -75,6 +75,9 @@ pub mod usb;
 #[cfg(usbd)]
 pub mod usbd;
 
+#[cfg(usbpd)]
+pub mod usbpd;
+
 #[cfg(feature = "embassy")]
 pub mod embassy;
 

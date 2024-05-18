@@ -1027,6 +1027,20 @@ fn configure(
     Ok(())
 }
 
+impl<'d, T: Instance> core::fmt::Write for UartTx<'d, T, Blocking> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.blocking_write(s.as_bytes()).map_err(|_| core::fmt::Error)?;
+        Ok(())
+    }
+}
+impl<'d, T: Instance> core::fmt::Write for Uart<'d, T, Blocking> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.blocking_write(s.as_bytes()).map_err(|_| core::fmt::Error)?;
+        Ok(())
+    }
+}
+
+
 // Peripheral traits
 struct State {
     rx_waker: AtomicWaker,
