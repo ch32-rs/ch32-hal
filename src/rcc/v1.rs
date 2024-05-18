@@ -63,6 +63,21 @@ pub struct Config {
 }
 
 impl Config {
+    pub const SYSCLK_FREQ_48MHZ_HSE: Config = Self {
+        hse: Some(Hse {
+            freq: Hertz(8_000_000),
+            mode: HseMode::Oscillator,
+        }),
+        sys: Sysclk::PLL,
+        pll_src: PllSource::HSE,
+        pll: Some(Pll {
+            prediv: PllPreDiv::DIV1,
+            mul: PllMul::MUL6,
+        }),
+        ahb_pre: AHBPrescaler::DIV1,
+        apb1_pre: APBPrescaler::DIV1,
+        apb2_pre: APBPrescaler::DIV1,
+    };
     pub const SYSCLK_FREQ_72MHZ_HSE: Config = Self {
         hse: Some(Hse {
             freq: Hertz(8_000_000),
