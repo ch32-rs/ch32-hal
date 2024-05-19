@@ -44,7 +44,7 @@ impl core::fmt::Display for ChipID {
 }
 
 pub fn chip_id() -> ChipID {
-    #[cfg(not(any(ch32v0, ch32v1)))]
+    #[cfg(not(any(ch32v0, ch32v1, ch641)))]
     const CHIP_ID: *const u32 = 0x1FFFF704 as *const u32;
     #[cfg(any(ch32v0, ch641))]
     const CHIP_ID: *const u32 = 0x1FFFF7C4 as *const u32;

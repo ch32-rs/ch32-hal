@@ -38,7 +38,6 @@ pub mod mode {
 pub mod rcc;
 
 pub mod debug;
-//pub mod delay;
 pub mod prelude;
 
 mod peripheral;
@@ -65,6 +64,7 @@ pub mod rng;
 #[cfg(sdio_v3)]
 pub mod sdio;
 pub mod signature;
+#[cfg(spi)]
 pub mod spi;
 #[cfg(any(timer_x0, timer_v3))]
 pub mod timer;

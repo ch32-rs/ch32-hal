@@ -298,7 +298,7 @@ pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     qingke::pfic::enable_interrupt(Interrupt::EXTI25_16 as u8);
 }
 
-#[cfg(gpio_v3)]
+#[cfg(all(gpio_v3, not(ch641)))]
 pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     use qingke_rt::interrupt;
 
@@ -352,4 +352,22 @@ pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
     }
 
     qingke::pfic::enable_interrupt(Interrupt::EXTI7_0 as u8);
+}
+
+#[cfg(all(gpio_v3, ch641))]
+pub(crate) unsafe fn init(_cs: critical_section::CriticalSection) {
+    use crate::pac::Interrupt;
+
+    #[interrupt]
+    unsafe fn EXTI7_0() {
+        on_irq();
+    }
+
+    #[interrupt]
+    unsafe fn EXTI15_8() {
+        on_irq();
+    }
+
+    qingke::pfic::enable_interrupt(Interrupt::EXTI7_0 as u8);
+    qingke::pfic::enable_interrupt(Interrupt::EXTI15_8 as u8);
 }

@@ -13,12 +13,12 @@ fn main() {
     // Check chip name feature flags
     let chip_name = match env::vars()
         .map(|(a, _)| a)
-        .filter(|x| x.starts_with("CARGO_FEATURE_CH32"))
+        .filter(|x| x.starts_with("CARGO_FEATURE_CH32") || x.starts_with("CARGO_FEATURE_CH6"))
         .get_one()
     {
         Ok(x) => x,
-        Err(GetOneError::None) => panic!("No ch32xx Cargo feature enabled"),
-        Err(GetOneError::Multiple) => panic!("Multiple ch32xx Cargo features enabled"),
+        Err(GetOneError::None) => panic!("No ch32xx/ch6xx Cargo feature enabled"),
+        Err(GetOneError::Multiple) => panic!("Multiple ch32xx/ch6xx Cargo features enabled"),
     }
     .strip_prefix("CARGO_FEATURE_")
     .unwrap()
@@ -29,7 +29,7 @@ fn main() {
         (chip_name[..8].to_string(), chip_name[..6].to_string())
     } else {
         // On of ch643, ch641
-        (chip_name[..4].to_string(), chip_name[..4].to_string())
+        (chip_name[..5].to_string(), chip_name[..5].to_string())
     };
     println!("cargo:rustc-cfg={}", chip_base_name); // ch32v103, ch32v003, ch32x035, ch643, ch641, etc.
     println!("cargo:rustc-cfg={}", chip_family); // On of ch32x0, ch32v0, ch32v1, ch32v2, ch32v3, ch32l1, ch643, ch641
