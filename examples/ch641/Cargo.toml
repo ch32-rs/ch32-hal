@@ -1,0 +1,36 @@
+[package]
+name = "ch641-examples"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ch32-hal = { path = "../../", features = [
+    "ch641",
+    "embassy",
+    "time-driver-tim2",
+    "rt",
+] }
+embassy-executor = { version = "0.5.0", features = [
+    "nightly",
+    "integrated-timers",
+    "arch-riscv32",
+    "executor-thread",
+    # "task-arena-size-512", or nightly
+] }
+embassy-time = { version = "0.3.0" }
+
+qingke-rt = "0.2.1"
+qingke = "0.2.0"
+# qingke-rt = { version = "0.2.0", path = "../../../qingke/qingke-rt" }
+# qingke = { version = "0.2.0", path = "../../../qingke" }
+
+
+panic-halt = "0.2.0"
+
+embedded-hal = "1.0.0"
+
+
+[profile.release]
+strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
+lto = true
+opt-level = "s" # Optimize for size.

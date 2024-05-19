@@ -1,0 +1,19 @@
+[build]
+target = "riscv32ec-unknown-none-elf.json"
+
+[target.'cfg(all(target_arch = "riscv32", target_os = "none"))']
+# runner = "riscv64-unknown-elf-gdb -q -x openocd.gdb"
+# runner = "riscv-none-embed-gdb -q -x openocd.gdb"
+# runner = "gdb -q -x openocd.gdb"
+# runner = "wlink -v flash"
+
+runner = "wlink -v flash --enable-sdi-print --watch-serial"
+
+[unstable]
+build-std = ["core"] # , "compiler_builtins"]
+# build-std-features = ["compiler-builtins-mem"]
+
+[target."riscv32ec-unknown-none-elf"]
+rustflags = [
+#  "-C", "link-arg=-Tlink.x",
+]
