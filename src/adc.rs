@@ -10,7 +10,12 @@ use embassy_sync::waitqueue::AtomicWaker;
 pub use crate::pac::adc::vals::SampleTime;
 use crate::{into_ref, peripherals, Peripheral};
 
+/// ADC bit resolution
+#[cfg(any(adc_v0, adc_ch641))]
+pub const ADC_MAX: u32 = (1 << 10) - 1;
+#[cfg(not(any(adc_v0, adc_ch641)))]
 pub const ADC_MAX: u32 = (1 << 12) - 1;
+
 // No calibration data, voltage should be 1.2V (1.16 to 1.24)
 pub const VREF_INT: u32 = 1200;
 
@@ -285,6 +290,90 @@ mod ch_internal {
     impl<T: Instance> SealedAdcPin<T> for Vcal {
         fn channel(&self) -> u8 {
             9
+        }
+    }
+}
+
+#[cfg(adc_ch641)]
+mod ch_internal {
+    use super::*;
+    use crate::pac::EXTEND;
+
+    // FIXME: move peripherals and pins
+
+    /// Differential input current sampling
+    pub struct Isp {
+        _marker: core::marker::PhantomData<()>,
+    }
+
+    #[derive(Default)]
+    pub struct IspConfig {
+        /// DC bias is about 400 in raw ADC sample value.
+        pub dc_bias: bool,
+    }
+
+    impl Isp {
+        pub fn new_non_inverting(in_positive: impl NonInvertingPin, config: IspConfig) -> Self {
+            in_positive.set_as_isp_pin();
+            EXTEND.ctlr2().modify(|w| {
+                w.set_isp_ps(in_positive.pin_sel());
+                w.set_isp_ns(true); // use GND
+                w.set_isp_ae(true);
+                w.set_isp_be(config.dc_bias);
+            });
+            Isp {
+                _marker: core::marker::PhantomData,
+            }
+        }
+
+        // PB6/PA6, PB7
+        pub fn new(in_positive: impl NonInvertingPin, in_negative: impl InvertingPin, config: IspConfig) -> Self {
+            in_positive.set_as_isp_pin();
+            in_negative.set_as_isp_pin();
+            EXTEND.ctlr2().modify(|w| {
+                w.set_isp_ps(in_positive.pin_sel());
+                w.set_isp_ns(false); // true: use GND; false: use PB7
+                w.set_isp_ae(true);
+                w.set_isp_be(config.dc_bias);
+            });
+            Isp {
+                _marker: core::marker::PhantomData,
+            }
+        }
+    }
+
+    pub trait NonInvertingPin {
+        fn set_as_isp_pin(&self) {}
+        fn pin_sel(&self) -> bool;
+    }
+    pub trait InvertingPin {
+        fn set_as_isp_pin(&self) {}
+    }
+    impl NonInvertingPin for peripherals::PA6 {
+        fn pin_sel(&self) -> bool {
+            true
+        }
+    }
+    // aka. ISP pin
+    impl NonInvertingPin for peripherals::PB6 {
+        fn pin_sel(&self) -> bool {
+            false
+        }
+    }
+    impl InvertingPin for peripherals::PB7 {}
+
+    impl<T: Instance> AdcPin<T> for Isp {}
+    impl<T: Instance> SealedAdcPin<T> for Isp {
+        fn channel(&self) -> u8 {
+            8
+        }
+    }
+
+    pub struct VhvDiv5;
+    impl<T: Instance> AdcPin<T> for VhvDiv5 {}
+    impl<T: Instance> SealedAdcPin<T> for VhvDiv5 {
+        fn channel(&self) -> u8 {
+            15
         }
     }
 }
