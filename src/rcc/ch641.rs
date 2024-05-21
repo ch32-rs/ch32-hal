@@ -6,7 +6,7 @@
 use core::ops;
 
 use crate::pac::rcc::vals::{Hpre as AHBPrescaler, Ppre as APBPrescaler, Sw as Sysclk};
-use crate::pac::{AFIO, FLASH, RCC};
+use crate::pac::{FLASH, RCC};
 use crate::time::Hertz;
 
 pub const HSI_FREQUENCY: Hertz = Hertz(24_000_000);

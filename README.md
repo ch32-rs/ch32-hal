@@ -34,7 +34,7 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 | V0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ❓   |     | ❓  | ✅    | |
 | X0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ❓  | ✅  | ✅         | ✅   |     | ✅  |       | |
 | L1     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ❓  | ✅  | ✅         | ❓   |     | ❓  |       | |
-| CH641  |        | ✅      | ✅  | ✅   | ❓   | N/A | ❓  | ❓  | ✅         | ❓   |     | ❓  | ✅    | |
+| CH641  |        | ✅      | ✅  | ✅   | ❓   | N/A | ❓  | ✅  | ✅         | ❓   |     | ❓  | ✅    | ISP |
 | CH643  | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
 
 - ✅ : Expected to work
