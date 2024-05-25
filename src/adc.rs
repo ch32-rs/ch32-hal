@@ -1,12 +1,10 @@
-//! ADC
-//!
-//! Max clock: 14MHz for CHFV2x_V3x
+//! ADC, Analog to Digital Converter
 
 #![macro_use]
 
-use ch32_metapac::adc::vals;
 use embassy_sync::waitqueue::AtomicWaker;
 
+use crate::pac::adc::vals;
 pub use crate::pac::adc::vals::SampleTime;
 use crate::{into_ref, peripherals, Peripheral};
 

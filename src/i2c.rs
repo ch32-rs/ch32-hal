@@ -138,8 +138,6 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         // CH32V2, CH32V3
         scl.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
         sda.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
-        //sda.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        //scl.set_as_af_output(AFType::OutputPushPull, Speed::High);
 
         let mut this = Self {
             _peri: peri,
