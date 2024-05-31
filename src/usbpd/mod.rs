@@ -1,3 +1,13 @@
+//! USBPD, USB Power Delivery
+//!
+//! Design:
+//!
+//! - CC Pins:
+//! - UsbPdPhy: USBPD PHY layer
+//! - UsbPdSniffer: USBPD Sniffer based on PHY layer, no transmit support
+//! - [ ] UsbPdSink: USBPD Sink layer
+//! - [ ] UsbPdSource: USBPD Source layer
+
 use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::sync::atomic::AtomicBool;
@@ -52,7 +62,6 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         if status.if_rx_reset() {
             T::REGS.config().modify(|w| w.set_ie_rx_reset(false));
-
             crate::println!("TODO: reset");
         }
 
@@ -69,17 +78,22 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
 pub struct UsbPdPhy<'d, T: Instance> {
     _marker: PhantomData<&'d mut T>,
+    cc1: vals::CcSel,
+    cc2: vals::CcSel,
 }
 
 impl<'d, T: Instance> UsbPdPhy<'d, T> {
     /// Create a new SPI driver.
     pub fn new(
         _peri: impl Peripheral<P = T> + 'd,
-        cc1: impl Peripheral<P = impl Cc1Pin<T>> + 'd,
-        cc2: impl Peripheral<P = impl Cc2Pin<T>> + 'd,
+        cc1: impl Peripheral<P = impl CcPin<T>> + 'd,
+        cc2: impl Peripheral<P = impl CcPin<T>> + 'd,
     ) -> Result<Self, Error> {
         into_ref!(cc1, cc2);
 
+        assert!(cc1.port_sel() != cc2.port_sel(), "CC1 and CC2 should be different");
+
+        #[allow(unused)]
         let afio = crate::pac::AFIO;
 
         T::enable_and_reset();
@@ -107,10 +121,15 @@ impl<'d, T: Instance> UsbPdPhy<'d, T> {
         T::REGS.status().write(|w| w.0 = 0b111111_00); // write 1 to clear
 
         // pd_phy_reset
-        T::REGS.port_cc1().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
-        T::REGS.port_cc2().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
 
-        let mut this = Self { _marker: PhantomData };
+        T::port_cc_reg(cc1.port_sel()).write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
+        T::port_cc_reg(cc2.port_sel()).write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
+
+        let mut this = Self {
+            _marker: PhantomData,
+            cc1: cc1.port_sel(),
+            cc2: cc2.port_sel(),
+        };
         this.detect_cc()?;
 
         Ok(this)
@@ -125,14 +144,14 @@ impl<'d, T: Instance> UsbPdPhy<'d, T> {
         });
         T::REGS.status().write(|w| w.0 = 0b111111_00); // write 1 to clear
 
-        T::REGS.port_cc1().modify(|w| w.set_cc_lve(false));
-        T::REGS.port_cc2().modify(|w| w.set_cc_lve(false));
+        T::port_cc_reg(self.cc1).modify(|w| w.set_cc_lve(false));
+        T::port_cc_reg(self.cc2).modify(|w| w.set_cc_lve(false));
 
         self.detect_cc()?;
 
         // pd_phy_reset
-        T::REGS.port_cc1().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
-        T::REGS.port_cc2().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
+        T::port_cc_reg(self.cc1).write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
+        T::port_cc_reg(self.cc2).write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
 
         Ok(())
     }
@@ -141,20 +160,20 @@ impl<'d, T: Instance> UsbPdPhy<'d, T> {
         // CH32X035 has no internal CC pull down support
         // The detection voltage is 0.22V, sufficient to detect the default power(500mA/900mA)
 
-        T::REGS.port_cc1().modify(|w| w.set_cc_ce(vals::PortCcCe::V0_22));
+        T::port_cc_reg(self.cc1).modify(|w| w.set_cc_ce(vals::PortCcCe::V0_22));
         embassy_time::Delay.delay_us(2);
 
-        if T::REGS.port_cc1().read().pa_cc_ai() {
+        if T::port_cc_reg(self.cc1).read().pa_cc_ai() {
             // CC1 is connected
             T::REGS.config().modify(|w| w.set_cc_sel(vals::CcSel::CC1));
 
             crate::println!("CC1 connected");
             Ok(())
         } else {
-            T::REGS.port_cc2().modify(|w| w.set_cc_ce(vals::PortCcCe::V0_22));
+            T::port_cc_reg(self.cc2).modify(|w| w.set_cc_ce(vals::PortCcCe::V0_22));
             embassy_time::Delay.delay_us(2);
 
-            if T::REGS.port_cc2().read().pa_cc_ai() {
+            if T::port_cc_reg(self.cc2).read().pa_cc_ai() {
                 // CC2 is connected
                 T::REGS.config().modify(|w| w.set_cc_sel(vals::CcSel::CC2));
                 crate::println!("CC2 connected");
@@ -268,11 +287,7 @@ impl<'d, T: Instance> UsbPdPhy<'d, T> {
     }
 
     fn transmit(&mut self, sop: u8, buf: &[u8]) -> Result<(), Error> {
-        if T::REGS.config().read().cc_sel() == vals::CcSel::CC1 {
-            T::REGS.port_cc1().modify(|w| w.set_cc_lve(true));
-        } else {
-            T::REGS.port_cc2().modify(|w| w.set_cc_lve(true));
-        }
+        T::port_cc_reg(T::REGS.config().read().cc_sel()).modify(|w| w.set_cc_lve(true));
 
         T::REGS
             .bmc_clk_cnt()
@@ -304,11 +319,7 @@ impl<'d, T: Instance> UsbPdPhy<'d, T> {
         // self.transmit(TX_SEL_HARD_RESET, &[])?;
         // send_phy_empty_playload
 
-        if T::REGS.config().read().cc_sel() == vals::CcSel::CC1 {
-            T::REGS.port_cc1().modify(|w| w.set_cc_lve(true));
-        } else {
-            T::REGS.port_cc2().modify(|w| w.set_cc_lve(true));
-        }
+        T::port_cc_reg(T::REGS.config().read().cc_sel()).modify(|w| w.set_cc_lve(true));
 
         T::REGS
             .bmc_clk_cnt()
@@ -371,6 +382,17 @@ trait SealedInstance {
 #[allow(private_bounds)]
 pub trait Instance: SealedInstance + RccPeripheral {
     type Interrupt: crate::interrupt::typelevel::Interrupt;
+
+    #[allow(dead_code)]
+    fn port_cc_reg(cc: vals::CcSel) -> pac::common::Reg<pac::usbpd::regs::PortCc, pac::common::RW> {
+        match cc {
+            vals::CcSel::CC1 => Self::REGS.port_cc(0),
+            vals::CcSel::CC2 => Self::REGS.port_cc(2),
+            #[cfg(ch641)]
+            vals::CcSel::CC3 => Self::REGS.port_cc(3),
+            _ => panic!("Invalid CC"),
+        }
+    }
 }
 
 // catch GLOBAL irq
@@ -391,8 +413,69 @@ foreach_interrupt!(
     };
 );
 
-pin_trait!(Cc1Pin, Instance);
-pin_trait!(Cc2Pin, Instance);
+pub trait CcPin<T: Instance>: crate::gpio::Pin {
+    fn port_sel(&self) -> pac::usbpd::vals::CcSel;
+}
+
+#[cfg(ch32x0)]
+mod _cc_pin_ch32x0 {
+    use super::*;
+
+    impl CcPin<crate::peripherals::USBPD> for crate::peripherals::PC14 {
+        #[inline(always)]
+        fn port_sel(&self) -> pac::usbpd::vals::CcSel {
+            pac::usbpd::vals::CcSel::CC1
+        }
+    }
+    impl CcPin<crate::peripherals::USBPD> for crate::peripherals::PC15 {
+        #[inline(always)]
+        fn port_sel(&self) -> pac::usbpd::vals::CcSel {
+            pac::usbpd::vals::CcSel::CC2
+        }
+    }
+}
+
+#[cfg(ch32l1)]
+mod _cc_pin_ch32l1 {
+    use super::*;
+
+    impl CcPin<crate::peripherals::USBPD> for crate::peripherals::PB6 {
+        #[inline(always)]
+        fn port_sel(&self) -> pac::usbpd::vals::CcSel {
+            pac::usbpd::vals::CcSel::CC1
+        }
+    }
+    impl CcPin<crate::peripherals::USBPD> for crate::peripherals::PB7 {
+        #[inline(always)]
+        fn port_sel(&self) -> pac::usbpd::vals::CcSel {
+            pac::usbpd::vals::CcSel::CC2
+        }
+    }
+}
+
+#[cfg(ch641)]
+mod _cc_pin_ch641 {
+    use super::*;
+
+    impl CcPin<crate::peripherals::USBPD> for crate::peripherals::PB0 {
+        #[inline(always)]
+        fn port_sel(&self) -> pac::usbpd::vals::CcSel {
+            pac::usbpd::vals::CcSel::CC1
+        }
+    }
+    impl CcPin<crate::peripherals::USBPD> for crate::peripherals::PB1 {
+        #[inline(always)]
+        fn port_sel(&self) -> pac::usbpd::vals::CcSel {
+            pac::usbpd::vals::CcSel::CC2
+        }
+    }
+    impl CcPin<crate::peripherals::USBPD> for crate::peripherals::PB9 {
+        #[inline(always)]
+        fn port_sel(&self) -> pac::usbpd::vals::CcSel {
+            pac::usbpd::vals::CcSel::CC3
+        }
+    }
+}
 
 #[inline]
 fn calc_bmc_clk_for_tx() -> u16 {
