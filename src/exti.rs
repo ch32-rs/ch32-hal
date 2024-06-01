@@ -133,7 +133,8 @@ impl<'a> ExtiInputFuture<'a> {
                 // stride: 2, len: 15, 8 lines
                 afio.exticr().modify(|w| w.set_exti(pin, port));
             }
-            #[cfg(afio_v3)]
+            // V1, V2, V3, L1
+            #[cfg(any(afio_v3, afio_l1))]
             {
                 // AFIO_EXTICRx
                 // stride: 4, len: 4, 16 lines
@@ -143,6 +144,11 @@ impl<'a> ExtiInputFuture<'a> {
             {
                 // stride: 2, len: 15, 24 lines
                 afio.exticr(pin / 16).modify(|w| w.set_exti(pin % 16, port));
+            }
+            #[cfg(afio_ch641)]
+            {
+                // single register
+                afio.exticr().modify(|w| w.set_exti(pin, port != 0));
             }
 
             // See-also: 7.4.3
