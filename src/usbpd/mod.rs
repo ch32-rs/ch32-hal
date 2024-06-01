@@ -390,6 +390,7 @@ pub trait Instance: SealedInstance + RccPeripheral {
             vals::CcSel::CC2 => Self::REGS.port_cc(2),
             #[cfg(ch641)]
             vals::CcSel::CC3 => Self::REGS.port_cc(3),
+            #[allow(unreachable_patterns)]
             _ => panic!("Invalid CC"),
         }
     }
