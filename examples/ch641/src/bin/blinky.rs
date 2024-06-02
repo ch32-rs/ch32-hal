@@ -8,7 +8,7 @@ use {ch32_hal as hal, panic_halt as _};
 
 #[qingke_rt::entry]
 fn main() -> ! {
-    hal::debug::SDIPrint::enable();
+    hal::debug::SdiPrint::enable();
     //    let mut config = hal::Config::default();
     //  config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSE;
     let p = hal::init(Default::default());
