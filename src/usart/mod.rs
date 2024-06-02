@@ -1040,7 +1040,6 @@ impl<'d, T: Instance> core::fmt::Write for Uart<'d, T, Blocking> {
     }
 }
 
-
 // Peripheral traits
 struct State {
     rx_waker: AtomicWaker,
