@@ -16,3 +16,9 @@ Link: [OSHWHUB](https://oshwhub.com/andelf/linedog)
 - MCU: CH32V003J4M6
 - LED: PA2, PC4
 - No HSE crystal
+
+### LineDog v2 CH32V003F4P6 Board
+
+
+- BUZZ: PC4 (TIM1CH4)
+- WS2812: PA2
