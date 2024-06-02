@@ -8,16 +8,17 @@ use embassy_time::{Duration, Timer};
 use hal::dma::NoDma;
 use hal::gpio::{AnyPin, Level, Output, Pin, Speed};
 use hal::i2c::I2c;
+use hal::mode::Blocking;
 use hal::time::Hertz;
 use hal::{peripherals, println};
 
 pub struct EEPROM {
-    i2c: I2c<'static, peripherals::I2C2>,
+    i2c: I2c<'static, peripherals::I2C2, Blocking>,
     address: u8,
 }
 
 impl EEPROM {
-    pub fn new(i2c: I2c<'static, peripherals::I2C2>, address: u8) -> Self {
+    pub fn new(i2c: I2c<'static, peripherals::I2C2, Blocking>, address: u8) -> Self {
         Self { i2c, address }
     }
 
@@ -52,13 +53,7 @@ async fn main(spawner: Spawner) -> ! {
 
     println!("init ok");
 
-    let mut i2c = I2c::new_blocking(
-        p.I2C2,
-        i2c_scl,
-        i2c_sda,
-        Hertz::khz(100),
-        Default::default(),
-    );
+    let mut i2c = I2c::new_blocking(p.I2C2, i2c_scl, i2c_sda, Hertz::khz(100), Default::default());
 
     // 7-bit address
     const FT24C32A_ADDR: u8 = 0b1010_000;
