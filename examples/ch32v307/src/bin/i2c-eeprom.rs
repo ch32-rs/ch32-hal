@@ -52,12 +52,10 @@ async fn main(spawner: Spawner) -> ! {
 
     println!("init ok");
 
-    let mut i2c = I2c::new(
+    let mut i2c = I2c::new_blocking(
         p.I2C2,
         i2c_scl,
         i2c_sda,
-        NoDma,
-        NoDma,
         Hertz::khz(100),
         Default::default(),
     );
