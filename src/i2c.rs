@@ -1,34 +1,70 @@
-//! I2C interface.
-//!
-//! NOTE:
+//! Inter-Integrated-Circuit (I2C)
 
 use core::future::Future;
+use core::marker::PhantomData;
 
 use embassy_sync::waitqueue::AtomicWaker;
+use embedded_hal::i2c::Operation;
 
-use crate::dma::NoDma;
-// use crate::dma::NoDma;
+use crate::dma::ChannelAndRequest;
 use crate::gpio::sealed::AFType;
 use crate::gpio::Speed;
+use crate::mode::{Async, Blocking, Mode};
 // use crate::interrupt::Interrupt;
 use crate::time::Hertz;
-use crate::{interrupt, into_ref, peripherals, Peripheral, PeripheralRef};
+use crate::{interrupt, into_ref, peripherals, Peripheral};
+
+/// Event interrupt handler.
+pub struct EventInterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> interrupt::typelevel::Handler<T::EventInterrupt> for EventInterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        on_interrupt::<T>()
+    }
+}
+
+/// Error interrupt handler.
+pub struct ErrorInterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> interrupt::typelevel::Handler<T::ErrorInterrupt> for ErrorInterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        on_interrupt::<T>()
+    }
+}
+
+pub unsafe fn on_interrupt<T: Instance>() {
+    let regs = T::regs();
+    // i2c v2 only woke the task on transfer complete interrupts. v1 uses interrupts for a bunch of
+    // other stuff, so we wake the task on every interrupt.
+    T::state().waker.wake();
+    critical_section::with(|_| {
+        // Clear event interrupt flag.
+        regs.ctlr2().modify(|w| {
+            w.set_itevten(false);
+            w.set_iterren(false);
+        });
+    });
+}
 
 /// I2C error.
 #[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
-    /// Bus error
+    /// Bus error. (BERR)
     Bus,
-    /// Arbitration lost
+    /// Arbitration lost (ARLO)
     Arbitration,
-    /// ACK not received (either to the address or to a data byte)
+    /// ACK not received (either to the address or to a data byte) (AF)
     Nack,
     /// Timeout
     Timeout,
     /// CRC error
     Crc,
-    /// Overrun error
+    /// Overrun error (OVR)
     Overrun,
     /// Zero-length transfers are not allowed.
     ZeroLengthTransfer,
@@ -44,16 +80,6 @@ pub enum Duty {
 #[non_exhaustive]
 #[derive(Copy, Clone)]
 pub struct Config {
-    /// Enable internal pullup on SDA.
-    ///
-    /// Using external pullup resistors is recommended for I2C. If you do
-    /// have external pullups you should not enable this.
-    pub sda_pullup: bool,
-    /// Enable internal pullup on SCL.
-    ///
-    /// Using external pullup resistors is recommended for I2C. If you do
-    /// have external pullups you should not enable this.
-    pub scl_pullup: bool,
     /// Timeout.
     #[cfg(feature = "time")]
     pub timeout: embassy_time::Duration,
@@ -63,8 +89,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            sda_pullup: false,
-            scl_pullup: false,
             #[cfg(feature = "time")]
             timeout: embassy_time::Duration::from_millis(1000),
             duty: Duty::Duty2_1,
@@ -108,43 +132,76 @@ impl Timeout {
 }
 
 /// I2C driver.
-pub struct I2c<'d, T: Instance, TXDMA = NoDma, RXDMA = NoDma> {
-    _peri: PeripheralRef<'d, T>,
-    #[allow(dead_code)]
-    tx_dma: PeripheralRef<'d, TXDMA>,
-    #[allow(dead_code)]
-    rx_dma: PeripheralRef<'d, RXDMA>,
+pub struct I2c<'d, T: Instance, M: Mode> {
+    tx_dma: Option<ChannelAndRequest<'d>>,
+    rx_dma: Option<ChannelAndRequest<'d>>,
     #[cfg(feature = "time")]
     timeout: Duration,
+    _phantom: PhantomData<(&'d mut T, M)>,
 }
 
-impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
+impl<'d, T: Instance> I2c<'d, T, Async> {
     /// Create a new I2C driver.
     pub fn new<const REMAP: u8>(
         peri: impl Peripheral<P = T> + 'd,
         scl: impl Peripheral<P = impl SclPin<T, REMAP>> + 'd,
         sda: impl Peripheral<P = impl SdaPin<T, REMAP>> + 'd,
-        tx_dma: impl Peripheral<P = TXDMA> + 'd,
-        rx_dma: impl Peripheral<P = RXDMA> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::EventInterrupt, EventInterruptHandler<T>>
+            + interrupt::typelevel::Binding<T::ErrorInterrupt, ErrorInterruptHandler<T>>
+            + 'd,
+        tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
+        rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
         freq: Hertz,
         config: Config,
     ) -> Self {
-        into_ref!(peri, scl, sda, tx_dma, rx_dma);
+        Self::new_inner(peri, scl, sda, new_dma!(tx_dma), new_dma!(rx_dma), freq, config)
+    }
+}
+
+impl<'d, T: Instance> I2c<'d, T, Blocking> {
+    /// Create a new blocking I2C driver.
+    pub fn new_blocking<const REMAP: u8>(
+        peri: impl Peripheral<P = T> + 'd,
+        scl: impl Peripheral<P = impl SclPin<T, REMAP>> + 'd,
+        sda: impl Peripheral<P = impl SdaPin<T, REMAP>> + 'd,
+        freq: Hertz,
+        config: Config,
+    ) -> Self {
+        Self::new_inner(peri, scl, sda, None, None, freq, config)
+    }
+}
+
+impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
+    /// Create a new I2C driver.
+    fn new_inner<const REMAP: u8>(
+        _peri: impl Peripheral<P = T> + 'd,
+        scl: impl Peripheral<P = impl SclPin<T, REMAP>> + 'd,
+        sda: impl Peripheral<P = impl SdaPin<T, REMAP>> + 'd,
+        tx_dma: Option<ChannelAndRequest<'d>>,
+        rx_dma: Option<ChannelAndRequest<'d>>,
+        freq: Hertz,
+        config: Config,
+    ) -> Self {
+        use crate::interrupt::typelevel::Interrupt;
+
+        into_ref!(scl, sda);
 
         T::enable_and_reset();
 
         T::set_remap(REMAP);
 
-        // CH32V2, CH32V3
         scl.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
         sda.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
 
+        unsafe { T::EventInterrupt::enable() };
+        unsafe { T::ErrorInterrupt::enable() };
+
         let mut this = Self {
-            _peri: peri,
             tx_dma,
             rx_dma,
             #[cfg(feature = "time")]
             timeout: config.timeout,
+            _phantom: PhantomData,
         };
 
         this.init(freq, config);
@@ -158,16 +215,18 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
             deadline: Instant::now() + self.timeout,
         }
     }
+}
 
+impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     // init as master mode
     fn init(&mut self, freq: Hertz, config: Config) {
         let regs = T::regs();
 
-        // soft reset
-        //regs.ctlr1().modify(|w| w.set_swrst(true));
-        //regs.ctlr1().modify(|w| w.set_swrst(false));
-
         regs.ctlr1().modify(|w| w.set_pe(false)); // disale i2c
+
+        // soft reset
+        regs.ctlr1().modify(|w| w.set_swrst(true));
+        regs.ctlr1().modify(|w| w.set_swrst(false));
 
         let freq_in = T::frequency().0;
         let freq_range = freq_in / 1_000_000;
@@ -208,7 +267,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         regs.ctlr1().modify(|w| w.set_pe(true));
     }
 
-    fn check_and_clear_error_flags(&self) -> Result<crate::pac::i2c::regs::Star1, Error> {
+    fn check_and_clear_error_flags() -> Result<crate::pac::i2c::regs::Star1, Error> {
         // Note that flags should only be cleared once they have been registered. If flags are
         // cleared otherwise, there may be an inherent race condition and flags may be missed.
         let star1 = T::regs().star1().read();
@@ -247,45 +306,49 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
 
         Ok(star1)
     }
-    /// STAR1 and STAR2 have a complex read-clear rule. So we need to read STAR1 first.
-    fn write_bytes(&mut self, addr: u8, bytes: &[u8], timeout: Timeout) -> Result<(), Error> {
-        // Send a START condition
-        let regs = T::regs();
 
-        regs.ctlr1().modify(|w| w.set_start(true));
+    fn write_bytes(&mut self, addr: u8, bytes: &[u8], timeout: Timeout, frame: FrameOptions) -> Result<(), Error> {
+        if frame.send_start() {
+            // Send a START condition
 
-        // Wait until START condition was generated
-        while !self.check_and_clear_error_flags()?.sb() {
-            timeout.check()?;
+            T::regs().ctlr1().modify(|reg| {
+                reg.set_start(true);
+            });
+
+            // Wait until START condition was generated
+            while !Self::check_and_clear_error_flags()?.sb() {
+                timeout.check()?;
+            }
+
+            // Check if we were the ones to generate START
+            if T::regs().ctlr1().read().start() || !T::regs().star2().read().msl() {
+                return Err(Error::Arbitration);
+            }
+
+            // Set up current address we're trying to talk to
+            T::regs().datar().write(|reg| reg.set_datar(addr << 1));
+
+            // Wait until address was sent
+            // Wait for the address to be acknowledged
+            // Check for any I2C errors. If a NACK occurs, the ADDR bit will never be set.
+            while !Self::check_and_clear_error_flags()?.addr() {
+                timeout.check()?;
+            }
+
+            // Clear condition by reading SR2
+            let _ = T::regs().star2().read();
         }
-
-        // Also wait until signalled we're master and everything is waiting for us
-        while {
-            self.check_and_clear_error_flags()?;
-
-            let sr2 = regs.star2().read();
-            !sr2.msl() && !sr2.busy()
-        } {
-            timeout.check()?;
-        }
-
-        // Set up current address, we're trying to talk to
-        regs.datar().write(|w| w.set_datar(addr << 1));
-
-        // Wait until address was sent
-        // Wait for the address to be acknowledged
-        // Check for any I2C errors. If a NACK occurs, the ADDR bit will never be set.
-        while !self.check_and_clear_error_flags()?.addr() {
-            timeout.check()?;
-        }
-
-        // Clear condition by reading SR2
-        let _ = regs.star2().read();
 
         // Send bytes
         for c in bytes {
             self.send_byte(*c, timeout)?;
         }
+
+        if frame.send_stop() {
+            // Send a STOP condition
+            T::regs().ctlr1().modify(|reg| reg.set_stop(true));
+        }
+
         // Fallthrough is success
         Ok(())
     }
@@ -294,18 +357,20 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         // Wait until we're ready for sending
         while {
             // Check for any I2C errors. If a NACK occurs, the ADDR bit will never be set.
-            !self.check_and_clear_error_flags()?.tx_e()
+            !Self::check_and_clear_error_flags()?.tx_e()
         } {
             timeout.check()?;
         }
 
         // Push out a byte of data
-        T::regs().datar().write(|w| w.set_datar(byte));
+        T::regs()
+            .datar()
+            .write(|reg: &mut ch32_metapac::i2c::regs::Datar| reg.set_datar(byte));
 
         // Wait until byte is transferred
         while {
             // Check for any potential error conditions.
-            !self.check_and_clear_error_flags()?.btf()
+            !Self::check_and_clear_error_flags()?.btf()
         } {
             timeout.check()?;
         }
@@ -316,7 +381,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
     fn recv_byte(&self, timeout: Timeout) -> Result<u8, Error> {
         while {
             // Check for any potential error conditions.
-            self.check_and_clear_error_flags()?;
+            Self::check_and_clear_error_flags()?;
 
             !T::regs().star1().read().rx_ne()
         } {
@@ -327,109 +392,134 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         Ok(value)
     }
 
-    fn blocking_read_timeout(&mut self, addr: u8, buffer: &mut [u8], timeout: Timeout) -> Result<(), Error> {
-        if let Some((last, buffer)) = buffer.split_last_mut() {
+    fn blocking_read_timeout(
+        &mut self,
+        addr: u8,
+        buffer: &mut [u8],
+        timeout: Timeout,
+        frame: FrameOptions,
+    ) -> Result<(), Error> {
+        let Some((last, buffer)) = buffer.split_last_mut() else {
+            return Err(Error::Overrun);
+        };
+
+        if frame.send_start() {
             // Send a START condition and set ACK bit
-            T::regs().ctlr1().modify(|w| {
-                w.set_start(true);
-                w.set_ack(true);
+            T::regs().ctlr1().modify(|reg| {
+                reg.set_start(true);
+                reg.set_ack(true);
             });
 
             // Wait until START condition was generated
-            while !self.check_and_clear_error_flags()?.sb() {
+            while !Self::check_and_clear_error_flags()?.sb() {
                 timeout.check()?;
             }
 
-            // Also wait until signalled we're master and everything is waiting for us
-            while {
-                let sr2 = T::regs().star2().read();
-                !sr2.msl() && !sr2.busy()
-            } {
-                timeout.check()?;
+            // Check if we were the ones to generate START
+            if T::regs().ctlr1().read().start() || !T::regs().star2().read().msl() {
+                return Err(Error::Arbitration);
             }
 
-            // Set up current address, we're trying to talk to
-            T::regs().datar().write(|w| w.set_datar((addr << 1) + 1));
+            // Set up current address we're trying to talk to
+            T::regs().datar().write(|reg| reg.set_datar((addr << 1) + 1));
 
             // Wait until address was sent
             // Wait for the address to be acknowledged
-            while !self.check_and_clear_error_flags()?.addr() {
+            while !Self::check_and_clear_error_flags()?.addr() {
                 timeout.check()?;
             }
 
             // Clear condition by reading SR2
             let _ = T::regs().star2().read();
-
-            // Receive bytes into buffer
-            for c in buffer {
-                *c = self.recv_byte(timeout)?;
-            }
-
-            // Prepare to send NACK then STOP after next byte
-            T::regs().ctlr1().modify(|w| {
-                w.set_ack(false);
-                w.set_stop(true);
-            });
-
-            // Receive last byte
-            *last = self.recv_byte(timeout)?;
-
-            // Wait for the STOP to be sent.
-            while T::regs().ctlr1().read().stop() {
-                timeout.check()?;
-            }
-
-            // Fallthrough is success
-            Ok(())
-        } else {
-            Err(Error::Overrun)
         }
-    }
 
-    pub fn blocking_read(&mut self, addr: u8, read: &mut [u8]) -> Result<(), Error> {
-        self.blocking_read_timeout(addr, read, self.timeout())
-    }
-
-    fn blocking_write_timeout(&mut self, addr: u8, write: &[u8], timeout: Timeout) -> Result<(), Error> {
-        self.write_bytes(addr, write, timeout)?;
-        // Send a STOP condition
-        T::regs().ctlr1().modify(|w| w.set_stop(true));
-        // Wait for STOP condition to transmit.
-        while T::regs().ctlr1().read().stop() {
-            timeout.check()?;
+        // Receive bytes into buffer
+        for c in buffer {
+            *c = self.recv_byte(timeout)?;
         }
+
+        // Prepare to send NACK then STOP after next byte
+        T::regs().ctlr1().modify(|reg| {
+            if frame.send_nack() {
+                reg.set_ack(false);
+            }
+            if frame.send_stop() {
+                reg.set_stop(true);
+            }
+        });
+
+        // Receive last byte
+        *last = self.recv_byte(timeout)?;
 
         // Fallthrough is success
         Ok(())
     }
 
-    pub fn blocking_write(&mut self, addr: u8, write: &[u8]) -> Result<(), Error> {
-        let timeout = self.timeout();
-
-        self.blocking_write_timeout(addr, write, timeout)
+    /// Blocking read.
+    pub fn blocking_read(&mut self, addr: u8, read: &mut [u8]) -> Result<(), Error> {
+        self.blocking_read_timeout(addr, read, self.timeout(), FrameOptions::FirstAndLastFrame)
     }
 
-    fn blocking_write_read_timeout(
-        &mut self,
-        addr: u8,
-        write: &[u8],
-        read: &mut [u8],
-        timeout: Timeout,
-    ) -> Result<(), Error> {
-        self.write_bytes(addr, write, timeout)?;
-        self.blocking_read_timeout(addr, read, timeout)?;
+    /// Blocking write.
+    pub fn blocking_write(&mut self, addr: u8, write: &[u8]) -> Result<(), Error> {
+        self.write_bytes(addr, write, self.timeout(), FrameOptions::FirstAndLastFrame)?;
+
+        // Fallthrough is success
+        Ok(())
+    }
+
+    /// Blocking write, restart, read.
+    pub fn blocking_write_read(&mut self, addr: u8, write: &[u8], read: &mut [u8]) -> Result<(), Error> {
+        // Check empty read buffer before starting transaction. Otherwise, we would not generate the
+        // stop condition below.
+        if read.is_empty() {
+            return Err(Error::Overrun);
+        }
+
+        let timeout = self.timeout();
+
+        self.write_bytes(addr, write, timeout, FrameOptions::FirstFrame)?;
+        self.blocking_read_timeout(addr, read, timeout, FrameOptions::FirstAndLastFrame)?;
 
         Ok(())
     }
 
-    pub fn blocking_write_read(&mut self, addr: u8, write: &[u8], read: &mut [u8]) -> Result<(), Error> {
+    /// Blocking transaction with operations.
+    ///
+    /// Consecutive operations of same type are merged. See [transaction contract] for details.
+    ///
+    /// [transaction contract]: embedded_hal_1::i2c::I2c::transaction
+    pub fn blocking_transaction(&mut self, addr: u8, operations: &mut [Operation<'_>]) -> Result<(), Error> {
         let timeout = self.timeout();
 
-        self.blocking_write_read_timeout(addr, write, read, timeout)
+        for (op, frame) in operation_frames(operations)? {
+            match op {
+                Operation::Read(read) => self.blocking_read_timeout(addr, read, timeout, frame)?,
+                Operation::Write(write) => self.write_bytes(addr, write, timeout, frame)?,
+            }
+        }
+
+        Ok(())
+    }
+
+    // Async
+
+    #[inline] // pretty sure this should always be inlined
+    fn enable_interrupts() -> () {
+        T::regs().ctlr2().modify(|w| {
+            w.set_iterren(true);
+            w.set_itevten(true);
+        });
     }
 }
 
-impl<'d, T: Instance, TXDMA, RXDMA> Drop for I2c<'d, T, TXDMA, RXDMA> {
+// ======== Async
+
+impl<'d, T: Instance> I2c<'d, T, Async> {}
+
+// ======== Common
+
+impl<'d, T: Instance, M: Mode> Drop for I2c<'d, T, M> {
     fn drop(&mut self) {
         T::regs().ctlr1().modify(|w| w.set_pe(false));
     }
@@ -502,11 +592,11 @@ impl embedded_hal::i2c::Error for Error {
     }
 }
 
-impl<'d, T: Instance, TXDMA, RXDMA> embedded_hal::i2c::ErrorType for I2c<'d, T, TXDMA, RXDMA> {
+impl<'d, T: Instance, M: Mode> embedded_hal::i2c::ErrorType for I2c<'d, T, M> {
     type Error = Error;
 }
 
-impl<'d, T: Instance> embedded_hal::i2c::I2c for I2c<'d, T, NoDma, NoDma> {
+impl<'d, T: Instance, M: Mode> embedded_hal::i2c::I2c for I2c<'d, T, M> {
     fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
         self.blocking_read(address, read)
     }
@@ -532,7 +622,7 @@ impl<'d, T: Instance> embedded_hal::i2c::I2c for I2c<'d, T, NoDma, NoDma> {
 
 // eh02 compatible
 
-impl<'d, T: Instance> embedded_hal_02::blocking::i2c::Read for I2c<'d, T> {
+impl<'d, T: Instance, M: Mode> embedded_hal_02::blocking::i2c::Read for I2c<'d, T, M> {
     type Error = Error;
 
     fn read(&mut self, address: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
@@ -540,7 +630,7 @@ impl<'d, T: Instance> embedded_hal_02::blocking::i2c::Read for I2c<'d, T> {
     }
 }
 
-impl<'d, T: Instance> embedded_hal_02::blocking::i2c::Write for I2c<'d, T> {
+impl<'d, T: Instance, M: Mode> embedded_hal_02::blocking::i2c::Write for I2c<'d, T, M> {
     type Error = Error;
 
     fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
@@ -548,10 +638,148 @@ impl<'d, T: Instance> embedded_hal_02::blocking::i2c::Write for I2c<'d, T> {
     }
 }
 
-impl<'d, T: Instance> embedded_hal_02::blocking::i2c::WriteRead for I2c<'d, T> {
+impl<'d, T: Instance, M: Mode> embedded_hal_02::blocking::i2c::WriteRead for I2c<'d, T, M> {
     type Error = Error;
 
     fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
         self.blocking_write_read(address, write, read)
     }
+}
+
+/// Frame type in I2C transaction.
+///
+/// This tells each method what kind of framing to use, to generate a (repeated) start condition (ST
+/// or SR), and/or a stop condition (SP). For read operations, this also controls whether to send an
+/// ACK or NACK after the last byte received.
+///
+/// For write operations, the following options are identical because they differ only in the (N)ACK
+/// treatment relevant for read operations:
+///
+/// - `FirstFrame` and `FirstAndNextFrame`
+/// - `NextFrame` and `LastFrameNoStop`
+///
+/// Abbreviations used below:
+///
+/// - `ST` = start condition
+/// - `SR` = repeated start condition
+/// - `SP` = stop condition
+/// - `ACK`/`NACK` = last byte in read operation
+#[derive(Copy, Clone)]
+#[allow(dead_code)]
+enum FrameOptions {
+    /// `[ST/SR]+[NACK]+[SP]` First frame (of this type) in transaction and also last frame overall.
+    FirstAndLastFrame,
+    /// `[ST/SR]+[NACK]` First frame of this type in transaction, last frame in a read operation but
+    /// not the last frame overall.
+    FirstFrame,
+    /// `[ST/SR]+[ACK]` First frame of this type in transaction, neither last frame overall nor last
+    /// frame in a read operation.
+    FirstAndNextFrame,
+    /// `[ACK]` Middle frame in a read operation (neither first nor last).
+    NextFrame,
+    /// `[NACK]+[SP]` Last frame overall in this transaction but not the first frame.
+    LastFrame,
+    /// `[NACK]` Last frame in a read operation but not last frame overall in this transaction.
+    LastFrameNoStop,
+}
+
+#[allow(dead_code)]
+impl FrameOptions {
+    /// Sends start or repeated start condition before transfer.
+    fn send_start(self) -> bool {
+        match self {
+            Self::FirstAndLastFrame | Self::FirstFrame | Self::FirstAndNextFrame => true,
+            Self::NextFrame | Self::LastFrame | Self::LastFrameNoStop => false,
+        }
+    }
+
+    /// Sends stop condition after transfer.
+    fn send_stop(self) -> bool {
+        match self {
+            Self::FirstAndLastFrame | Self::LastFrame => true,
+            Self::FirstFrame | Self::FirstAndNextFrame | Self::NextFrame | Self::LastFrameNoStop => false,
+        }
+    }
+
+    /// Sends NACK after last byte received, indicating end of read operation.
+    fn send_nack(self) -> bool {
+        match self {
+            Self::FirstAndLastFrame | Self::FirstFrame | Self::LastFrame | Self::LastFrameNoStop => true,
+            Self::FirstAndNextFrame | Self::NextFrame => false,
+        }
+    }
+}
+
+/// Iterates over operations in transaction.
+///
+/// Returns necessary frame options for each operation to uphold the [transaction contract] and have
+/// the right start/stop/(N)ACK conditions on the wire.
+///
+/// [transaction contract]: embedded_hal_1::i2c::I2c::transaction
+#[allow(dead_code)]
+fn operation_frames<'a, 'b: 'a>(
+    operations: &'a mut [embedded_hal::i2c::Operation<'b>],
+) -> Result<impl IntoIterator<Item = (&'a mut embedded_hal::i2c::Operation<'b>, FrameOptions)>, Error> {
+    use core::iter;
+
+    use embedded_hal::i2c::Operation::{Read, Write};
+
+    // Check empty read buffer before starting transaction. Otherwise, we would risk halting with an
+    // error in the middle of the transaction.
+    //
+    // In principle, we could allow empty read frames within consecutive read operations, as long as
+    // at least one byte remains in the final (merged) read operation, but that makes the logic more
+    // complicated and error-prone.
+    if operations.iter().any(|op| match op {
+        Read(read) => read.is_empty(),
+        Write(_) => false,
+    }) {
+        return Err(Error::Overrun);
+    }
+
+    let mut operations = operations.iter_mut().peekable();
+
+    let mut next_first_frame = true;
+
+    Ok(iter::from_fn(move || {
+        let Some(op) = operations.next() else {
+            return None;
+        };
+
+        // Is `op` first frame of its type?
+        let first_frame = next_first_frame;
+        let next_op = operations.peek();
+
+        // Get appropriate frame options as combination of the following properties:
+        //
+        // - For each first operation of its type, generate a (repeated) start condition.
+        // - For the last operation overall in the entire transaction, generate a stop condition.
+        // - For read operations, check the next operation: if it is also a read operation, we merge
+        //   these and send ACK for all bytes in the current operation; send NACK only for the final
+        //   read operation's last byte (before write or end of entire transaction) to indicate last
+        //   byte read and release the bus for transmission of the bus master's next byte (or stop).
+        //
+        // We check the third property unconditionally, i.e. even for write opeartions. This is okay
+        // because the resulting frame options are identical for write operations.
+        let frame = match (first_frame, next_op) {
+            (true, None) => FrameOptions::FirstAndLastFrame,
+            (true, Some(Read(_))) => FrameOptions::FirstAndNextFrame,
+            (true, Some(Write(_))) => FrameOptions::FirstFrame,
+            //
+            (false, None) => FrameOptions::LastFrame,
+            (false, Some(Read(_))) => FrameOptions::NextFrame,
+            (false, Some(Write(_))) => FrameOptions::LastFrameNoStop,
+        };
+
+        // Pre-calculate if `next_op` is the first operation of its type. We do this here and not at
+        // the beginning of the loop because we hand out `op` as iterator value and cannot access it
+        // anymore in the next iteration.
+        next_first_frame = match (&op, next_op) {
+            (_, None) => false,
+            (Read(_), Some(Write(_))) | (Write(_), Some(Read(_))) => true,
+            (Read(_), Some(Read(_))) | (Write(_), Some(Write(_))) => false,
+        };
+
+        Some((op, frame))
+    }))
 }
