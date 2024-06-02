@@ -31,7 +31,7 @@ async fn main(spawner: Spawner) -> ! {
     println!("CHIP signature => {}", hal::signature::chip_id().name());
     println!("Clocks {:?}", hal::rcc::clocks());
 
-    // let mut led = Output::new(p.PC4, Level::Low, Default::default());
+    // let mut led = Output::new(p.PB1, Level::Low, Default::default());
 
     spawner.spawn(blink(p.PB1.degrade(), 110)).unwrap();
 

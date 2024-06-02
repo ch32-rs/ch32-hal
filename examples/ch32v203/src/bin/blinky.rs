@@ -10,12 +10,10 @@ use {ch32_hal as hal, panic_halt as _};
 fn main() -> ! {
     let p = hal::init(Default::default());
 
-    let mut led = Output::new(p.PB8, Level::Low, Default::default());
+    let mut led = Output::new(p.PA15, Level::Low, Default::default());
     loop {
         led.toggle();
 
-        unsafe {
-            riscv::asm::delay(1000000);
-        }
+        riscv::asm::delay(1000000);
     }
 }

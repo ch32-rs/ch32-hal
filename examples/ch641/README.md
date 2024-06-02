@@ -1,5 +1,9 @@
 # ch641-examples
 
+Note that the official wireless charging functionality is not open source.
+
+According to the datasheet, ISP pin is also named PB6. No GPIO function is assigned to this pin.
+
 ## Boards
 
 ### CH641P-R0-1v0
@@ -10,7 +14,7 @@ Official EVT
 
 Dino-Board is a development board for CH641. It is designed to be compatible with the official CH641P-R0-1v0 board.
 
-(link coming soon)
+Link: <https://oshwhub.com/andelf/dino-board>
 
 - LED1: PB1
 - LED2: PA6
