@@ -5,7 +5,7 @@
 use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_time::Timer;
-use hal::dma::NoDma;
+
 use hal::gpio::{Level, Output};
 use hal::i2c::I2c;
 use hal::mode::Blocking;

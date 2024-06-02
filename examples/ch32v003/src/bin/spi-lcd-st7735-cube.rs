@@ -11,7 +11,7 @@ use embedded_graphics::pixelcolor::raw::ToBytes;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle};
-use hal::dma::NoDma;
+
 use hal::gpio::{Level, Output, Pin};
 use hal::prelude::*;
 use hal::spi::Spi;

@@ -6,7 +6,6 @@ use hal::delay::Delay;
 use hal::gpio::{Level, Output};
 use hal::println;
 use hal::usart::UartTx;
-use qingke::riscv;
 use {ch32_hal as hal, panic_halt as _};
 
 #[qingke_rt::entry]

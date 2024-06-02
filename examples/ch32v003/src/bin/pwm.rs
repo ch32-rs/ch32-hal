@@ -3,7 +3,6 @@
 #![feature(type_alias_impl_trait)]
 
 use hal::delay::Delay;
-use hal::println;
 use hal::time::Hertz;
 use hal::timer::low_level::CountingMode;
 use hal::timer::simple_pwm::{PwmPin, SimplePwm};

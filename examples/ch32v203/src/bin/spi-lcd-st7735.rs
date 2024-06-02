@@ -20,7 +20,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle};
 use embedded_graphics::text::{Alignment, Text};
 use embedded_hal::delay::DelayNs;
-use hal::dma::NoDma;
+
 use hal::gpio::{AnyPin, Level, Output, Pin};
 use hal::prelude::*;
 use hal::spi::Spi;
