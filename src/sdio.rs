@@ -11,8 +11,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use sdio_host::{BusWidth, CardCapacity, CardStatus, CurrentState, SDStatus, CID, CSD, OCR, SCR};
 
 use crate::dma::NoDma;
-use crate::gpio::sealed::{AFType, Pin as SealedPin};
-use crate::gpio::{AnyPin, Speed};
+use crate::gpio::{AFType, AnyPin, SealedPin, Speed};
 use crate::internal::drop::OnDrop;
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::sdio::Sdio as RegBlock;
