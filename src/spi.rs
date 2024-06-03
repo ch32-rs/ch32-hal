@@ -22,7 +22,7 @@ use pac::spi::vals::BaudRate;
 use pac::spi::Spi as Regs;
 
 use crate::dma::{slice_ptr_parts, word, ChannelAndRequest};
-use crate::gpio::sealed::AFType;
+use crate::gpio::AFType;
 use crate::gpio::{AnyPin, Pull, Speed};
 use crate::mode::{Async, Blocking, Mode as PeriMode};
 use crate::time::Hertz;
@@ -626,7 +626,7 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
 
 impl<'d, T: Instance, M: PeriMode> Drop for Spi<'d, T, M> {
     fn drop(&mut self) {
-        use crate::gpio::sealed::Pin;
+        use crate::gpio::SealedPin;
 
         self.sck.as_ref().map(|x| x.set_as_disconnected());
         self.mosi.as_ref().map(|x| x.set_as_disconnected());

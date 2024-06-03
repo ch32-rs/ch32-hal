@@ -274,7 +274,7 @@ fn main() {
             let clk = format_ident!("{}", rcc.bus_clock.to_ascii_lowercase());
 
             g.extend(quote! {
-                impl crate::peripheral::sealed::RccPeripheral for peripherals::#pname {
+                impl crate::peripheral::SealedRccPeripheral for peripherals::#pname {
                     fn frequency() -> crate::time::Hertz {
                         crate::rcc::clocks().#clk
                     }
@@ -296,7 +296,7 @@ fn main() {
             let set_remap_field = format_ident!("set_{}", remap.field.to_ascii_lowercase());
 
             g.extend(quote! {
-                impl crate::peripheral::sealed::RemapPeripheral for peripherals::#pname {
+                impl crate::peripheral::SealedRemapPeripheral for peripherals::#pname {
                     fn set_remap(remap: u8) {
                         crate::pac::AFIO.#remap_reg().modify(|w| w.#set_remap_field(unsafe { core::mem::transmute(remap) }));
                     }

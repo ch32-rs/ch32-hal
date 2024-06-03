@@ -1,6 +1,8 @@
 use core::marker::PhantomData;
 use core::ops::Deref;
 
+use critical_section::CriticalSection;
+
 /// An exclusive reference to a peripheral.
 ///
 /// This is functionally the same as a `&'a mut T`. There's a few advantages in having
@@ -306,26 +308,24 @@ macro_rules! impl_peripheral {
     };
 }
 
-pub(crate) mod sealed {
-    use critical_section::CriticalSection;
+pub(crate) trait SealedRccPeripheral {
+    fn frequency() -> crate::time::Hertz;
+    fn enable_and_reset_with_cs(cs: CriticalSection);
+    fn disable_with_cs(cs: CriticalSection);
 
-    pub trait RccPeripheral {
-        fn frequency() -> crate::time::Hertz;
-        fn enable_and_reset_with_cs(cs: CriticalSection);
-        fn disable_with_cs(cs: CriticalSection);
-
-        fn enable_and_reset() {
-            critical_section::with(|cs| Self::enable_and_reset_with_cs(cs))
-        }
-        fn disable() {
-            critical_section::with(|cs| Self::disable_with_cs(cs))
-        }
+    fn enable_and_reset() {
+        critical_section::with(|cs| Self::enable_and_reset_with_cs(cs))
     }
-
-    pub trait RemapPeripheral {
-        fn set_remap(remap: u8);
+    fn disable() {
+        critical_section::with(|cs| Self::disable_with_cs(cs))
     }
 }
 
-pub trait RccPeripheral: sealed::RccPeripheral + 'static {}
-pub trait RemapPeripheral: sealed::RemapPeripheral + 'static {}
+pub(crate) trait SealedRemapPeripheral {
+    fn set_remap(remap: u8);
+}
+
+#[allow(private_bounds)]
+pub trait RccPeripheral: SealedRccPeripheral + 'static {}
+#[allow(private_bounds)]
+pub trait RemapPeripheral: SealedRemapPeripheral + 'static {}

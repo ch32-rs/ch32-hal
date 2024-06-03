@@ -233,8 +233,8 @@ impl<'d, T: Instance> Driver<'d, T> {
         into_ref!(dp, dm);
 
         {
-            //dp.set_as_af_output(crate::gpio::sealed::AFType::OutputPushPull, Speed::High);
-            //dm.set_as_af_output(crate::gpio::sealed::AFType::OutputPushPull, Speed::High);
+            //dp.set_as_af_output(crate::gpio::AFType::OutputPushPull, Speed::High);
+            //dm.set_as_af_output(crate::gpio::AFType::OutputPushPull, Speed::High);
             // 一旦使能了 USBD 模块，作为 UDP 和 UPM 的 GPIO 口会自动连接到内部 USB 收发器，而断开其 GPIO 外设的端口设置。
             // 所以推荐 GPIO 口配置为推挽方式输出低电平，防止在未开启 USBD 功能前，出现 端口不确定状态或连接 PC 主机时，提前通知有 USB 设备接入。
             dp.set_as_output(Speed::High);
