@@ -192,11 +192,10 @@ impl<'a> Future for ExtiInputFuture<'a> {
     }
 }
 
-pub(crate) mod sealed {
-    pub trait Channel {}
-}
+trait SealedChannel {}
 
-pub trait Channel: sealed::Channel + Sized {
+#[allow(private_bounds)]
+pub trait Channel: SealedChannel + Sized {
     fn number(&self) -> u8;
     fn degrade(self) -> AnyChannel {
         AnyChannel {
@@ -209,7 +208,7 @@ pub struct AnyChannel {
     number: u8,
 }
 impl_peripheral!(AnyChannel);
-impl sealed::Channel for AnyChannel {}
+impl SealedChannel for AnyChannel {}
 impl Channel for AnyChannel {
     fn number(&self) -> u8 {
         self.number
@@ -218,7 +217,7 @@ impl Channel for AnyChannel {
 
 macro_rules! impl_exti {
     ($type:ident, $number:expr) => {
-        impl sealed::Channel for peripherals::$type {}
+        impl SealedChannel for peripherals::$type {}
         impl Channel for peripherals::$type {
             fn number(&self) -> u8 {
                 $number

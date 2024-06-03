@@ -188,7 +188,7 @@ macro_rules! impl_adc_pin {
 
         impl crate::adc::SealedAdcPin<peripherals::$inst> for crate::peripherals::$pin {
             fn set_as_analog(&mut self) {
-                <Self as crate::gpio::sealed::Pin>::set_as_analog(self);
+                <Self as crate::gpio::SealedPin>::set_as_analog(self);
             }
 
             fn channel(&self) -> u8 {

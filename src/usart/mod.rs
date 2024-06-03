@@ -20,7 +20,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use futures::future::{select, Either};
 
 use crate::dma::ChannelAndRequest;
-use crate::gpio::sealed::{AFType, Pin};
+use crate::gpio::{AFType, SealedPin};
 use crate::gpio::{AnyPin, Pull, Speed};
 use crate::internal::drop::OnDrop;
 use crate::interrupt::typelevel::Interrupt;

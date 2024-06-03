@@ -16,7 +16,6 @@ use core::convert::Infallible;
 use critical_section::CriticalSection;
 use pac::gpio::vals;
 
-use self::sealed::Pin as _;
 use crate::{exti, impl_peripheral, into_ref, pac, peripherals, Peripheral, PeripheralRef};
 
 /// Speed, for output mode
@@ -429,169 +428,165 @@ pub enum OutputType {
     OpenDrain,
 }
 
-impl From<OutputType> for sealed::AFType {
+impl From<OutputType> for AFType {
     fn from(value: OutputType) -> Self {
         match value {
             #[cfg(not(gpio_x0))]
-            OutputType::OpenDrain => sealed::AFType::OutputOpenDrain,
-            OutputType::PushPull => sealed::AFType::OutputPushPull,
+            OutputType::OpenDrain => AFType::OutputOpenDrain,
+            OutputType::PushPull => AFType::OutputPushPull,
         }
     }
 }
 
-pub(crate) mod sealed {
-    use pac::gpio::vals::{Cnf, Mode};
+#[derive(Debug, Copy, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum AFType {
+    /// Output, drive the pin both high or low.
+    OutputPushPull = 0b10,
+    /// Output, drive the pin low, or don't drive it at all if the output level is high.
+    #[cfg(not(gpio_x0))]
+    OutputOpenDrain = 0b11,
+}
 
-    use super::*;
+impl From<AFType> for vals::Cnf {
+    fn from(value: AFType) -> Self {
+        match value {
+            AFType::OutputPushPull => vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
+            #[cfg(not(gpio_x0))]
+            AFType::OutputOpenDrain => vals::Cnf::AF_OPEN_DRAIN_OUT,
+        }
+    }
+}
 
-    /// Alternate function type settings, CNF, when MODE>0b00
-    #[derive(Debug, Copy, Clone)]
-    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-    pub enum AFType {
-        /// Output, drive the pin both high or low.
-        OutputPushPull = 0b10,
-        /// Output, drive the pin low, or don't drive it at all if the output level is high.
+/// Alternate function type settings, CNF, when MODE>0b00
+
+pub(crate) trait SealedPin {
+    fn pin_port(&self) -> u8;
+
+    #[inline]
+    fn _pin(&self) -> u8 {
+        self.pin_port() % 32
+    }
+    #[inline]
+    fn _port(&self) -> u8 {
+        self.pin_port() / 32
+    }
+
+    #[inline]
+    fn block(&self) -> pac::gpio::Gpio {
+        pac::GPIO(self._port() as _)
+    }
+
+    /// Set the output as high.
+    #[inline]
+    fn set_high(&self) {
+        let n = self._pin() as _;
         #[cfg(not(gpio_x0))]
-        OutputOpenDrain = 0b11,
-    }
-
-    impl From<AFType> for Cnf {
-        fn from(value: AFType) -> Self {
-            match value {
-                AFType::OutputPushPull => Cnf::PULL_IN__AF_PUSH_PULL_OUT,
-                #[cfg(not(gpio_x0))]
-                AFType::OutputOpenDrain => Cnf::AF_OPEN_DRAIN_OUT,
+        self.block().bshr().write(|w| w.set_bs(n, true));
+        #[cfg(gpio_x0)]
+        {
+            if n >= 16 {
+                self.block().bsxr().write(|w| w.set_bs(n - 16, true)); // extended BS
+            } else {
+                self.block().bshr().write(|w| w.set_bs(n, true));
             }
         }
     }
 
-    pub trait Pin {
-        fn pin_port(&self) -> u8;
-
-        #[inline]
-        fn _pin(&self) -> u8 {
-            self.pin_port() % 32
+    /// Set the output as low.
+    #[inline]
+    fn set_low(&self) {
+        let n = self._pin() as _;
+        #[cfg(not(gpio_x0))]
+        self.block().bshr().write(|w| w.set_br(n, true));
+        #[cfg(gpio_x0)]
+        {
+            if n >= 16 {
+                self.block().bsxr().write(|w| w.set_br(n - 16, true)); // extended BS
+            } else {
+                self.block().bshr().write(|w| w.set_br(n, true));
+            }
         }
-        #[inline]
-        fn _port(&self) -> u8 {
-            self.pin_port() / 32
-        }
+    }
 
-        #[inline]
-        fn block(&self) -> pac::gpio::Gpio {
-            pac::GPIO(self._port() as _)
-        }
+    #[inline]
+    fn set_mode_cnf(&self, mode: vals::Mode, cnf: vals::Cnf) {
+        let pin = self._pin() as usize;
+        let block = self.block();
 
-        /// Set the output as high.
-        #[inline]
-        fn set_high(&self) {
-            let n = self._pin() as _;
-            #[cfg(not(gpio_x0))]
-            self.block().bshr().write(|w| w.set_bs(n, true));
+        match pin / 8 {
+            0 => {
+                block.cfglr().modify(|w| {
+                    w.set_cnf(pin % 8, cnf);
+                    w.set_mode(pin % 8, mode);
+                });
+            }
+            #[cfg(not(gpio_v0))]
+            1 => {
+                block.cfghr().modify(|w| {
+                    w.set_cnf(pin % 8, cnf);
+                    w.set_mode(pin % 8, mode);
+                });
+            }
+            // only for GPIO with 24 lines
             #[cfg(gpio_x0)]
-            {
-                if n >= 16 {
-                    self.block().bsxr().write(|w| w.set_bs(n - 16, true)); // extended BS
-                } else {
-                    self.block().bshr().write(|w| w.set_bs(n, true));
-                }
+            2 => {
+                block.cfgxr().modify(|w| {
+                    w.set_cnf(pin % 8, cnf);
+                    w.set_mode(pin % 8, mode);
+                });
             }
+            _ => unreachable!(),
         }
+    }
 
-        /// Set the output as low.
-        #[inline]
-        fn set_low(&self) {
-            let n = self._pin() as _;
-            #[cfg(not(gpio_x0))]
-            self.block().bshr().write(|w| w.set_br(n, true));
-            #[cfg(gpio_x0)]
-            {
-                if n >= 16 {
-                    self.block().bsxr().write(|w| w.set_br(n - 16, true)); // extended BS
-                } else {
-                    self.block().bshr().write(|w| w.set_br(n, true));
-                }
-            }
+    #[inline]
+    fn set_as_output(&self, speed: Speed) {
+        self.set_mode_cnf(speed.into(), vals::Cnf::ANALOG_IN__PUSH_PULL_OUT);
+    }
+
+    #[inline]
+    fn set_as_input(&self, pull: Pull) {
+        self.set_mode_cnf(vals::Mode::INPUT, pull.into());
+        self.set_pull(pull);
+    }
+
+    #[inline]
+    fn set_pull(&self, pull: Pull) {
+        let pin = self._pin() as _;
+
+        match pull {
+            Pull::Up => self.block().outdr().modify(|w| w.set_odr(pin, true)),
+            Pull::Down => self.block().outdr().modify(|w| w.set_odr(pin, false)),
+            _ => {}
         }
+    }
 
-        #[inline]
-        fn set_mode_cnf(&self, mode: Mode, cnf: Cnf) {
-            let pin = self._pin() as usize;
-            let block = self.block();
+    /// Only one type, alternate function + push pull
+    #[inline]
+    fn set_as_af_output(&self, af_type: AFType, speed: Speed) {
+        self.set_mode_cnf(speed.into(), af_type.into());
+    }
 
-            match pin / 8 {
-                0 => {
-                    block.cfglr().modify(|w| {
-                        w.set_cnf(pin % 8, cnf);
-                        w.set_mode(pin % 8, mode);
-                    });
-                }
-                #[cfg(not(gpio_v0))]
-                1 => {
-                    block.cfghr().modify(|w| {
-                        w.set_cnf(pin % 8, cnf);
-                        w.set_mode(pin % 8, mode);
-                    });
-                }
-                // only for GPIO with 24 lines
-                #[cfg(gpio_x0)]
-                2 => {
-                    block.cfgxr().modify(|w| {
-                        w.set_cnf(pin % 8, cnf);
-                        w.set_mode(pin % 8, mode);
-                    });
-                }
-                _ => unreachable!(),
-            }
-        }
+    /// Analog mode, both input and output
+    #[inline]
+    fn set_as_analog(&self) {
+        self.set_mode_cnf(vals::Mode::INPUT, vals::Cnf::ANALOG_IN__PUSH_PULL_OUT);
+    }
 
-        #[inline]
-        fn set_as_output(&self, speed: Speed) {
-            self.set_mode_cnf(speed.into(), Cnf::ANALOG_IN__PUSH_PULL_OUT);
-        }
-
-        #[inline]
-        fn set_as_input(&self, pull: Pull) {
-            self.set_mode_cnf(vals::Mode::INPUT, pull.into());
-            self.set_pull(pull);
-        }
-
-        #[inline]
-        fn set_pull(&self, pull: Pull) {
-            let pin = self._pin() as _;
-
-            match pull {
-                Pull::Up => self.block().outdr().modify(|w| w.set_odr(pin, true)),
-                Pull::Down => self.block().outdr().modify(|w| w.set_odr(pin, false)),
-                _ => {}
-            }
-        }
-
-        /// Only one type, alternate function + push pull
-        #[inline]
-        fn set_as_af_output(&self, af_type: AFType, speed: Speed) {
-            self.set_mode_cnf(speed.into(), af_type.into());
-        }
-
-        /// Analog mode, both input and output
-        #[inline]
-        fn set_as_analog(&self) {
-            self.set_mode_cnf(vals::Mode::INPUT, vals::Cnf::ANALOG_IN__PUSH_PULL_OUT);
-        }
-
-        /// Set the pin as "disconnected", ie doing nothing and consuming the lowest
-        /// amount of power possible.
-        ///
-        /// This is currently the same as set_as_analog but is semantically different really.
-        /// Drivers should set_as_disconnected pins when dropped.
-        #[inline]
-        fn set_as_disconnected(&self) {
-            self.set_as_analog();
-        }
+    /// Set the pin as "disconnected", ie doing nothing and consuming the lowest
+    /// amount of power possible.
+    ///
+    /// This is currently the same as set_as_analog but is semantically different really.
+    /// Drivers should set_as_disconnected pins when dropped.
+    #[inline]
+    fn set_as_disconnected(&self) {
+        self.set_as_analog();
     }
 }
 
-pub trait Pin: Peripheral<P = Self> + Into<AnyPin> + sealed::Pin + Sized + 'static {
+#[allow(private_bounds)]
+pub trait Pin: Peripheral<P = Self> + Into<AnyPin> + SealedPin + Sized + 'static {
     type ExtiChannel: crate::exti::Channel;
 
     /// Number of the pin within the port (0..31)
@@ -637,7 +632,7 @@ impl Pin for AnyPin {
     #[cfg(exti)]
     type ExtiChannel = exti::AnyChannel;
 }
-impl sealed::Pin for AnyPin {
+impl SealedPin for AnyPin {
     #[inline]
     fn pin_port(&self) -> u8 {
         self.pin_port
@@ -651,7 +646,7 @@ foreach_pin!(
             type ExtiChannel = peripherals::$exti_ch;
         }
 
-        impl sealed::Pin for peripherals::$pin_name {
+        impl SealedPin for peripherals::$pin_name {
             #[inline]
             fn pin_port(&self) -> u8 {
                 $port_num * 32 + $pin_num
@@ -670,7 +665,7 @@ foreach_pin!(
 
 pub(crate) unsafe fn init(_cs: CriticalSection) {
     #[cfg(afio)]
-    <crate::peripherals::AFIO as crate::peripheral::sealed::RccPeripheral>::enable_and_reset_with_cs(_cs);
+    <crate::peripherals::AFIO as crate::peripheral::SealedRccPeripheral>::enable_and_reset_with_cs(_cs);
 
     crate::_generated::init_gpio();
 }

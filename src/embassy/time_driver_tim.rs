@@ -19,7 +19,7 @@ use qingke_rt::interrupt;
 
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::timer::{regs, vals, Gptm};
-use crate::peripheral::sealed::RccPeripheral;
+use crate::peripheral::SealedRccPeripheral;
 use crate::peripherals;
 // for ::regs()
 use crate::timer::{CoreInstance, GeneralInstance16bit};
@@ -178,7 +178,7 @@ impl RtcDriver {
     fn init(&'static self, cs: critical_section::CriticalSection) {
         let r = regs_gp16();
 
-        <T as RccPeripheral>::enable_and_reset_with_cs(cs);
+        <T as SealedRccPeripheral>::enable_and_reset_with_cs(cs);
 
         let timer_freq = T::frequency();
 

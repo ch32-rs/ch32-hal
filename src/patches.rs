@@ -7,7 +7,7 @@
 
 #[cfg(peri_i2c2)]
 mod i2c2 {
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::I2C2 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::I2C2 {
         fn set_remap(_remap: u8) {}
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::I2C2 {}
@@ -16,7 +16,7 @@ mod i2c2 {
 /// CH32V2, CH32V3
 #[cfg(all(any(ch32v2, ch32v3), peri_usart1))]
 mod usart1 {
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::USART1 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::USART1 {
         fn set_remap(remap: u8) {
             let afio = &crate::pac::AFIO;
             afio.pcfr1().modify(|w| w.set_usart1_rm(remap & 0b1 != 0));
@@ -28,7 +28,7 @@ mod usart1 {
 
 #[cfg(all(any(ch32v0), peri_usart1))]
 mod usart1 {
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::USART1 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::USART1 {
         fn set_remap(remap: u8) {
             let afio = &crate::pac::AFIO;
             afio.pcfr1().modify(|w| w.set_usart1_rm(remap & 0b1 != 0));
@@ -40,7 +40,7 @@ mod usart1 {
 
 #[cfg(all(peri_i2c1, ch32v0))]
 mod i2c1 {
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::I2C1 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::I2C1 {
         fn set_remap(remap: u8) {
             let afio = &crate::pac::AFIO;
             afio.pcfr1().modify(|w| w.set_i2c1_rm(remap & 0b1 != 0));
@@ -52,7 +52,7 @@ mod i2c1 {
 
 #[cfg(peri_spi2)]
 mod spi2 {
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::SPI2 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::SPI2 {
         fn set_remap(_remap: u8) {}
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::SPI2 {}
@@ -60,7 +60,7 @@ mod spi2 {
 
 #[cfg(all(peri_tim5))]
 mod tim5 {
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::TIM5 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::TIM5 {
         fn set_remap(_remap: u8) {}
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::TIM5 {}
@@ -68,7 +68,7 @@ mod tim5 {
 
 #[cfg(all(peri_tim6))]
 mod tim6 {
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::TIM6 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::TIM6 {
         fn set_remap(_remap: u8) {}
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::TIM6 {}
@@ -76,7 +76,7 @@ mod tim6 {
 
 #[cfg(all(peri_tim7))]
 mod tim7 {
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::TIM7 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::TIM7 {
         fn set_remap(_remap: u8) {}
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::TIM7 {}
@@ -84,7 +84,7 @@ mod tim7 {
 
 #[cfg(all(peri_sdio))]
 mod sdio {
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::SDIO {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::SDIO {
         fn set_remap(_remap: u8) {}
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::SDIO {}
@@ -92,7 +92,7 @@ mod sdio {
 
 #[cfg(ch32l1)]
 mod ch32l1 {
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::USART1 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::USART1 {
         fn set_remap(remap: u8) {
             let afio = &crate::pac::AFIO;
             afio.pcfr2().modify(|w| w.set_usart1_rm_h((remap & 0b110) >> 1));
@@ -101,7 +101,7 @@ mod ch32l1 {
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::USART1 {}
 
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::USART2 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::USART2 {
         fn set_remap(remap: u8) {
             let afio = &crate::pac::AFIO;
             afio.pcfr2().modify(|w| w.set_usart2_rm_h(remap & 0b10 != 0));
@@ -110,7 +110,7 @@ mod ch32l1 {
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::USART2 {}
 
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::SPI1 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::SPI1 {
         fn set_remap(remap: u8) {
             let afio = &crate::pac::AFIO;
             afio.pcfr2().modify(|w| w.set_spi1_rm_h(remap & 0b10 != 0));
@@ -119,7 +119,7 @@ mod ch32l1 {
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::SPI1 {}
 
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::TIM1 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::TIM1 {
         fn set_remap(remap: u8) {
             let afio = &crate::pac::AFIO;
             afio.pcfr2().modify(|w| w.set_tim1_rm_h(remap & 0b100 != 0));
@@ -128,7 +128,7 @@ mod ch32l1 {
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::TIM1 {}
 
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::TIM2 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::TIM2 {
         fn set_remap(remap: u8) {
             let afio = &crate::pac::AFIO;
             afio.pcfr2().modify(|w| w.set_tim2_rm_h(remap & 0b100 != 0));
@@ -137,7 +137,7 @@ mod ch32l1 {
     }
     impl crate::peripheral::RemapPeripheral for crate::peripherals::TIM2 {}
 
-    impl crate::peripheral::sealed::RemapPeripheral for crate::peripherals::I2C1 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::I2C1 {
         fn set_remap(remap: u8) {
             let afio = &crate::pac::AFIO;
             afio.pcfr2().modify(|w| w.set_i2c1_rm_h(remap & 0b10 != 0));

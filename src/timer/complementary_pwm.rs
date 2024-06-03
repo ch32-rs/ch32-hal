@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use super::low_level::{CountingMode, OutputPolarity, Timer};
 use super::simple_pwm::{Ch1, Ch2, Ch3, Ch4, PwmPin};
 use super::{AdvancedInstance, Channel, Channel1ComplementaryPin, Channel2ComplementaryPin, Channel3ComplementaryPin};
-use crate::gpio::sealed::AFType;
+use crate::gpio::AFType;
 use crate::gpio::AnyPin;
 use crate::pac::timer::vals::Ckd;
 use crate::time::Hertz;
