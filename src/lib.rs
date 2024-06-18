@@ -50,7 +50,7 @@ mod interrupt_ext;
 
 pub use crate::_generated::{peripherals, Peripherals};
 
-#[cfg(any(systick_rv2, systick_rv3))]
+#[cfg(any(systick_rv2, systick_rv3, systick_rv4))]
 pub mod delay;
 pub mod dma;
 
@@ -115,7 +115,7 @@ pub fn init(config: Config) -> Peripherals {
     unsafe {
         rcc::init(config.rcc);
 
-        #[cfg(any(systick_rv2, systick_rv3))]
+        #[cfg(any(systick_rv2, systick_rv3, systick_rv4))]
         delay::Delay::init();
     }
 
