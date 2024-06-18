@@ -3,39 +3,19 @@
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 
-use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
-use hal::gpio::{AnyPin, Level, Output, Pin};
+use hal::delay::Delay;
+use hal::gpio::{Level, Output};
 use {ch32_hal as hal, panic_halt as _};
 
-#[embassy_executor::task(pool_size = 3)]
-async fn blink(pin: AnyPin, interval_ms: u64) {
-    let mut led = Output::new(pin, Level::Low, Default::default());
-
-    loop {
-        led.set_high();
-        Timer::after(Duration::from_millis(interval_ms)).await;
-        led.set_low();
-        Timer::after(Duration::from_millis(interval_ms)).await;
-    }
-}
-
-#[embassy_executor::main(entry = "qingke_rt::entry")]
-async fn main(spawner: Spawner) -> ! {
-    hal::debug::SDIPrint::enable();
+#[qingke_rt::entry]
+fn main() -> ! {
     let p = hal::init(Default::default());
-    hal::println!("init embassy");
 
-    hal::embassy::init();
+    let mut led = Output::new(p.PA15, Level::Low, Default::default());
+    let mut delay = Delay;
 
-    hal::println!("init ok");
-
-    // GPIO
-    spawner.spawn(blink(p.PA15.degrade(), 1000)).unwrap();
-    spawner.spawn(blink(p.PB4.degrade(), 500)).unwrap();
-    // spawner.spawn(blink(p.PB8.degrade(), 100)).unwrap();
     loop {
-        Timer::after_millis(2000).await;
-        hal::println!("tick");
+        led.toggle();
+        delay.delay_ms(1000);
     }
 }
