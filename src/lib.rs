@@ -50,7 +50,7 @@ mod interrupt_ext;
 
 pub use crate::_generated::{peripherals, Peripherals};
 
-#[cfg(any(systick_rv2, systick_rv3, systick_rv4))]
+#[cfg(not(time_driver_systick))]
 pub mod delay;
 pub mod dma;
 
