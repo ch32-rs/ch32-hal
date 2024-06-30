@@ -9,7 +9,7 @@ use hal::{pac, println};
 
 #[qingke_rt::entry]
 fn main() -> ! {
-    hal::debug::SDIPrint::enable();
+    hal::debug::SdiPrint::enable();
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_72MHZ_HSE;
     let p = hal::init(config);

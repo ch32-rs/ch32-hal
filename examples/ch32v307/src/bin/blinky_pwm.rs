@@ -12,7 +12,7 @@ use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) -> ! {
-    hal::debug::SDIPrint::enable();
+    hal::debug::SdiPrint::enable();
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE;
     let p = hal::init(Default::default());

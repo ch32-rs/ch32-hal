@@ -11,7 +11,7 @@ use {ch32_hal as hal, panic_halt as _};
 
 #[qingke_rt::entry]
 fn main() -> ! {
-    hal::debug::SDIPrint::enable();
+    hal::debug::SdiPrint::enable();
     let p = hal::init(Default::default());
 
     let pin = PwmPin::new_ch2::<0>(p.PB3);

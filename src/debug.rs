@@ -16,9 +16,9 @@ mod regs {
     pub const DEBUG_DATA1_ADDRESS: *mut u32 = 0xE00000F8 as *mut u32;
 }
 
-pub struct SDIPrint;
+pub struct SdiPrint;
 
-impl SDIPrint {
+impl SdiPrint {
     pub fn enable() {
         unsafe {
             // Enable SDI print
@@ -33,7 +33,7 @@ impl SDIPrint {
     }
 }
 
-impl core::fmt::Write for SDIPrint {
+impl core::fmt::Write for SdiPrint {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         let mut data = [0u8; 8];
         for chunk in s.as_bytes().chunks(7) {
@@ -44,7 +44,7 @@ impl core::fmt::Write for SDIPrint {
             let data1 = u32::from_le_bytes(data[4..].try_into().unwrap());
             let data0 = u32::from_le_bytes(data[..4].try_into().unwrap());
 
-            while SDIPrint::is_busy() {}
+            while SdiPrint::is_busy() {}
 
             unsafe {
                 core::ptr::write_volatile(regs::DEBUG_DATA1_ADDRESS, data1);
@@ -63,7 +63,7 @@ macro_rules! println {
             use core::fmt::Write;
             use core::writeln;
 
-            writeln!(&mut $crate::debug::SDIPrint, $($arg)*).unwrap();
+            writeln!(&mut $crate::debug::SdiPrint, $($arg)*).unwrap();
         }
     }
 }

@@ -10,7 +10,7 @@ use hal::println;
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) -> ! {
-    hal::debug::SDIPrint::enable();
+    hal::debug::SdiPrint::enable();
     let p = hal::init(Default::default());
     hal::embassy::init();
 
