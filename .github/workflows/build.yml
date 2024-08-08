@@ -15,16 +15,19 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
       - name: Use nightly Rust
         run: |
-          rustup default nightly-2024-06-12
+          rustup default nightly
           rustup component add rust-src
+          rustup update
           rustup target add riscv32imac-unknown-none-elf
           rustup target add riscv32imafc-unknown-none-elf
           rustup target add riscv32i-unknown-none-elf
+          rustup component remove rust-src
+          rustup component add rust-src
       - name: Fetch Deps
         # if this is a pull request
         if: github.event_name == 'pull_request'

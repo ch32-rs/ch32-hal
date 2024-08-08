@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ch32-hal = { path = "../../", features = ["ch32v307vct6", "embassy", "rt"] }
-embassy-executor = { version = "0.5.0", features = [
+ch32-hal = { path = "../../", features = ["ch32v307vct6", "embassy", "rt", "highcode", "time-driver-tim1"] }
+embassy-executor = { version = "0.6.0", features = [
     "nightly",
     "integrated-timers",
     "arch-riscv32",
     "executor-thread",
 ] }
-embassy-time = { version = "0.3.0" }
+embassy-time = "0.3.0"
 nb = "1.1.0"
 
 qingke-rt = "0.2.1"
@@ -28,7 +28,7 @@ panic-halt = "0.2.0"
 display-interface-spi = "0.5.0"
 mipidsi = "0.7.1"
 embedded-graphics = "0.8.1"
-embedded-hal-bus = "0.1.0"
+embedded-hal-bus = "0.2.0"
 
 
 [profile.release]

@@ -9,8 +9,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::i2c::Operation;
 
 use crate::dma::ChannelAndRequest;
-use crate::gpio::AFType;
-use crate::gpio::Speed;
+use crate::gpio::{AFType, Speed};
 use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode};
 // use crate::interrupt::Interrupt;
