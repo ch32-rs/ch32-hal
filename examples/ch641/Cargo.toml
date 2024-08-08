@@ -10,7 +10,7 @@ ch32-hal = { path = "../../", features = [
     "time-driver-tim2",
     "rt",
 ] }
-embassy-executor = { version = "0.5.0", features = [
+embassy-executor = { version = "0.6.0", features = [
     "nightly",
     "integrated-timers",
     "arch-riscv32",

@@ -15,16 +15,19 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
       - name: Use nightly Rust
         run: |
-          rustup default nightly-2024-06-12
+          rustup default nightly
           rustup component add rust-src
+          rustup update
           rustup target add riscv32imac-unknown-none-elf
           rustup target add riscv32imafc-unknown-none-elf
           rustup target add riscv32i-unknown-none-elf
+          # See https://github.com/rust-lang/rust/issues/12880
+          touch ~/.rustup/toolchains/nightly-aarch64-apple-darwin/lib/rustlib/src/rust/Cargo.lock
       - name: Fetch Deps
         # if this is a pull request
         if: github.event_name == 'pull_request'

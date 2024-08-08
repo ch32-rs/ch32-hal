@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
+#![feature(impl_trait_in_assoc_type)]
 
 use embassy_executor::Spawner;
 use embassy_time::Timer;
@@ -36,6 +37,8 @@ async fn main(_spawner: Spawner) -> ! {
     pwm.set_duty(ch, 7000);
     pwm.enable(ch);
 
+    println!("start");
+
     loop {
         for i in 0..100 {
             pwm.set_duty(ch, i * 80);
@@ -45,5 +48,7 @@ async fn main(_spawner: Spawner) -> ! {
             pwm.set_duty(ch, i * 80);
             Timer::after_millis(5).await;
         }
+
+        println!("loop");
     }
 }

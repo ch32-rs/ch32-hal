@@ -1,11 +1,12 @@
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
+#![feature(impl_trait_in_assoc_type)]
 
 use ch32_hal as hal;
 use hal::gpio::{Level, Output};
-use qingke::riscv;
 use hal::println;
+use qingke::riscv;
 
 #[qingke_rt::entry]
 fn main() -> ! {
@@ -23,7 +24,7 @@ fn main() -> ! {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-   // let _ = println!("\n\n\n{}", info);
+    // let _ = println!("\n\n\n{}", info);
 
     loop {}
 }
