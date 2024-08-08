@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
+#![feature(impl_trait_in_assoc_type)]
 
 use ch32_hal as hal;
 use ch32_hal::gpio::Output;
@@ -152,7 +153,6 @@ fn main() -> ! {
             let rgb = hsl_to_rgb([h as f32 / 360.0, 0.900, 0.500]);
             // to GRB
             let color = ((rgb[1] as u32) << 16) | ((rgb[0] as u32) << 8) | (rgb[2] as u32);
-
 
             ws2812.set_color(color);
 

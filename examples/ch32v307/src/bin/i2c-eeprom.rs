@@ -1,11 +1,11 @@
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
+#![feature(impl_trait_in_assoc_type)]
 
 use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-
 use hal::gpio::{AnyPin, Level, Output, Pin, Speed};
 use hal::i2c::I2c;
 use hal::mode::Blocking;

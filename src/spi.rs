@@ -22,8 +22,7 @@ use pac::spi::vals::BaudRate;
 use pac::spi::Spi as Regs;
 
 use crate::dma::{slice_ptr_parts, word, ChannelAndRequest};
-use crate::gpio::AFType;
-use crate::gpio::{AnyPin, Pull, Speed};
+use crate::gpio::{AFType, AnyPin, Pull, Speed};
 use crate::mode::{Async, Blocking, Mode as PeriMode};
 use crate::time::Hertz;
 use crate::{into_ref, pac, peripherals, Peripheral, PeripheralRef};

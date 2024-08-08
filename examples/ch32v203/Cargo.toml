@@ -14,14 +14,14 @@ ch32-hal = { path = "../../", features = [
 #    "memory-x",
 #    "rt",
 #], path = "../../../ch32-data/build/ch32-metapac" }
-embassy-executor = { version = "0.5.0", features = [
+embassy-executor = { version = "0.6.0", features = [
     "nightly",
     "integrated-timers",
     "arch-riscv32",
     "executor-thread",
 ] }
 embassy-time = { version = "0.3.0" }
-embassy-usb = { version = "0.1.0" }
+embassy-usb = { version = "0.3.0" }
 embassy-futures = { version = "0.1.0" }
 
 qingke-rt = "0.2.1"
