@@ -8,6 +8,8 @@
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
+#![feature(impl_trait_in_assoc_type)]
+
 use core::fmt::Write;
 
 use embassy_executor::Spawner;
@@ -20,7 +22,6 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle};
 use embedded_graphics::text::{Alignment, Text};
 use embedded_hal::delay::DelayNs;
-
 use hal::gpio::{AnyPin, Level, Output, Pin};
 use hal::prelude::*;
 use hal::spi::Spi;

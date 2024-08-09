@@ -12,6 +12,8 @@ pub mod time_driver_impl;
 
 // This should be called after global clocks inited
 pub fn init() {
+    crate::pac::PFIC.sctlr().modify(|w| w.set_sevonpend(true));
+
     #[cfg(all(qingke_v4, not(time_driver_timer)))]
     time_driver_impl::init();
 

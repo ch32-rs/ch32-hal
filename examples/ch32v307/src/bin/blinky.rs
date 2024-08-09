@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
+#![feature(impl_trait_in_assoc_type)]
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -21,14 +22,20 @@ async fn blink(pin: AnyPin, interval_ms: u64) {
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(spawner: Spawner) -> ! {
+    hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
+    hal::println!("init embassy");
+
     hal::embassy::init();
+
+    hal::println!("init ok");
 
     // GPIO
     spawner.spawn(blink(p.PA15.degrade(), 1000)).unwrap();
-    spawner.spawn(blink(p.PB4.degrade(), 100)).unwrap();
+    spawner.spawn(blink(p.PB4.degrade(), 500)).unwrap();
     // spawner.spawn(blink(p.PB8.degrade(), 100)).unwrap();
     loop {
         Timer::after_millis(2000).await;
+        hal::println!("tick");
     }
 }
