@@ -120,6 +120,8 @@ impl Default for LsConfig {
     }
 }
 
+// TODO: implement LS clock configuration
+#[allow(unused)]
 impl LsConfig {
     pub(crate) fn init(&self) -> Option<Hertz> {
         todo!()

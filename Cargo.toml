@@ -48,6 +48,7 @@ futures = { version = "0.3.17", default-features = false, features = [
 
 rand_core = "0.6.3"
 sdio-host = "0.5.0"
+embassy-hal-internal = "0.2.0"
 
 [build-dependencies]
 ch32-metapac = { features = [
