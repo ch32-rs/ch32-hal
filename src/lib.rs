@@ -3,6 +3,8 @@
 #![feature(naked_functions)]
 
 pub use ch32_metapac as pac;
+pub(crate) use embassy_hal_internal::{impl_peripheral, peripherals_definition, peripherals_struct};
+pub use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 
 // This must go FIRST so that all the other modules see its macros.
 include!(concat!(env!("OUT_DIR"), "/_macros.rs"));
@@ -41,7 +43,8 @@ pub mod debug;
 pub mod prelude;
 
 mod peripheral;
-pub use peripheral::*;
+pub use peripheral::{RccPeripheral, RemapPeripheral};
+
 // #[cfg(not(ch32v0))]
 mod interrupt_ext;
 
