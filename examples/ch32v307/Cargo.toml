@@ -34,7 +34,6 @@ embedded-graphics = "0.8.1"
 embedded-hal-bus = "0.2.0"
 # for ssd1306
 ssd1306 = "0.9"
-embedded-graphics = "0.8"
 
 
 [profile.release]
