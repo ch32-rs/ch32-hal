@@ -16,7 +16,7 @@ license = "MIT OR Apache-2.0"
 ch32-metapac = { features = [
     "memory-x",
     "rt",
-], git = "https://github.com/ch32-rs/ch32-metapac.git", tag = "ch32-data-0f143d8ce505711e4667002b42b8a34eb9c1d039" }
+], git = "https://github.com/vapor-keeb/ch32-metapac.git", branch = "main" }
 # ch32-metapac = { features = ["memory-x","rt"], path = "../ch32-data/build/ch32-metapac" }
 
 qingke = { version = "0.4.0", features = ["critical-section-impl"] }
@@ -54,7 +54,7 @@ embassy-hal-internal = "0.2.0"
 [build-dependencies]
 ch32-metapac = { features = [
     "metadata",
-], git = "https://github.com/ch32-rs/ch32-metapac.git", tag = "ch32-data-0f143d8ce505711e4667002b42b8a34eb9c1d039" }
+], git = "https://github.com/vapor-keeb/ch32-metapac.git", branch = "main" }
 # ch32-metapac = { default-features = false, features = ["metadata"], path = "../ch32-data/build/ch32-metapac" }
 
 proc-macro2 = "1.0"

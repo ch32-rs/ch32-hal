@@ -385,6 +385,9 @@ fn main() {
         (("sdio", "D6"), quote!(crate::sdio::D6Pin)),
         (("sdio", "D6"), quote!(crate::sdio::D7Pin)),
         (("sdio", "D8"), quote!(crate::sdio::D8Pin)),
+        // otg_fs
+        (("otg", "DP"), quote!(crate::usb::otg_fs::DpPin)),
+        (("otg", "DM"), quote!(crate::usb::otg_fs::DmPin)),
         // USB is splitted into multiple impls
         (("usbd", "DP"), quote!(crate::usbd::DpPin)),
         (("usbd", "DM"), quote!(crate::usbd::DmPin)),
