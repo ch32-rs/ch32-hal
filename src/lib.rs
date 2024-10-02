@@ -136,8 +136,8 @@ macro_rules! bind_interrupts {
 
         $(
             #[allow(non_snake_case)]
-            #[no_mangle]
-            unsafe extern "C" fn $irq() {
+            #[qingke_rt::interrupt]
+            unsafe fn $irq() {
                 $(
                     <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
                 )*

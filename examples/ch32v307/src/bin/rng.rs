@@ -2,6 +2,7 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
+#![feature(naked_functions)]
 
 use ch32_hal as hal;
 use embassy_executor::Spawner;
