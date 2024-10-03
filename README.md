@@ -7,6 +7,11 @@
 
 Rust HAL(Hardware Abstraction Layer) crate for WCH's 32-bit RISC-V microcontrollers.
 
+> **Note**
+> This project is under development. While it's usable for experimentation and testing,
+> it may not be fully stable for production environments.
+> We welcome user feedback and encourage reporting any issues you encounter to help improve the hal crate.
+
 This HAL crates is the [Embassy](https://github.com/embassy-rs/embassy) framework driver for WCH's 32-bit RISC-V microcontrollers.
 
 This HAL crates uses the metapac approach to support multiple chips in the same crate.
