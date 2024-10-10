@@ -7,3 +7,7 @@ mod delay_impl;
 mod delay_impl;
 
 pub use delay_impl::*;
+
+pub unsafe fn init() {
+    Delay::init();
+}

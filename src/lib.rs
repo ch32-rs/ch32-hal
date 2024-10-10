@@ -6,6 +6,9 @@ pub use ch32_metapac as pac;
 pub(crate) use embassy_hal_internal::{impl_peripheral, peripherals_definition, peripherals_struct};
 pub use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 
+#[cfg(feature = "rt")]
+pub use qingke_rt::{entry, interrupt};
+
 // This must go FIRST so that all the other modules see its macros.
 include!(concat!(env!("OUT_DIR"), "/_macros.rs"));
 
@@ -115,8 +118,7 @@ pub fn init(config: Config) -> Peripherals {
     unsafe {
         rcc::init(config.rcc);
 
-        #[cfg(any(systick_rv2, systick_rv3, systick_rv4))]
-        delay::Delay::init();
+        delay::init();
     }
 
     ::critical_section::with(|cs| unsafe {
@@ -136,7 +138,7 @@ macro_rules! bind_interrupts {
 
         $(
             #[allow(non_snake_case)]
-            #[qingke_rt::interrupt]
+            #[$crate::interrupt]
             unsafe fn $irq() {
                 $(
                     <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
