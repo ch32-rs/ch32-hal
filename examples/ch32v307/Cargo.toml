@@ -17,10 +17,9 @@ embassy-executor = { version = "0.6.0", features = [
     "arch-riscv32",
     "executor-thread",
 ] }
-embassy-time = "0.3.0"
+embassy-time = "0.3.2"
 nb = "1.1.0"
 
-qingke-rt = "0.2.1"
 qingke = "0.2.0"
 # qingke-rt = { version = "0.2.0", path = "../../../qingke/qingke-rt" }
 # qingke = { version = "0.2.0", path = "../../../qingke" }
@@ -38,6 +37,7 @@ embedded-hal-bus = "0.2.0"
 # for ssd1306
 ssd1306 = "0.9"
 
+edrv-bmp180 = "0.0.1"
 
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.

@@ -11,7 +11,7 @@ use hal::timer::low_level::CountingMode;
 use hal::timer::simple_pwm::{PwmPin, SimplePwm};
 use {ch32_hal as hal, panic_halt as _};
 
-#[embassy_executor::main(entry = "qingke_rt::entry")]
+#[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(_spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();

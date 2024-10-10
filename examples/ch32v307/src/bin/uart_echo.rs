@@ -10,7 +10,7 @@ use hal::usart::{Uart, UartTx};
 use hal::{println, usart};
 use {ch32_hal as hal, panic_halt as _};
 
-#[embassy_executor::main(entry = "qingke_rt::entry")]
+#[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());

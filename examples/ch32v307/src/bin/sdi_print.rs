@@ -6,9 +6,13 @@
 use hal::println;
 use {ch32_hal as hal, panic_halt as _};
 
-#[qingke_rt::entry]
+#[ch32_hal::entry]
 fn main() -> ! {
     hal::debug::SDIPrint::enable();
+    unsafe {
+        // init delay cfg
+        hal::delay::init();
+    }
 
     println!("hello world!");
 
@@ -21,7 +25,8 @@ fn main() -> ! {
         println!("hello world!");
 
         unsafe {
-            qingke::riscv::asm::delay(10_000_000);
+            // qingke::riscv::asm::delay(10_000_000);
+            hal::delay::Delay.delay_ms(1000);
         }
     }
 }
