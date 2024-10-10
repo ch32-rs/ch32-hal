@@ -22,7 +22,7 @@ async fn blink(pin: AnyPin) {
     }
 }
 
-#[embassy_executor::main(entry = "qingke_rt::entry")]
+#[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());

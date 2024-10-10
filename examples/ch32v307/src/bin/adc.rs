@@ -10,7 +10,7 @@ use hal::adc::SampleTime;
 use hal::gpio::{Level, Output};
 use hal::println;
 
-#[embassy_executor::main(entry = "qingke_rt::entry")]
+#[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
