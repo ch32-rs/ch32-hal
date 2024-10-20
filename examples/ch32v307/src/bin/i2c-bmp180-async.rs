@@ -1,14 +1,3 @@
-//! I2C test with SSD1306
-//!
-//! Folowing pins are used:
-//! SDA     PB11
-//! SCL     PB10
-//!
-//! Depending on your target and the board you are using you have to change the pins.
-//!
-//! For this example you need to hook up an SSD1306 I2C display.
-//! The display will flash black and white.
-
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
