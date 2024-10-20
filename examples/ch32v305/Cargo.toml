@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 ch32-hal = { path = "../../", features = ["ch32v305fbp6", "embassy", "rt"] }
 embassy-executor = { version = "0.6.0", features = [
-    "nightly",
     "integrated-timers",
     "arch-riscv32",
     "executor-thread",

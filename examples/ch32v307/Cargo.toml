@@ -12,7 +12,6 @@ ch32-hal = { path = "../../", features = [
     "time-driver-tim1",
 ] }
 embassy-executor = { version = "0.6.0", features = [
-    "nightly",
     "integrated-timers",
     "arch-riscv32",
     "executor-thread",
@@ -38,6 +37,7 @@ embedded-hal-bus = "0.2.0"
 ssd1306 = "0.9"
 
 edrv-bmp180 = "0.0.1"
+embedded-hal = "1.0.0"
 
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
