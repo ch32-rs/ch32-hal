@@ -14,7 +14,7 @@ embassy-executor = { version = "0.6.0", features = [
     "integrated-timers",
     "arch-riscv32",
     "executor-thread",
-    # "task-arena-size-512", or nightly
+    "task-arena-size-128", # or better use nightly, but fails on recent Rust versions
 ] }
 embassy-time = { version = "0.3.2" }
 
