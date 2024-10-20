@@ -16,12 +16,12 @@ embassy-executor = { version = "0.6.0", features = [
     "executor-thread",
     # "task-arena-size-512", or nightly
 ] }
-embassy-time = { version = "0.3.0" }
+embassy-time = { version = "0.3.2" }
 
-qingke-rt = { version = "0.2.1", features = ["highcode"] }
-qingke = "0.2.0"
-# qingke-rt = { version = "0.2.0", path = "../../../qingke/qingke-rt" }
-# qingke = { version = "0.2.0", path = "../../../qingke" }
+qingke-rt = { version = "0.4.0", features = ["highcode"] }
+qingke = "0.4.0"
+# qingke-rt = { version = "0.4.0", path = "../../../qingke/qingke-rt" }
+# qingke = { version = "0.4.0", path = "../../../qingke" }
 
 
 panic-halt = "0.2.0"
