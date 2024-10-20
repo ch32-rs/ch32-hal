@@ -15,7 +15,6 @@ ch32-hal = { path = "../../", features = [
 #    "rt",
 #], path = "../../../ch32-data/build/ch32-metapac" }
 embassy-executor = { version = "0.6.0", features = [
-    "nightly",
     "integrated-timers",
     "arch-riscv32",
     "executor-thread",
