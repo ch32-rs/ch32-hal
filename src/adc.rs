@@ -2,6 +2,8 @@
 
 #![macro_use]
 
+use core::marker::PhantomData;
+
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::pac::adc::vals;
@@ -146,11 +148,6 @@ pub(crate) trait SealedAdcPin<T: Instance> {
     fn channel(&self) -> u8;
 }
 
-trait SealedInternalChannel<T> {
-    #[allow(unused)]
-    fn channel(&self) -> u8;
-}
-
 #[allow(private_bounds)]
 pub trait Instance: SealedInstance + crate::Peripheral<P = Self> + crate::peripheral::RccPeripheral {
     type Interrupt: crate::interrupt::typelevel::Interrupt;
@@ -158,10 +155,32 @@ pub trait Instance: SealedInstance + crate::Peripheral<P = Self> + crate::periph
 
 /// ADC pin.
 #[allow(private_bounds)]
-pub trait AdcPin<T: Instance>: SealedAdcPin<T> {}
-/// ADC internal channel.
-#[allow(private_bounds)]
-pub trait InternalChannel<T>: SealedInternalChannel<T> {}
+pub trait AdcPin<T: Instance>: SealedAdcPin<T> + Sized {
+    fn degrade_adc(mut self) -> AnyAdcChannel<T> {
+        self.set_as_analog();
+
+        AnyAdcChannel {
+            channel: self.channel(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A type-erased channel for a given ADC instance.
+///
+/// This is useful in scenarios where you need the ADC channels to have the same type, such as
+/// storing them in an array.
+pub struct AnyAdcChannel<T> {
+    channel: u8,
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> AdcPin<T> for AnyAdcChannel<T> {}
+impl<T: Instance> SealedAdcPin<T> for AnyAdcChannel<T> {
+    fn channel(&self) -> u8 {
+        self.channel
+    }
+}
 
 foreach_peripheral!(
     (adc, $inst:ident) => {
