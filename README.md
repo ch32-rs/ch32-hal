@@ -34,17 +34,20 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 
 | Family      | V2/V3  | V1  | V0  | X0  | L1  | CH641  | CH643  |
 |-------------|--------|-----|-----|-----|-----|--------|--------|
-| Embassy     | ✅      | ✅   | ✅   | ✅   | ✅   | ✅      |        |
-| RCC         | ✅      | ✅   | ✅   | ✅   | ✅   | ✅      |        |
-| GPIO        | ✅      | ✅   | ✅   | ✅   | ✅   | ✅      |        |
-| UART*       | ✅      | ✅   | ✅   | ✅   | ✅   | ❓      |        |
-| SPI*        | ✅      | ✅   | ✅   | ✅   | ✅   | N/A    |        |
-| I2C         | ✅      | ✅   | ✅   | ❓   | ❓   | ❓      |        |
-| ADC         | ✅      | ✅   | ✅   | ✅   | ✅   | ✅      |        |
-| Timer(PWM)  | ✅      | ✅   | ✅   | ✅   | ✅   | ✅      |        |
+| Embassy     | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| RCC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| GPIO        | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| UART*       | ✅     | ✅  | ✅ | ✅  | ✅   | ❓      |        |
+| SPI*        | ✅     | ✅  | ✅ | ✅  | ✅   | N/A    |        |
+| I2C         | ✅     | ✅  | ✅ | ❓  | ❓   | ❓      |        |
+| ADC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| Timer(PWM)  | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| USB/OTG FS  | ✅     | N/A  | N/A  | N/A  | N/A   | N/A      |        |
+| USB/OTG HS  | ❌     | N/A  | N/A  | N/A  | N/A   | N/A      |        |
 
 
 - ✅ : Expected to work
+- ❌ : Not implemented
 - ❓ : Not tested
 - `*` marks the async driver
 - TODO: I haven't got a dev board yet, help-wanted
