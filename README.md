@@ -32,15 +32,17 @@ others should work if you are careful as most peripherals are similar enough.
 
 For a full list of chip capabilities and peripherals, check the [ch32-data](https://github.com/ch32-rs/ch32-data) repository.
 
-| Family | Status | Embassy | RCC | GPIO | UART*| SPI*| I2C | ADC | Timer(PWM) | EXTI*| RTC | DMA*| Delay | Others |
-|--------|--------|---------|-----|------|------|-----|-----|-----|------------|------|-----|-----|-------| ------ |
-| V2/V3  |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ✅   |     | ✅  |       | RNG, SDIO |
-| V1     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ❓   |     | ❓  | ✅    | |
-| V0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ❓   |     | ❓  | ✅    | |
-| X0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ❓  | ✅  | ✅         | ✅   |     | ✅  |       | |
-| L1     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ❓  | ✅  | ✅         | ❓   |     | ❓  |       | |
-| CH641  |        | ✅      | ✅  | ✅   | ❓   | N/A | ❓  | ✅  | ✅         | ❓   |     | ❓  | ✅    | ISP |
-| CH643  | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
+| Family      | V2/V3  | V1  | V0  | X0  | L1  | CH641  | CH643  |
+|-------------|--------|-----|-----|-----|-----|--------|--------|
+| Embassy     | ✅      | ✅   | ✅   | ✅   | ✅   | ✅      |        |
+| RCC         | ✅      | ✅   | ✅   | ✅   | ✅   | ✅      |        |
+| GPIO        | ✅      | ✅   | ✅   | ✅   | ✅   | ✅      |        |
+| UART*       | ✅      | ✅   | ✅   | ✅   | ✅   | ❓      |        |
+| SPI*        | ✅      | ✅   | ✅   | ✅   | ✅   | N/A    |        |
+| I2C         | ✅      | ✅   | ✅   | ❓   | ❓   | ❓      |        |
+| ADC         | ✅      | ✅   | ✅   | ✅   | ✅   | ✅      |        |
+| Timer(PWM)  | ✅      | ✅   | ✅   | ✅   | ✅   | ✅      |        |
+
 
 - ✅ : Expected to work
 - ❓ : Not tested
