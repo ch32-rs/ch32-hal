@@ -16,15 +16,10 @@ license = "MIT OR Apache-2.0"
 ch32-metapac = { features = [
     "memory-x",
     "rt",
-], git = "https://github.com/vapor-keeb/ch32-metapac.git", branch = "main" }
-# ch32-metapac = { features = ["memory-x","rt"], path = "../ch32-data/build/ch32-metapac" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "43066e18cf51106dff448f679dfff368a41431d7" }
 
 qingke = { version = "0.4.0", features = ["critical-section-impl"] }
 qingke-rt = { version = "0.4.0", optional = true }
-# qingke-rt = { version = "0.4.0", path = "../qingke/qingke-rt", optional = true }
-# qingke = { version = "0.4.0", path = "../qingke", features = [
-#     "critical-section-impl",
-# ] }
 
 # TODO: remove this
 embedded-hal-02 = { package = "embedded-hal", version = "0.2.6", features = [
@@ -54,8 +49,7 @@ embassy-hal-internal = "0.2.0"
 [build-dependencies]
 ch32-metapac = { features = [
     "metadata",
-], git = "https://github.com/vapor-keeb/ch32-metapac.git", branch = "main" }
-# ch32-metapac = { default-features = false, features = ["metadata"], path = "../ch32-data/build/ch32-metapac" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "43066e18cf51106dff448f679dfff368a41431d7" }
 
 proc-macro2 = "1.0"
 quote = "1.0"
