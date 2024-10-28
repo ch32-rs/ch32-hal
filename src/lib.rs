@@ -76,8 +76,9 @@ pub mod spi;
 pub mod timer;
 pub mod usart;
 
-#[cfg(usb)]
-pub mod usb;
+
+#[cfg(otg)]
+pub mod otg_fs;
 #[cfg(usbd)]
 pub mod usbd;
 
