@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 ch32-hal = { path = "../../", features = [
     "ch32v208wbu6",
-    "defmt",
     "embassy",
     "rt",
 ], default-features = false }
