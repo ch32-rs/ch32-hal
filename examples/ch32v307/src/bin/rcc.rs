@@ -28,7 +28,6 @@ async fn main(spawner: Spawner) -> ! {
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE;
 
     let p = hal::init(config);
-    hal::embassy::init();
 
     println!("SYS:   {}Hz", hal::rcc::clocks().sysclk.0);
     println!("HCLK:  {}Hz", hal::rcc::clocks().hclk.0);

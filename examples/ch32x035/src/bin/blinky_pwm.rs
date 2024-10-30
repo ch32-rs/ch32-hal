@@ -17,7 +17,6 @@ async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
 
-    hal::embassy::init();
 
     let pin = PwmPin::new_ch4(p.PB12);
     let mut pwm = SimplePwm::new(

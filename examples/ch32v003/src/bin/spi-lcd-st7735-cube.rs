@@ -241,7 +241,6 @@ fn main() -> ! {
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSE;
     let p = hal::init(config);
 
-    // hal::embassy::init();
 
     // SPI1, remap 0
     let cs = p.PC1;

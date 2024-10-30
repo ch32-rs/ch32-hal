@@ -21,7 +21,6 @@ async fn main(_spawner: Spawner) {
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_96MHZ_HSE;
     let p = hal::init(config);
-    hal::embassy::init();
 
     println!("clk => {}", hal::rcc::clocks().hclk.0);
 

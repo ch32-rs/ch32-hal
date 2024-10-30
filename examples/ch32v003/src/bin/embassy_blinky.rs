@@ -27,7 +27,6 @@ async fn main(spawner: Spawner) -> ! {
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
     let p = hal::init(config);
-    hal::embassy::init();
 
     println!("CHIP signature => {}", hal::signature::chip_id().name());
     println!("Clocks {:?}", hal::rcc::clocks());

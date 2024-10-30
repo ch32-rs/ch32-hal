@@ -23,7 +23,6 @@ async fn blink(pin: AnyPin, interval_ms: u64) {
 #[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(spawner: Spawner) -> ! {
     let p = hal::init(Default::default());
-    hal::embassy::init();
 
     // GPIO
     spawner.spawn(blink(p.PA15.degrade(), 1000)).unwrap();

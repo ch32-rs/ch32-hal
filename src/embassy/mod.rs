@@ -11,7 +11,12 @@ pub mod time_driver_impl;
 pub mod time_driver_impl;
 
 // This should be called after global clocks inited
-pub fn init() {
+/// Initialize the Embassy time driver.
+///
+/// # Safety
+///
+/// This function should be called only once.
+pub unsafe fn init() {
     crate::pac::PFIC.sctlr().modify(|w| w.set_sevonpend(true));
 
     #[cfg(all(qingke_v4, not(time_driver_timer)))]

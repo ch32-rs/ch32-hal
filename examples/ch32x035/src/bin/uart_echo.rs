@@ -16,7 +16,6 @@ async fn main(spawner: Spawner) -> ! {
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
     let p = hal::init(Default::default());
-    hal::embassy::init();
 
     // Connector pinout:
     // GND, VCC, PC17, PC16

@@ -26,7 +26,6 @@ async fn blink(pin: AnyPin) {
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
-    hal::embassy::init();
 
     let mut ei = ExtiInput::new(p.PC7, p.EXTI7, Pull::None);
 

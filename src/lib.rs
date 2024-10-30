@@ -5,7 +5,6 @@
 pub use ch32_metapac as pac;
 pub(crate) use embassy_hal_internal::{impl_peripheral, peripherals_definition, peripherals_struct};
 pub use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
-
 #[cfg(feature = "rt")]
 pub use qingke_rt::{entry, interrupt};
 
@@ -76,7 +75,6 @@ pub mod spi;
 pub mod timer;
 pub mod usart;
 
-
 #[cfg(otg)]
 pub mod otg_fs;
 #[cfg(usbd)]
@@ -118,8 +116,10 @@ impl Default for Config {
 pub fn init(config: Config) -> Peripherals {
     unsafe {
         rcc::init(config.rcc);
-
         delay::init();
+
+        #[cfg(feature = "embassy")]
+        embassy::init();
     }
 
     ::critical_section::with(|cs| unsafe {
