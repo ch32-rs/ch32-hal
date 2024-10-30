@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ch32-hal = { path = "../../", features = ["ch32x035f7p6", "embassy", "rt"] }
+ch32-hal = { path = "../../", features = [
+    "ch32x035f7p6",
+    "memory-x",
+    "embassy",
+    "rt",
+] }
 embassy-executor = { version = "0.6.0", features = [
     "integrated-timers",
     "arch-riscv32",
