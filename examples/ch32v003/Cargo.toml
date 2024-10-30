@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 ch32-hal = { path = "../../", features = [
     "ch32v003f4u6",
+    "memory-x",
     "embassy",
     "time-driver-tim2",
     "rt",
