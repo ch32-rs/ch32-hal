@@ -46,7 +46,6 @@ async fn main(spawner: Spawner) -> ! {
         }
     }
     let p = hal::init(config);
-    hal::embassy::init();
 
     println!("SYS:   {}Hz", hal::rcc::clocks().sysclk.0);
     println!("HCLK:  {}Hz", hal::rcc::clocks().hclk.0);

@@ -46,7 +46,6 @@ async fn main(spawner: Spawner) -> ! {
     // let p = hal::init(Default::default());
     //let p = hal::init(Default::default());
     let p = hal::init(hal::Config::default());
-    hal::embassy::init();
 
     let i2c_sda = p.PB11;
     let i2c_scl = p.PB10;

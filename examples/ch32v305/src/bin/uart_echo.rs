@@ -14,7 +14,6 @@ use {ch32_hal as hal, panic_halt as _};
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
-    hal::embassy::init();
 
     // GPIO
     let mut led = Output::new(p.PC9, Level::Low, Default::default());

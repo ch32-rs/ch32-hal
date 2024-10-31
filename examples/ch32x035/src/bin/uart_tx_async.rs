@@ -42,7 +42,6 @@ async fn main(spawner: Spawner) -> ! {
     config.dma_interrupt_priority = interrupt::Priority::P0;
     config = Default::default();
     let p = hal::init(config);
-    hal::embassy::init();
 
     // Connector pinout:
     // GND, VCC, PC17, PC16

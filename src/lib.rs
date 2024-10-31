@@ -5,7 +5,6 @@
 pub use ch32_metapac as pac;
 pub(crate) use embassy_hal_internal::{impl_peripheral, peripherals_definition, peripherals_struct};
 pub use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
-
 #[cfg(feature = "rt")]
 pub use qingke_rt::{entry, interrupt};
 
@@ -76,7 +75,6 @@ pub mod spi;
 pub mod timer;
 pub mod usart;
 
-
 #[cfg(otg)]
 pub mod otg_fs;
 #[cfg(usbd)]
@@ -115,11 +113,22 @@ impl Default for Config {
     }
 }
 
+/// Initialize the HAL with the provided configuration.
+///
+/// This returns the peripheral singletons that can be used for creating drivers.
+///
+/// This should only be called once at startup, otherwise it panics.
 pub fn init(config: Config) -> Peripherals {
+    // Do this first, so that it panics if user is calling `init` a second time
+    // before doing anything important.
+    let p = Peripherals::take();
+
     unsafe {
         rcc::init(config.rcc);
-
         delay::init();
+
+        #[cfg(feature = "embassy")]
+        embassy::init();
     }
 
     ::critical_section::with(|cs| unsafe {
@@ -128,7 +137,7 @@ pub fn init(config: Config) -> Peripherals {
         exti::init(cs);
     });
 
-    Peripherals::take()
+    p
 }
 
 #[macro_export]

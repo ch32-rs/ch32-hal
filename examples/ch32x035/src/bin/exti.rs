@@ -13,7 +13,6 @@ use hal::println;
 async fn main(_spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
-    hal::embassy::init();
 
     let button = p.PC3;
     let mut button = ExtiInput::new(button, p.EXTI3, hal::gpio::Pull::None);

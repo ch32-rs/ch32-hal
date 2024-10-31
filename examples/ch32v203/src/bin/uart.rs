@@ -13,7 +13,6 @@ use {ch32_hal as hal, panic_halt as _};
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(spawner: Spawner) -> ! {
     let p = hal::init(Default::default());
-    hal::embassy::init();
 
     let mut led = Output::new(p.PB8, Level::Low, Default::default());
 

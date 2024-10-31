@@ -97,7 +97,6 @@ async fn main(spawner: Spawner) -> ! {
         }
     }
     let p = hal::init(config);
-    hal::embassy::init();
 
     Timer::after_millis(100).await;
 

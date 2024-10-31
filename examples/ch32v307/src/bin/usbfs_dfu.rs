@@ -45,7 +45,6 @@ async fn main(spawner: Spawner) -> ! {
         ..Default::default()
     };
     let p = hal::init(cfg);
-    hal::embassy::init();
 
     /* USB DRIVER SECION */
     let mut buffer: [EndpointDataBuffer; 1] = core::array::from_fn(|_| EndpointDataBuffer::default());

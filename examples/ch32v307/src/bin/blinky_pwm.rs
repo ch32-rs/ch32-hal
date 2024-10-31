@@ -17,7 +17,6 @@ async fn main(_spawner: Spawner) -> ! {
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE;
     let p = hal::init(Default::default());
-    hal::embassy::init();
 
     // use remap 1, or 3
     let pin = PwmPin::new_ch1::<1>(p.PA15);

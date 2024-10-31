@@ -16,7 +16,6 @@ async fn main(_spawner: Spawner) -> ! {
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_96MHZ_HSE;
     let p = hal::init(config);
-    hal::embassy::init();
 
     let mut adc = hal::adc::Adc::new(p.ADC1, Default::default());
 

@@ -41,7 +41,6 @@ async fn main(_spawner: Spawner) -> ! {
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE;
     let p = hal::init(Default::default());
-    hal::embassy::init();
 
     let i2c_sda = p.PB11;
     let i2c_scl = p.PB10;

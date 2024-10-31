@@ -15,7 +15,6 @@ async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
     let p = hal::init(config);
-    hal::embassy::init();
 
     let mut delay = Delay;
 
