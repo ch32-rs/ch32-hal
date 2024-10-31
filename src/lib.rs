@@ -113,7 +113,16 @@ impl Default for Config {
     }
 }
 
+/// Initialize the HAL with the provided configuration.
+///
+/// This returns the peripheral singletons that can be used for creating drivers.
+///
+/// This should only be called once at startup, otherwise it panics.
 pub fn init(config: Config) -> Peripherals {
+    // Do this first, so that it panics if user is calling `init` a second time
+    // before doing anything important.
+    let p = Peripherals::take();
+
     unsafe {
         rcc::init(config.rcc);
         delay::init();
@@ -128,7 +137,7 @@ pub fn init(config: Config) -> Peripherals {
         exti::init(cs);
     });
 
-    Peripherals::take()
+    p
 }
 
 #[macro_export]
