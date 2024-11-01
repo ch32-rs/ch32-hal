@@ -5,88 +5,9 @@ use ch32_metapac::otg::vals::{EpRxResponse, EpTxResponse, UsbToken};
 use embassy_usb_driver::{Direction, EndpointAllocError, EndpointError, EndpointInfo};
 use futures::future::poll_fn;
 
-use super::marker::{Dir, In, Out};
+use crate::usb::{Dir, EndpointData, In, Out};
 use super::{Instance, EP_MAX_PACKET_SIZE, EP_WAKERS};
 use crate::interrupt::typelevel::Interrupt;
-
-pub struct EndpointBufferAllocator<'d, const NR_EP: usize> {
-    ep_buffer: &'d mut [EndpointDataBuffer; NR_EP],
-    ep_next: usize,
-}
-
-impl<'d, const NR_EP: usize> EndpointBufferAllocator<'d, NR_EP> {
-    pub fn new(ep_buffer: &'d mut [EndpointDataBuffer; NR_EP]) -> Self {
-        Self { ep_buffer, ep_next: 0 }
-    }
-
-    pub fn alloc_endpoint(
-        &mut self,
-        max_packet_size: u16,
-    ) -> Result<EndpointData<'d>, embassy_usb_driver::EndpointAllocError> {
-        if self.ep_next >= NR_EP {
-            error!("out of endpoint buffers");
-            return Err(EndpointAllocError);
-        }
-
-        let ep_buf_idx = self.ep_next;
-        self.ep_next += 1;
-
-        Ok(EndpointData {
-            max_packet_size,
-            buffer: unsafe { core::mem::transmute(&self.ep_buffer[ep_buf_idx] as *const EndpointDataBuffer) },
-        })
-    }
-}
-
-pub struct EndpointData<'d> {
-    max_packet_size: u16,
-    buffer: &'d mut EndpointDataBuffer,
-}
-
-impl<'d> EndpointData<'d> {
-    pub fn addr(&self) -> usize {
-        self.buffer.addr()
-    }
-}
-
-#[repr(C, align(4))]
-pub struct EndpointDataBuffer {
-    data: [u8; EP_MAX_PACKET_SIZE as usize],
-}
-
-impl Default for EndpointDataBuffer {
-    fn default() -> Self {
-        unsafe {
-            EndpointDataBuffer {
-                data: core::mem::zeroed(),
-            }
-        }
-    }
-}
-
-impl EndpointDataBuffer {
-    fn read_volatile(&self, buf: &mut [u8]) {
-        assert!(buf.len() <= self.data.len());
-        let len = buf.len();
-
-        for i in 0..len {
-            buf[i] = unsafe { core::ptr::read_volatile(&self.data[i]) };
-        }
-    }
-
-    fn write_volatile(&mut self, buf: &[u8]) {
-        assert!(buf.len() <= self.data.len());
-        let len = buf.len();
-
-        for i in 0..len {
-            unsafe { core::ptr::write_volatile(&mut self.data[i], buf[i]) };
-        }
-    }
-
-    fn addr(&self) -> usize {
-        self.data.as_ptr() as usize
-    }
-}
 
 /// USB endpoint.
 pub struct Endpoint<'d, T, D> {

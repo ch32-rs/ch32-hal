@@ -75,8 +75,12 @@ pub mod spi;
 pub mod timer;
 pub mod usart;
 
+/// Common structures for USB drivers
+pub mod usb;
+
 #[cfg(otg)]
 pub mod otg_fs;
+
 #[cfg(usbd)]
 pub mod usbd;
 

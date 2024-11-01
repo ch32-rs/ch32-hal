@@ -40,7 +40,6 @@ use crate::interrupt::typelevel::Interrupt;
 use crate::{interrupt, peripherals, Peripheral, RccPeripheral};
 
 pub mod endpoint;
-pub mod marker;
 
 // TODO: We technically support 16, but we only allow 8 for now (0, 1-7).
 const MAX_NR_EP: usize = 8;
