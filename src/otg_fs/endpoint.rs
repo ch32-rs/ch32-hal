@@ -5,9 +5,9 @@ use ch32_metapac::otg::vals::{EpRxResponse, EpTxResponse, UsbToken};
 use embassy_usb_driver::{Direction, EndpointError, EndpointInfo};
 use futures::future::poll_fn;
 
-use crate::usb::{Dir, EndpointData, In, Out};
 use super::{Instance, EP_MAX_PACKET_SIZE, EP_WAKERS};
 use crate::interrupt::typelevel::Interrupt;
+use crate::usb::{Dir, EndpointData, In, Out};
 
 /// USB endpoint.
 pub struct Endpoint<'d, T, D> {
@@ -258,18 +258,23 @@ where
     }
 
     async fn data_out(&mut self, buf: &mut [u8], first: bool, last: bool) -> Result<usize, EndpointError> {
-        assert!(first && last, "TODO support chunking");
-
         let regs = T::regs();
 
         if buf.len() > self.ep0_buf.max_packet_size as usize {
             return Err(EndpointError::BufferOverflow);
         }
 
-        regs.uep_rx_ctrl(0).modify(|v| {
-            v.set_r_tog(!v.r_tog());
-            v.set_mask_r_res(EpRxResponse::ACK);
-        });
+        if first {
+            regs.uep_rx_ctrl(0).write(|v| {
+                v.set_r_tog(true);
+                v.set_mask_r_res(EpRxResponse::ACK);
+            })
+        } else {
+            regs.uep_rx_ctrl(0).modify(|v| {
+                v.set_r_tog(!v.r_tog());
+                v.set_mask_r_res(EpRxResponse::ACK);
+            });
+        }
 
         // poll for packet
         let bytes_read = poll_fn(|ctx| {
@@ -278,24 +283,29 @@ where
             let ret = if regs.int_fg().read().transfer() {
                 let status = regs.int_st().read();
                 if status.mask_uis_endp() == 0 {
-                    let ret = match status.mask_token() {
-                        UsbToken::RSVD | UsbToken::IN => unreachable!(),
-                        UsbToken::SETUP => Poll::Ready(Err(EndpointError::Disabled)),
+                    let res = match status.mask_token() {
                         UsbToken::OUT => {
                             let len = regs.rx_len().read().0 as usize;
                             // https://github.com/embassy-rs/embassy/blob/6e0b08291b63a0da8eba9284869d1d046bc5dabb/embassy-usb/src/lib.rs#L408
                             // Embassy expects the whole buffer to be filled
-                            if len == buf.len() {
+                            let res = if len == buf.len() {
                                 self.ep0_buf.buffer.read_volatile(&mut buf[..len]);
                                 Poll::Ready(Ok(len))
                             } else {
                                 Poll::Ready(Err(EndpointError::BufferOverflow))
-                            }
+                            };
+
+                            regs.uep_rx_ctrl(0).modify(|v| {
+                                v.set_mask_r_res(EpRxResponse::NAK);
+                            });
+
+                            res
                         }
+                        UsbToken::RSVD | UsbToken::IN | UsbToken::SETUP => unreachable!(),
                     };
 
                     regs.int_fg().write(|v| v.set_transfer(true));
-                    ret
+                    res
                 } else {
                     Poll::Pending
                 }
@@ -306,10 +316,6 @@ where
             ret
         })
         .await?;
-
-        regs.uep_rx_ctrl(0).modify(|v| {
-            v.set_mask_r_res(EpRxResponse::NAK);
-        });
 
         Ok(bytes_read)
     }
@@ -373,10 +379,12 @@ where
         .await?;
 
         if last {
-            regs.uep_rx_ctrl(0).modify(|v| {
+            regs.uep_rx_ctrl(0).write(|v| {
                 // Set RX to true to expect the STATUS (OUT) packet
                 v.set_mask_r_res(EpRxResponse::ACK);
+                v.set_r_tog(true);
             });
+            
             // Expect the empty OUT token for status
             poll_fn(|ctx| {
                 super::EP_WAKERS[0].register(ctx.waker());
@@ -391,8 +399,7 @@ where
                                     Poll::Ready(Err(EndpointError::BufferOverflow))
                                 } else {
                                     // Set the EP back to NAK so that we are "not ready to recieve"
-                                    regs.uep_rx_ctrl(0).write(|v| {
-                                        v.set_r_tog(true);
+                                    regs.uep_rx_ctrl(0).modify(|v| {
                                         v.set_mask_r_res(EpRxResponse::NAK);
                                     });
                                     Poll::Ready(Ok(()))
@@ -404,6 +411,7 @@ where
                             }
                         };
                         regs.int_fg().write(|v| v.set_transfer(true));
+
                         res
                     } else {
                         Poll::Pending
