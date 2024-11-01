@@ -2,7 +2,7 @@
 #![no_main]
 
 use panic_halt as _;
-use ch32_hal::otg_fs::endpoint::EndpointDataBuffer;
+use ch32_hal::usb::EndpointDataBuffer;
 use ch32_hal::otg_fs::{self, Driver};
 use ch32_hal::{self as hal, bind_interrupts, peripherals, Config};
 use embassy_executor::Spawner;
