@@ -1,4 +1,4 @@
-name: CI build
+name: CI Build
 
 on:
   push:
@@ -15,6 +15,40 @@ env:
 
 jobs:
   build:
+    strategy:
+      matrix:
+        chip:
+          - ch32l103f8u6
+          - ch32v003f4u6
+          - ch32v103c8t6
+          - ch32v203f8u6
+          - ch32v208wbu6
+          - ch32v303vct6
+          - ch32v305fbp6
+          - ch32v307vct6
+          - ch32x035f7p6
+          - ch641
+        include:
+          - chip: ch32l103f8u6
+            target: riscv32imac-unknown-none-elf
+          - chip: ch32v003f4u6
+            target: riscv32i-unknown-none-elf
+          - chip: ch32v103c8t6
+            target: riscv32imac-unknown-none-elf
+          - chip: ch32v203f8u6
+            target: riscv32imac-unknown-none-elf
+          - chip: ch32v208wbu6
+            target: riscv32imac-unknown-none-elf
+          - chip: ch32v303vct6
+            target: riscv32imafc-unknown-none-elf
+          - chip: ch32v305fbp6
+            target: riscv32imafc-unknown-none-elf
+          - chip: ch32v307vct6
+            target: riscv32imafc-unknown-none-elf
+          - chip: ch32x035f7p6
+            target: riscv32imafc-unknown-none-elf
+          - chip: ch641
+            target: riscv32i-unknown-none-elf
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -34,4 +68,7 @@ jobs:
           cd ../ch32-data/build/
           git clone https://github.com/ch32-rs/ch32-metapac.git
       - name: Build Only
-        run: ./.github/ci/build-examples.sh
+        run: ./.github/ci/build.sh
+        env:
+          CHIP: ${{ matrix.chip }}
+          TARGET: ${{ matrix.target }}
