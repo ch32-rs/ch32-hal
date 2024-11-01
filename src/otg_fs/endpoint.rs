@@ -2,7 +2,7 @@ use core::marker::PhantomData;
 use core::task::Poll;
 
 use ch32_metapac::otg::vals::{EpRxResponse, EpTxResponse, UsbToken};
-use embassy_usb_driver::{Direction, EndpointAllocError, EndpointError, EndpointInfo};
+use embassy_usb_driver::{Direction, EndpointError, EndpointInfo};
 use futures::future::poll_fn;
 
 use crate::usb::{Dir, EndpointData, In, Out};
@@ -135,8 +135,9 @@ impl<'d, T: Instance> embassy_usb_driver::EndpointIn for Endpoint<'d, T, In> {
 
 impl<'d, T: Instance> embassy_usb_driver::EndpointOut for Endpoint<'d, T, Out> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
-        trace!("endpoint {} OUT", self.info.addr);
+        trace!("endpoint {} OUT", self.info.addr.index());
         if !self.is_enabled() {
+            error!("OUT disabled EP");
             return Err(EndpointError::Disabled);
         }
 

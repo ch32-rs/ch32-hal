@@ -1,19 +1,19 @@
 //! USB_FS and OTG_FS device mode peripheral driver
 //! Note that this currently only implements device mode
-//! 
+//!
 //! <div class="warning">
 //! There's a lot of TODOs and panics where things are not implemented
 //! </div>
-//! 
+//!
 //! List of things that is tested
 //! Untested but expected to work items are noted as well
 //!
 //! Control Pipe:
-//! - [x] Recieve `SETUP` packet (Host -> Dev) 
+//! - [x] Recieve `SETUP` packet (Host -> Dev)
 //! - [x] Send `IN` packet (Dev -> Host).
 //! - [x] Recieve `OUT` packet (Host -> Dev).
-//! 
-//! Other Endpoints: 
+//!
+//! Other Endpoints:
 //! - [x] Interrupt Out
 //! - [x] Interrupt In
 //! - [ ] Bulk Out (Expected to work but not tested)
@@ -31,9 +31,9 @@ use core::task::Poll;
 
 use ch32_metapac::otg::vals::{EpRxResponse, EpTxResponse, UsbToken};
 use embassy_sync::waitqueue::AtomicWaker;
-use embassy_usb_driver::{self as driver, Direction, EndpointAddress, EndpointInfo, EndpointType, Event};
-use endpoint::{ControlPipe, Endpoint, EndpointBufferAllocator, EndpointDataBuffer};
-use marker::{Dir, In, Out};
+use embassy_usb_driver::{Direction, EndpointAddress, EndpointInfo, EndpointType, Event};
+use endpoint::{ControlPipe, Endpoint};
+use crate::usb::{Dir, EndpointBufferAllocator, EndpointDataBuffer, In, Out};
 
 use crate::gpio::{AFType, Speed};
 use crate::interrupt::typelevel::Interrupt;
@@ -151,7 +151,7 @@ where
         ep_type: EndpointType,
         max_packet_size: u16,
         interval_ms: u8,
-    ) -> Result<Endpoint<'d, T, D>, driver::EndpointAllocError> {
+    ) -> Result<Endpoint<'d, T, D>, embassy_usb_driver::EndpointAllocError> {
         let ep_addr = self.alloc_ep_address();
         let data = self.allocator.alloc_endpoint(max_packet_size)?;
 
@@ -168,7 +168,7 @@ where
     }
 }
 
-impl<'d, T: Instance, const NR_EP: usize> driver::Driver<'d> for Driver<'d, T, NR_EP> {
+impl<'d, T: Instance, const NR_EP: usize> embassy_usb_driver::Driver<'d> for Driver<'d, T, NR_EP> {
     type EndpointOut = Endpoint<'d, T, Out>;
 
     type EndpointIn = Endpoint<'d, T, In>;
@@ -179,19 +179,19 @@ impl<'d, T: Instance, const NR_EP: usize> driver::Driver<'d> for Driver<'d, T, N
 
     fn alloc_endpoint_out(
         &mut self,
-        ep_type: driver::EndpointType,
+        ep_type: embassy_usb_driver::EndpointType,
         max_packet_size: u16,
         interval_ms: u8,
-    ) -> Result<Self::EndpointOut, driver::EndpointAllocError> {
+    ) -> Result<Self::EndpointOut, embassy_usb_driver::EndpointAllocError> {
         self.alloc_endpoint::<Out>(ep_type, max_packet_size, interval_ms)
     }
 
     fn alloc_endpoint_in(
         &mut self,
-        ep_type: driver::EndpointType,
+        ep_type: embassy_usb_driver::EndpointType,
         max_packet_size: u16,
         interval_ms: u8,
-    ) -> Result<Self::EndpointIn, driver::EndpointAllocError> {
+    ) -> Result<Self::EndpointIn, embassy_usb_driver::EndpointAllocError> {
         self.alloc_endpoint::<In>(ep_type, max_packet_size, interval_ms)
     }
 
@@ -229,22 +229,10 @@ impl<'d, T: Instance, const NR_EP: usize> driver::Driver<'d> for Driver<'d, T, N
         });
 
         let ep0_buf = self.allocator.alloc_endpoint(control_max_packet_size).unwrap();
-
         regs.uep_dma(0).write_value(ep0_buf.addr() as u32);
 
         regs.uep_rx_ctrl(0).write(|w| w.set_mask_r_res(EpRxResponse::ACK));
         regs.uep_tx_ctrl(0).write(|w| w.set_mask_t_res(EpTxResponse::NAK));
-
-        // Hookup the bus on start?
-        regs.udev_ctrl().write(|w| {
-            // pd is for HOST
-            w.set_pd_dis(true);
-            w.set_port_en(true);
-        });
-
-        // Initialize the bus so that it signals that power is available
-        // usbd.rs does BUS_WAKER.wake(), but it doesn't seem necessary
-        BUS_WAKER.wake();
 
         critical_section::with(|_cs| {
             T::Interrupt::unpend();
@@ -284,18 +272,34 @@ impl<'d, T: Instance> Bus<'d, T> {
 
         // Mark all other EPs as NAK
         for i in 1..=7 {
+            use embassy_usb_driver::Bus;
             regs.uep_rx_ctrl(i).write(|v| v.set_mask_r_res(EpRxResponse::NAK));
             regs.uep_tx_ctrl(i).write(|v| v.set_mask_t_res(EpTxResponse::NAK));
+
+            // It looks like the HW has a bug, after reset, all EP Tx/Rx
+            // are set to enabled. So we disable them here after bus reset.
+            self.endpoint_set_enabled(EndpointAddress::from_parts(i, Direction::In), false);
+            self.endpoint_set_enabled(EndpointAddress::from_parts(i, Direction::Out), false);
         }
     }
 }
 
-impl<'d, T> driver::Bus for Bus<'d, T>
+impl<'d, T> embassy_usb_driver::Bus for Bus<'d, T>
 where
     T: Instance,
 {
     async fn enable(&mut self) {
-        trace!("enable")
+        let regs = T::regs();
+
+        // Enable the port
+        regs.udev_ctrl().write(|w| {
+            // Pull Down needs to be disabled because that is for HOST
+            w.set_pd_dis(true);
+            w.set_port_en(true);
+        });
+
+        // Do a bus reset on "enable"
+        self.bus_reset();
     }
 
     async fn disable(&mut self) {
