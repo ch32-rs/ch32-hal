@@ -163,15 +163,8 @@ impl<'d, T: Instance> embassy_usb_driver::EndpointOut for Endpoint<'d, T, Out> {
                             // upper bits are reserved (0)
                             let len = regs.rx_len().read().0 as usize;
 
-                            // Assertion exists because looks like embassy-usb expects no partial reads.
-                            // https://github.com/embassy-rs/embassy/blob/6e0b08291b63a0da8eba9284869d1d046bc5dabb/embassy-usb/src/lib.rs#L408
-                            debug_assert_eq!(len, buf.len());
-                            if len == buf.len() {
-                                self.data.buffer.read_volatile(&mut buf[..len]);
-                                Poll::Ready(Ok(len))
-                            } else {
-                                Poll::Ready(Err(EndpointError::BufferOverflow))
-                            }
+                            self.data.buffer.read_volatile(&mut buf[..len]);
+                            Poll::Ready(Ok(len))
                         }
                         token => {
                             error!("Unexpected USB Token {}", token.to_bits());
@@ -286,20 +279,11 @@ where
                     let res = match status.mask_token() {
                         UsbToken::OUT => {
                             let len = regs.rx_len().read().0 as usize;
-                            // https://github.com/embassy-rs/embassy/blob/6e0b08291b63a0da8eba9284869d1d046bc5dabb/embassy-usb/src/lib.rs#L408
-                            // Embassy expects the whole buffer to be filled
-                            let res = if len == buf.len() {
-                                self.ep0_buf.buffer.read_volatile(&mut buf[..len]);
-                                Poll::Ready(Ok(len))
-                            } else {
-                                Poll::Ready(Err(EndpointError::BufferOverflow))
-                            };
-
+                            self.ep0_buf.buffer.read_volatile(&mut buf[..len]);
                             regs.uep_rx_ctrl(0).modify(|v| {
                                 v.set_mask_r_res(EpRxResponse::NAK);
                             });
-
-                            res
+                            Poll::Ready(Ok(len))
                         }
                         UsbToken::RSVD | UsbToken::IN | UsbToken::SETUP => unreachable!(),
                     };
