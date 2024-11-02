@@ -1,6 +1,5 @@
 #![no_std]
 #![allow(static_mut_refs, unexpected_cfgs)]
-#![feature(naked_functions)]
 
 pub use ch32_metapac as pac;
 pub(crate) use embassy_hal_internal::{impl_peripheral, peripherals_definition, peripherals_struct};
