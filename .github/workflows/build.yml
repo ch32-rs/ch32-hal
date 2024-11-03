@@ -30,23 +30,27 @@ jobs:
           - ch641
         include:
           - chip: ch32l103f8u6
-            target: riscv32imac-unknown-none-elf
+            target: riscv32imc-unknown-none-elf
           - chip: ch32v003f4u6
             target: riscv32i-unknown-none-elf
           - chip: ch32v103c8t6
-            target: riscv32imac-unknown-none-elf
+            target: riscv32imc-unknown-none-elf
           - chip: ch32v203f8u6
-            target: riscv32imac-unknown-none-elf
+            target: riscv32imc-unknown-none-elf
           - chip: ch32v208wbu6
-            target: riscv32imac-unknown-none-elf
+            target: riscv32imc-unknown-none-elf
           - chip: ch32v303vct6
-            target: riscv32imafc-unknown-none-elf
+            # use rv32imc because ri32imfc does not exist, hal should not use FP anyways
+            target: riscv32imc-unknown-none-elf
           - chip: ch32v305fbp6
-            target: riscv32imafc-unknown-none-elf
+            # use rv32imc because ri32imfc does not exist
+            target: riscv32imc-unknown-none-elf
           - chip: ch32v307vct6
-            target: riscv32imafc-unknown-none-elf
+            # use rv32imc because ri32imfc does not exist
+            target: riscv32imc-unknown-none-elf
           - chip: ch32x035f7p6
-            target: riscv32imafc-unknown-none-elf
+            # use rv32imc because ri32imfc does not exist
+            target: riscv32imc-unknown-none-elf
           - chip: ch641
             target: riscv32i-unknown-none-elf
     runs-on: ubuntu-latest
@@ -57,8 +61,7 @@ jobs:
           rustup default nightly
           rustup component add rust-src
           rustup update
-          rustup target add riscv32imac-unknown-none-elf
-          rustup target add riscv32imafc-unknown-none-elf
+          rustup target add riscv32imc-unknown-none-elf
           rustup target add riscv32i-unknown-none-elf
       - name: Fetch Deps
         # if this is a pull request
