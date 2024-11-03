@@ -1,5 +1,5 @@
 //! CH32V2, CH32V3
-use core::ops;
+use core::ops::{self, Div};
 
 pub use crate::pac::rcc::vals::{
     Hpre as AHBPrescaler, PllMul, PllxMul, Ppre as APBPrescaler, Prediv as PllPreDiv, Sw as Sysclk, Usbpre,
@@ -53,6 +53,47 @@ pub struct Pllx {
     pub pll3: Option<PllxMul>,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+// USBHSPLLSRC bits in rcc_cfgr2
+pub enum HsPllSource {
+    HSI,
+    HSE,
+}
+
+// TODO: should be in PAC
+// USBHSDIV bits in rcc_cfgr2
+#[derive(Clone, Copy, PartialEq)]
+pub enum HsPllPrescaler {
+    DIV1 = 0b000,
+    DIV2 = 0b001,
+    DIV3 = 0b010,
+    DIV4 = 0b011,
+    DIV5 = 0b100,
+    DIV6 = 0b101,
+    DIV7 = 0b110,
+    DIV8 = 0b111,
+}
+
+impl Div<HsPllPrescaler> for Hertz {
+    type Output = Hertz;
+    fn div(self, rhs: HsPllPrescaler) -> Hertz {
+        Hertz(self.0 / (rhs as u32 + 1))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum HsPllRef {
+    _3M = 0b00,
+    _4M = 0b01,
+    _8M = 0b10,
+    _5M = 0b11,
+}
+
+#[derive(Clone, Copy)]
+pub struct HsPll {
+    pub pre: HsPllPrescaler,
+}
+
 pub struct Config {
     // won't close hsi
     // pub hsi: bool,
@@ -70,6 +111,9 @@ pub struct Config {
     pub apb2_pre: APBPrescaler,
 
     pub ls: super::LsConfig,
+
+    pub hspll_src: HsPllSource,
+    pub hspll: Option<HsPll>,
     // /// Per-peripheral kernel clock selection muxes
     // pub mux: super::mux::ClockMux,
 }
@@ -93,6 +137,10 @@ impl Config {
             apb1_pre: APBPrescaler::DIV1,
             apb2_pre: APBPrescaler::DIV1,
             ls: super::LsConfig::default_lsi(),
+            hspll_src: HsPllSource::HSE,
+            hspll: Some(HsPll {
+                pre: HsPllPrescaler::DIV2,
+            }),
         }
     };
     pub const SYSCLK_FREQ_144MHZ_HSE: Config = {
@@ -112,6 +160,10 @@ impl Config {
             apb1_pre: APBPrescaler::DIV1,
             apb2_pre: APBPrescaler::DIV1,
             ls: super::LsConfig::default_lsi(),
+            hspll_src: HsPllSource::HSE,
+            hspll: Some(HsPll {
+                pre: HsPllPrescaler::DIV2,
+            }),
         }
     };
     pub const SYSCLK_FREQ_144MHZ_HSI: Config = {
@@ -128,6 +180,10 @@ impl Config {
             apb1_pre: APBPrescaler::DIV1,
             apb2_pre: APBPrescaler::DIV1,
             ls: super::LsConfig::default_lsi(),
+            hspll_src: HsPllSource::HSI,
+            hspll: Some(HsPll {
+                pre: HsPllPrescaler::DIV2,
+            }),
         }
     };
     pub const SYSCLK_FREQ_96MHZ_HSI: Config = {
@@ -144,6 +200,10 @@ impl Config {
             apb1_pre: APBPrescaler::DIV4, // 24MHz
             apb2_pre: APBPrescaler::DIV4,
             ls: super::LsConfig::default_lsi(),
+            hspll_src: HsPllSource::HSI,
+            hspll: Some(HsPll {
+                pre: HsPllPrescaler::DIV2,
+            }),
         }
     };
 }
@@ -161,6 +221,8 @@ impl Default for Config {
             apb1_pre: APBPrescaler::DIV1,
             apb2_pre: APBPrescaler::DIV1,
             ls: super::LsConfig::default(),
+            hspll_src: HsPllSource::HSE,
+            hspll: None,
         }
     }
 }
@@ -286,6 +348,38 @@ pub(crate) unsafe fn init(config: Config) {
         } else {
             None
         }
+    };
+
+    // Configure HSPLL for USBHS
+
+    #[cfg(d8c)]
+    if let Some(hspll) = config.hspll {
+        // Disable HSPLL
+        RCC.cfgr2().modify(|w| w.set_usbhs_pllalive(false));
+        let hspll_src = match config.hspll_src {
+            HsPllSource::HSI => hsi.unwrap(),
+            HsPllSource::HSE => hse.unwrap(),
+        };
+        let in_freq = hspll_src / hspll.pre;
+        let ref_clk = match in_freq {
+            Hertz(3_000_000) => HsPllRef::_3M,
+            Hertz(4_000_000) => HsPllRef::_4M,
+            Hertz(8_000_000) => HsPllRef::_8M,
+            Hertz(5_000_000) => HsPllRef::_5M,
+            _ => panic!(),
+        };
+
+        RCC.cfgr2().modify(|w| {
+            w.set_usbhs_prediy(hspll.pre as u8);
+            w.set_usbhs_ckpef_sel(ref_clk as u8);
+            w.set_usbhs_pll_src(if config.hspll_src == HsPllSource::HSI {
+                true
+            } else {
+                false
+            });
+            w.set_usbhs_clk_src(true);
+        });
+        RCC.cfgr2().modify(|w| w.set_usbhs_pllalive(true));
     };
 
     // Configure sysclk
