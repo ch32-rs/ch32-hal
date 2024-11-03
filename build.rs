@@ -391,6 +391,8 @@ fn main() {
         // USB is splitted into multiple impls
         (("usbd", "DP"), quote!(crate::usbd::DpPin)),
         (("usbd", "DM"), quote!(crate::usbd::DmPin)),
+        (("usbhs", "DP"), quote!(crate::usbhs::DpPin)),
+        (("usbhs", "DM"), quote!(crate::usbhs::DmPin)),
         // USBPD, handled by usbpd/mod.rs
         //(("usbpd", "CC1"), quote!(crate::usbpd::Cc1Pin)),
         //(("usbpd", "CC2"), quote!(crate::usbpd::Cc2Pin)),

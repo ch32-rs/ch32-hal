@@ -42,8 +42,8 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 | I2C         | ✅     | ✅  | ✅ | ❓  | ❓   | ❓      |        |
 | ADC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
 | Timer(PWM)  | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
-| USB/OTG FS  | ✅     | N/A  | N/A  | N/A  | N/A   | N/A      |        |
-| USB/OTG HS  | ❌     | N/A  | N/A  | N/A  | N/A   | N/A      |        |
+| USB/OTG FS  | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
+| USB HS      | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
 
 
 - ✅ : Expected to work
@@ -52,6 +52,9 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 - `*` marks the async driver
 - TODO: I haven't got a dev board yet, help-wanted
 - N/A: Not available
+
+### Notes
+- For USB OTGFS and HS, look at the `mod.rs` respsectively to understand what is / is not tested.
 
 ### TODOs
 
