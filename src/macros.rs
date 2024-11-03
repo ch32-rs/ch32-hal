@@ -118,3 +118,17 @@ macro_rules! error {
         }
     };
 }
+
+#[collapse_debuginfo(yes)]
+macro_rules! unwrap {
+    ($e:expr) => {{
+        #[cfg(feature = "defmt")]
+        {
+            ::defmt::unwrap!($e)
+        }
+        #[cfg(not(feature = "defmt"))]
+        {
+            $e.unwrap()
+        }
+    }};
+}
