@@ -23,8 +23,7 @@ jobs:
           rustup default nightly
           rustup component add rust-src
           rustup update
-          rustup target add riscv32imac-unknown-none-elf
-          rustup target add riscv32imafc-unknown-none-elf
+          rustup target add riscv32imc-unknown-none-elf
           rustup target add riscv32i-unknown-none-elf
       - name: Fetch Deps
         # if this is a pull request

@@ -17,12 +17,11 @@ embassy-executor = { version = "0.6.0", features = [
 ] }
 embassy-time = { version = "0.3.2" }
 
-qingke-rt = "0.4.0"
-qingke = "0.4.0"
-# qingke-rt = { version = "0.4.0", path = "../../../qingke/qingke-rt" }
-# qingke = { version = "0.4.0", path = "../../../qingke" }
+# This is okay because we should automatically use whatever ch32-hal uses
+qingke-rt = "*"
+qingke = "*"
 
-panic-halt = "0.2.0"
+panic-halt = "1.0"
 
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.

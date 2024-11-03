@@ -17,8 +17,8 @@ ch32-metapac = { features = [
     "rt",
 ], git = "https://github.com/ch32-rs/ch32-metapac", rev = "cef1944dadf3a5d198e687500b8f5964f29efdf6" }
 
-qingke = { version = "0.4.0", features = ["critical-section-impl"] }
-qingke-rt = { version = "0.4.0", optional = true }
+qingke = { version = "0.5.0", features = ["critical-section-impl"] }
+qingke-rt = { version = "0.5.0", optional = true }
 
 # TODO: remove this
 embedded-hal-02 = { package = "embedded-hal", version = "0.2.6", features = [
