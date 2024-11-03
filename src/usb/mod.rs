@@ -22,6 +22,9 @@ impl<'d, const NR_EP: usize> EndpointBufferAllocator<'d, NR_EP> {
         let ep_buf_idx = self.ep_next;
         self.ep_next += 1;
 
+        // TODO: Fix this, and allow variable buffer sizes
+        assert!(max_packet_size as usize <= ENDPOINT_DATA_BUFFER_SIZE);
+
         Ok(EndpointData {
             max_packet_size,
             buffer: unsafe { core::mem::transmute(&self.ep_buffer[ep_buf_idx] as *const EndpointDataBuffer) },
@@ -41,11 +44,11 @@ impl<'d> EndpointData<'d> {
 }
 
 // todo generic
-const EP_MAX_PACKET_SIZE: usize = 64;
+const ENDPOINT_DATA_BUFFER_SIZE: usize = 64;
 
 #[repr(C, align(4))]
 pub struct EndpointDataBuffer {
-    data: [u8; EP_MAX_PACKET_SIZE as usize],
+    data: [u8; ENDPOINT_DATA_BUFFER_SIZE as usize],
 }
 
 impl Default for EndpointDataBuffer {
