@@ -1,8 +1,10 @@
+use core::cell::Cell;
 use core::future::{poll_fn, Future};
 use core::pin::Pin;
 use core::sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering};
 use core::task::{Context, Poll, Waker};
 
+use embassy_sync::blocking_mutex::CriticalSectionMutex;
 use embassy_sync::waitqueue::AtomicWaker;
 
 use super::ringbuffer::{DmaCtrl, OverrunError, ReadableDmaRingBuffer, WritableDmaRingBuffer};
@@ -144,13 +146,12 @@ impl AnyChannel {
                 } else if isr.tcif(info.num) && cr.read().tcie() {
                     // Acknowledge transfer complete interrupt
                     r.ifcr().write(|w| w.set_tcif(info.num, true));
-                    #[cfg(not(qingke_v2))]
-                    state.complete_count.fetch_add(1, Ordering::Release);
-                    #[cfg(qingke_v2)]
                     critical_section::with(|_| {
-                        let x = state.complete_count.load(Ordering::Relaxed);
-                        state.complete_count.store(x + 1, Ordering::Release);
-                    })
+                        // #safty this is okay because critical section ensures
+                        // no interruption
+                        let cnt = state.complete_count.load(Ordering::Acquire);
+                        state.complete_count.store(cnt + 1, Ordering::Release);
+                    });
                 } else {
                     return;
                 }
@@ -476,14 +477,11 @@ impl<'a> DmaCtrl for DmaCtrlImpl<'a> {
 
     fn reset_complete_count(&mut self) -> usize {
         let state = &STATE[self.0.id as usize];
-        #[cfg(not(qingke_v2))]
-        return state.complete_count.swap(0, Ordering::AcqRel);
-        #[cfg(qingke_v2)]
-        return critical_section::with(|_| {
-            let x = state.complete_count.load(Ordering::Acquire);
+        critical_section::with(|_| {
+            let old_val = state.complete_count.load(Ordering::Acquire);
             state.complete_count.store(0, Ordering::Release);
-            x
-        });
+            old_val
+        })
     }
 
     fn set_waker(&mut self, waker: &Waker) {
