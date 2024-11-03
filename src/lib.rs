@@ -83,6 +83,9 @@ pub mod otg_fs;
 #[cfg(usbd)]
 pub mod usbd;
 
+#[cfg(usbhs_v3)]
+pub mod usbhs;
+
 #[cfg(usbpd)]
 pub mod usbpd;
 
