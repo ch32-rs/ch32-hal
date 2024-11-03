@@ -250,7 +250,7 @@ where
         .await
     }
 
-    async fn data_out(&mut self, buf: &mut [u8], first: bool, last: bool) -> Result<usize, EndpointError> {
+    async fn data_out(&mut self, buf: &mut [u8], first: bool, _last: bool) -> Result<usize, EndpointError> {
         let regs = T::regs();
 
         if buf.len() > self.ep0_buf.max_packet_size as usize {
