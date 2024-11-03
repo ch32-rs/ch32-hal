@@ -1,4 +1,4 @@
-use embassy_usb_driver::{Direction, EndpointAllocError};
+use embassy_usb_driver::EndpointAllocError;
 
 pub(crate) struct EndpointBufferAllocator<'d, const NR_EP: usize> {
     ep_buffer: &'d mut [EndpointDataBuffer; NR_EP],
@@ -29,7 +29,7 @@ impl<'d, const NR_EP: usize> EndpointBufferAllocator<'d, NR_EP> {
     }
 }
 
-pub(crate) struct EndpointData<'d> {
+pub struct EndpointData<'d> {
     pub max_packet_size: u16,
     pub buffer: &'d mut EndpointDataBuffer,
 }
@@ -83,23 +83,16 @@ impl EndpointDataBuffer {
 }
 
 /// USB Direction Trait
-pub trait Dir {
-    /// Returns the direction value.
-    fn dir() -> Direction;
-}
+pub trait Dir {}
 
 /// Marker type for the "IN" direction.
 pub struct In;
-impl Dir for In {
-    fn dir() -> Direction {
-        Direction::In
-    }
-}
+impl Dir for In {}
 
 /// Marker type for the "OUT" direction.
 pub struct Out;
-impl Dir for Out {
-    fn dir() -> Direction {
-        Direction::Out
-    }
-}
+impl Dir for Out {}
+
+/// Marker type for the control endpoint
+pub struct InOut;
+impl Dir for InOut {}
