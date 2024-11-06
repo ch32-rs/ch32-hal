@@ -73,7 +73,7 @@ This section lists some key items that are not implemented yet. And should be no
 
 This is a list for awesome projects that are built using ch32-hal
 
-- ... not yet :(
+- [Hackoween 2024 badge](https://github.com/rappet/hackoween-badge)
 
 ## Minimum supported Rust version(MSRV)
 
