@@ -368,7 +368,7 @@ where
                 v.set_mask_r_res(EpRxResponse::ACK);
                 v.set_r_tog(true);
             });
-            
+
             // Expect the empty OUT token for status
             poll_fn(|ctx| {
                 super::EP_WAKERS[0].register(ctx.waker());

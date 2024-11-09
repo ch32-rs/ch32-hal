@@ -33,10 +33,10 @@ use ch32_metapac::otg::vals::{EpRxResponse, EpTxResponse, UsbToken};
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_usb_driver::{Direction, EndpointAddress, EndpointInfo, EndpointType, Event};
 use endpoint::{ControlPipe, Endpoint};
-use crate::usb::{Dir, EndpointBufferAllocator, EndpointDataBuffer, In, Out};
 
 use crate::gpio::{AFType, Speed};
 use crate::interrupt::typelevel::Interrupt;
+use crate::usb::{Dir, EndpointBufferAllocator, EndpointDataBuffer, In, Out};
 use crate::{interrupt, peripherals, Peripheral, RccPeripheral};
 
 pub mod endpoint;
@@ -351,7 +351,7 @@ where
     }
 
     fn endpoint_set_enabled(&mut self, ep_addr: EndpointAddress, enabled: bool) {
-        #[cfg(feature="defmt")]
+        #[cfg(feature = "defmt")]
         trace!(
             "[USBFS] Endpoint: {}, {}: Set enable={}",
             ep_addr.index(),
