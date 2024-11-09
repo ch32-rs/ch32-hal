@@ -391,5 +391,4 @@ mod irq_impl {
     }
 }
 
-
 pub(crate) use irq_impl::*;
