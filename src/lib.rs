@@ -57,7 +57,7 @@ pub mod dma;
 
 #[cfg(adc)]
 pub mod adc;
-#[cfg(peri_dac1)]
+#[cfg(dac)]
 pub mod dac;
 pub mod exti;
 pub mod gpio;
