@@ -446,7 +446,7 @@ fn main() {
                     let ch: u8 = pin.signal.strip_prefix("OUT").unwrap().parse().unwrap();
 
                     g.extend(quote! {
-                    impl_dac_pin!( #peri, #pin_name, #ch);
+                        impl_dac_pin!( #peri, #pin_name, #ch);
                     })
                 }
             }

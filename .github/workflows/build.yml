@@ -23,7 +23,7 @@ jobs:
           - ch32v103c8t6
           - ch32v203f8u6
           - ch32v208wbu6
-          - ch32v303vct6
+          - ch32v303cbt6
           - ch32v305fbp6
           - ch32v307vct6
           - ch32x035f7p6
@@ -39,7 +39,7 @@ jobs:
             target: riscv32imc-unknown-none-elf
           - chip: ch32v208wbu6
             target: riscv32imc-unknown-none-elf
-          - chip: ch32v303vct6
+          - chip: ch32v303cbt6
             # use rv32imc because ri32imfc does not exist, hal should not use FP anyways
             target: riscv32imc-unknown-none-elf
           - chip: ch32v305fbp6
