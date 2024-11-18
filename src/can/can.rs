@@ -3,12 +3,17 @@ use super::CanFrame;
 use crate as hal;
 use crate::can::registers::Registers;
 use crate::can::util;
-use crate::{into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral};
+use crate::{into_ref, pac, Peripheral, PeripheralRef, RccPeripheral};
 
 pub struct Can<'d, T: Instance> {
     _peri: PeripheralRef<'d, T>,
     fifo: CanFifo,
     last_mailbox_used: usize,
+}
+
+#[derive(Debug)]
+pub enum CanInitError {
+    InvalidTimings,
 }
 
 impl<'d, T: Instance> Can<'d, T> {
@@ -22,7 +27,7 @@ impl<'d, T: Instance> Can<'d, T> {
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, CanInitError> {
         into_ref!(peri, rx, tx);
 
         let this = Self {
@@ -49,7 +54,7 @@ impl<'d, T: Instance> Can<'d, T> {
 
         // Configure bit timing parameters and CAN operating mode
         let Some(bit_timings) = util::calc_can_timings(T::frequency().0, bitrate) else {
-            return Err(());
+            return Err(CanInitError::InvalidTimings);
         };
         // .expect("Bit timing parameters weren't satisfied for CAN clock rate and desired bitrate.");
         Registers(T::regs()).set_bit_timing_and_mode(bit_timings, mode);
