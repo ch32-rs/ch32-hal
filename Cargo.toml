@@ -57,7 +57,7 @@ quote = "1.0"
 
 [features]
 default = ["embassy", "rt"]
-rt = ["dep:qingke-rt"]
+rt = ["dep:qingke-rt", "rt-wfi"]
 highcode = ["qingke-rt/highcode"]
 embassy = [
     "dep:embassy-time-queue-utils",
@@ -90,6 +90,7 @@ time-driver-tim8 = ["_time-driver"]
 time-driver-tim9 = ["_time-driver"]
 ## Use TIM10 as time driver
 time-driver-tim10 = ["_time-driver"]
+rt-wfi = []
 
 # Chip-selection features
 
