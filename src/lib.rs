@@ -13,6 +13,10 @@ include!(concat!(env!("OUT_DIR"), "/_macros.rs"));
 pub(crate) mod internal;
 
 mod macros;
+
+#[cfg(feature = "can")]
+pub mod can;
+
 pub mod time;
 /// Operating modes for peripherals.
 pub mod mode {
