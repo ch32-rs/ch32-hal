@@ -23,10 +23,8 @@ pub mod time_driver_impl;
 /// The WCH QingKe RISC-V core deviates from standard RISC-V specification:
 /// - `WFI` instruction will not wake up from disabled interrupts
 /// - Either `WFITOWFE` or `SEVONPEND` must be enabled for proper wake-up behavior
-///
-/// `WFITOWFE` is configured in `qingke-rt`, so no additional setup needed here
 pub unsafe fn init() {
-    // crate::pac::PFIC.sctlr().modify(|w| w.set_sevonpend(true));
+    crate::pac::PFIC.sctlr().modify(|w| w.set_sevonpend(true));
 
     #[cfg(all(qingke_v4, not(time_driver_timer)))]
     time_driver_impl::init();
