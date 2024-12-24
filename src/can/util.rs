@@ -81,7 +81,7 @@ pub fn calc_can_timings(periph_clock: u32, can_bitrate: u32) -> Option<NominalBi
     let mut bs1 = ((7 * bs1_bs2_sum - 1) + 4) / 8; // Trying rounding to nearest first
     let mut bs2 = bs1_bs2_sum - bs1;
 
-    if (bs1_bs2_sum <= bs1) {
+    if bs1_bs2_sum <= bs1 {
         return None;
     }
     // core::assert!(bs1_bs2_sum > bs1);
