@@ -11,8 +11,8 @@ pub struct Bit16MaskReg<'a> {
 
 impl Bit16IdReg<'_> {
     pub fn set(&mut self, id: StandardId, opts: FilterOptions) {
-        let bits = (id.as_raw() << 3) | ((opts.rtr_enabled as u16) << 2);
-        *self.0 &= 0x0000;
+        let bits = (id.as_raw() << 5) | ((opts.rtr_enabled as u16) << 4);
+        *self.0 = 0x0000;
         *self.0 |= bits;
     }
 }
@@ -22,8 +22,8 @@ impl Bit16MaskReg<'_> {
         *self.mask &= 0xFFFF;
         *self.id &= 0xFFFF;
 
-        *self.mask |= (id << 3) | ((opts.rtr_enabled as u16) << 2);
-        *self.id |= (mask << 3) | ((opts.rtr_enabled as u16) << 2);
+        *self.mask |= (id << 5) | ((opts.rtr_enabled as u16) << 4);
+        *self.id |= (mask << 5) | ((opts.rtr_enabled as u16) << 4);
     }
 }
 

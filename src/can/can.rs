@@ -57,7 +57,7 @@ impl<'d, T: Instance> Can<'d, T> {
         let Some(bit_timings) = util::calc_can_timings(T::frequency().0, bitrate) else {
             return Err(CanInitError::InvalidTimings);
         };
-        // .expect("Bit timing parameters weren't satisfied for CAN clock rate and desired bitrate.");
+
         Registers(T::regs()).set_bit_timing_and_mode(bit_timings, mode);
 
         Registers(T::regs()).leave_init_mode(); // Exit CAN initialization mode
