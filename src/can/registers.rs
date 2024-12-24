@@ -53,7 +53,7 @@ impl Registers {
     ) {
         self.0.fctlr().modify(|w| w.set_finit(true)); // Enable filter init mode
         self.0.fwr().modify(|w| w.set_fact(filter.bank, true)); // Activate new filter in filter bank
-        self.0.fscfgr().modify(|w| w.set_fsc(filter.bank, true)); // Set filter scale config to single 32-bit (16-bit not implemented)
+        self.0.fscfgr().modify(|w| w.set_fsc(filter.bank, filter.bit_mode.val_bool())); // Set filter scale config (32bit or 16bit mode) 
         self.0
             .fr(filter.fr_id_value_reg())
             .write_value(crate::pac::can::regs::Fr(filter.id_value)); // Set filter's id value to match/mask
@@ -136,6 +136,11 @@ impl Registers {
 
     pub fn fifo_has_messages_pending(&self, fifo: &super::CanFifo) -> bool {
         self.0.rfifo(fifo.val()).read().fmp() != 0
+    }
+
+    pub fn reset_fifo(&self, fifo: &super::CanFifo) {
+        self.0.rfifo(fifo.val()).modify(|w| w.set_fmp(0));
+        self.0.rfifo(fifo.val()).modify(|w| w.set_fovr(false));
     }
 
     pub fn read_frame_fifo(&self, fifo: &super::CanFifo) -> super::frame::CanFrame {
