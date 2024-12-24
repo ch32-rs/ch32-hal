@@ -13,28 +13,17 @@ impl<MODE: FilterMode> CanFilter<Bit32Mode, MODE> {
             id_value: 0,
             mode: self.mode,
             bank: self.bank,
-            bit_mode: PhantomData,
+            bit_mode: Bit16Mode,
         }
     }
 }
 
 impl CanFilter<Bit32Mode, ListMode> {
-    /// Creates a filter that accepts all frames
-    pub fn accept_all() -> Self {
-        CanFilter {
-            bank: 0,
-            mode: ListMode,
-            id_value: 0,
-            id_mask: 0,
-            bit_mode: PhantomData,
-        }
-    }
-
     /// Create a filter to configure id list
     pub fn new_id_list() -> Self {
         Self {
             bank: 0,
-            bit_mode: PhantomData,
+            bit_mode: Bit32Mode,
             mode: ListMode,
 
             id_mask: 0,
@@ -44,10 +33,21 @@ impl CanFilter<Bit32Mode, ListMode> {
 }
 
 impl CanFilter<Bit32Mode, MaskMode> {
+    /// Creates a filter that accepts all frames
+    pub fn accept_all() -> Self {
+        CanFilter {
+            bank: 0,
+            mode: MaskMode,
+            id_value: 0,
+            id_mask: 0,
+            bit_mode: Bit32Mode,
+        }
+    }
+
     pub fn new_id_mask() -> Self {
         Self {
             bank: 0,
-            bit_mode: PhantomData,
+            bit_mode: Bit32Mode,
             mode: MaskMode,
 
             id_mask: 0,

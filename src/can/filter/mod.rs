@@ -24,13 +24,24 @@ impl FilterMode for ListMode {
     }
 }
 
-pub trait BitMode {}
+pub trait BitMode {
+    fn val_bool(&self) -> bool;
+}
 
 pub struct Bit16Mode;
 pub struct Bit32Mode;
 
-impl BitMode for Bit16Mode {}
-impl BitMode for Bit32Mode {}
+impl BitMode for Bit16Mode {
+    fn val_bool(&self) -> bool {
+        false
+    }
+}
+
+impl BitMode for Bit32Mode {
+    fn val_bool(&self) -> bool {
+        true
+    }
+}
 
 /// See table 24-1 of the reference manual for more details on filtering and modes.
 /// Each filter is applied for only one bank and for one register on it bank
@@ -43,7 +54,7 @@ pub struct CanFilter<BIT: BitMode, MODE: FilterMode> {
     /// Bit mask to be applied to incoming message before comparing it to a predefined value.
     /// In IdList mode, this is used in the same way as `id_value` is.
     pub id_mask: u32,
-    pub bit_mode: PhantomData<BIT>,
+    pub bit_mode: BIT,
     pub mode: MODE,
 }
 
