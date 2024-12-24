@@ -27,23 +27,14 @@ impl core::fmt::Display for CanError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Overrun => write!(f, "The peripheral receive buffer was overrun"),
-            Self::Bit => write!(
-                f,
-                "Bit value that is monitored differs from the bit value sent"
-            ),
+            Self::Bit => write!(f, "Bit value that is monitored differs from the bit value sent"),
             Self::Stuff => write!(f, "Sixth consecutive equal bits detected"),
             Self::Crc => write!(f, "Calculated CRC sequence does not equal the received one"),
-            Self::Form => write!(
-                f,
-                "A fixed-form bit field contains one or more illegal bits"
-            ),
+            Self::Form => write!(f, "A fixed-form bit field contains one or more illegal bits"),
             Self::Acknowledge => write!(f, "Transmitted frame was not acknowledged"),
             Self::BusOff => write!(f, "The peripheral is in Bus Off mode"),
             Self::BusPassive => write!(f, "The peripheral is in Bus Passive mode"),
-            Self::BusWarning => write!(
-                f,
-                "A peripheral error counter has reached the Warning threshold"
-            ),
+            Self::BusWarning => write!(f, "A peripheral error counter has reached the Warning threshold"),
         }
     }
 }
@@ -100,10 +91,7 @@ impl CanMode {
                 lbkm: true,
                 silm: false,
             },
-            CanMode::SilentLoopback => CanModeRegs {
-                lbkm: true,
-                silm: true,
-            },
+            CanMode::SilentLoopback => CanModeRegs { lbkm: true, silm: true },
         }
     }
 }
@@ -126,58 +114,6 @@ impl CanFifo {
             CanFifo::Fifo0 => false,
             CanFifo::Fifo1 => true,
         }
-    }
-}
-
-pub enum CanFilterMode {
-    /// Matches the incoming ID to a predefined value after applying a predefined bit mask.
-    IdMask,
-    /// Matches the incoming ID to a predefined set of values.
-    IdList,
-}
-
-impl CanFilterMode {
-    pub(crate) fn val_bool(&self) -> bool {
-        match self {
-            CanFilterMode::IdMask => false,
-            CanFilterMode::IdList => true,
-        }
-    }
-}
-
-/// See table 24-1 of the reference manual for more details on filtering and modes.
-pub struct CanFilter {
-    /// Filter bank number, 0-27
-    pub bank: usize,
-    /// Filter mode, either identifier mask or identifier list
-    pub mode: CanFilterMode,
-    /// Values for `STID:EXID:IDE:RTR:0` from msb to lsb to be matched with an incoming message's values.
-    /// In IdList mode, value should be a 32-bit id or two 16-bit ids.
-    pub id_value: u32,
-    /// Bit mask to be applied to incoming message before comparing it to a predefined value.
-    /// In IdList mode, this is used in the same way as `id_value` is.
-    pub id_mask: u32,
-}
-
-impl CanFilter {
-    /// Creates a filter that accepts all frames
-    pub fn accept_all() -> Self {
-        Self {
-            bank: 0,
-            mode: CanFilterMode::IdMask,
-            id_value: 0,
-            id_mask: 0,
-        }
-    }
-
-    /// Offset in `usize` for bank `n` filter register 1
-    pub(crate) fn fr_id_value_reg(&self) -> usize {
-        self.bank * 2 + 0
-    }
-
-    /// Offset in `usize` for bank `n` filter register 2
-    pub(crate) fn fr_id_mask_reg(&self) -> usize {
-        self.bank * 2 + 1
     }
 }
 

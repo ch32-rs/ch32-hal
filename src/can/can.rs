@@ -1,5 +1,6 @@
 use super::enums::*;
-use super::CanFrame;
+use super::filter::{BitMode, FilterMode};
+use super::{CanFilter, CanFrame};
 use crate as hal;
 use crate::can::registers::Registers;
 use crate::can::util;
@@ -64,7 +65,7 @@ impl<'d, T: Instance> Can<'d, T> {
         Ok(this)
     }
 
-    pub fn add_filter(&self, filter: CanFilter) {
+    pub fn add_filter<BIT: BitMode, MODE: FilterMode>(&self, filter: CanFilter<BIT, MODE>) {
         Registers(T::regs()).add_filter(filter, &self.fifo);
     }
 

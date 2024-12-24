@@ -1,3 +1,5 @@
+use super::filter::{BitMode, FilterMode};
+
 const CAN_TX_TIMEOUT: u32 = 0xFFF;
 
 pub(crate) struct Registers(pub crate::pac::can::Can);
@@ -43,7 +45,12 @@ impl Registers {
         });
     }
 
-    pub fn add_filter(&self, filter: super::CanFilter, associate_fifo: &super::CanFifo) {
+    /// Each filter bank consists of 2 32-bit registers CAN_FxR0 and CAN_FxR1
+    pub fn add_filter<BIT: BitMode, MODE: FilterMode>(
+        &self,
+        filter: super::CanFilter<BIT, MODE>,
+        associate_fifo: &super::CanFifo,
+    ) {
         self.0.fctlr().modify(|w| w.set_finit(true)); // Enable filter init mode
         self.0.fwr().modify(|w| w.set_fact(filter.bank, true)); // Activate new filter in filter bank
         self.0.fscfgr().modify(|w| w.set_fsc(filter.bank, true)); // Set filter scale config to single 32-bit (16-bit not implemented)
@@ -145,7 +152,6 @@ impl Registers {
         self.0.rfifo(fifo.val()).write(|v| {
             v.set_fmp(0);
         });
-
 
         frame
     }
