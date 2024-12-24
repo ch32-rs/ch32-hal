@@ -5,10 +5,12 @@ use embedded_can::Id;
 use super::{Bit16Mode, Bit32Mode, CanFilter, FilterMode, FilterOptions, ListMode, MaskMode};
 
 impl<MODE: FilterMode> CanFilter<Bit32Mode, MODE> {
+    /// Convert filter to 16bit mode
+    /// Register values in selected bank will be reset
     pub fn use_16bit(self) -> CanFilter<Bit16Mode, MODE> {
         CanFilter {
-            id_mask: self.id_mask,
-            id_value: self.id_value,
+            id_mask: 0,
+            id_value: 0,
             mode: self.mode,
             bank: self.bank,
             bit_mode: PhantomData,
@@ -28,6 +30,7 @@ impl CanFilter<Bit32Mode, ListMode> {
         }
     }
 
+    /// Create a filter to configure id list
     pub fn new_id_list() -> Self {
         Self {
             bank: 0,
