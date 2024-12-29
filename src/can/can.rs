@@ -148,8 +148,12 @@ pin_trait!(TxPin, Instance);
 foreach_peripheral!(
     (can, $inst:ident) => {
         impl SealedInstance for peripherals::$inst {
+            // FIXME: CH32L1 supports CANFD, and is compatible with the CAN peripheral.
             fn regs() -> crate::pac::can::Can {
-                crate::pac::$inst
+                #[cfg(ch32l1)]
+                return unsafe { crate::pac::can::Can::from_ptr(crate::pac::$inst.as_ptr()) };
+                #[cfg(not(ch32l1))]
+                return crate::pac::$inst;
             }
         }
 
