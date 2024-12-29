@@ -10,7 +10,6 @@ ch32-hal = { path = "../../", features = [
     "embassy",
     "rt",
     "time-driver-tim2",
-    "can"
 ], default-features = false }
 
 embassy-executor = { version = "0.7.0", features = [

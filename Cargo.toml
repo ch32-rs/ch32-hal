@@ -26,7 +26,7 @@ embedded-hal-02 = { package = "embedded-hal", version = "0.2.6", features = [
 ] }
 embedded-hal = { package = "embedded-hal", version = "1.0" }
 embedded-hal-async = "1.0.0"
-embedded-can = { version = "0.4.1", optional = true }
+embedded-can = "0.4.1"
 
 critical-section = { version = "1.2.0" }
 defmt = { version = "0.3.8", optional = true }
@@ -91,7 +91,6 @@ time-driver-tim8 = ["_time-driver"]
 time-driver-tim9 = ["_time-driver"]
 ## Use TIM10 as time driver
 time-driver-tim10 = ["_time-driver"]
-can = ["dep:embedded-can"]
 rt-wfi = []
 
 # Chip-selection features

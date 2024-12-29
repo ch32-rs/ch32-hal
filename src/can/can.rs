@@ -1,10 +1,9 @@
 use super::enums::*;
 use super::filter::{BitMode, FilterMode};
 use super::{CanFilter, CanFrame};
-use crate as hal;
 use crate::can::registers::Registers;
 use crate::can::util;
-use crate::{into_ref, pac, Peripheral, PeripheralRef, RccPeripheral};
+use crate::{self as hal, into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral, RemapPeripheral};
 
 pub struct Can<'d, T: Instance> {
     _peri: PeripheralRef<'d, T>,
@@ -21,10 +20,10 @@ impl<'d, T: Instance> Can<'d, T> {
     /// Assumes AFIO & PORTB clocks have been enabled by HAL.
     ///
     /// CAN_RX is mapped to PB8, and CAN_TX is mapped to PB9.
-    pub fn new(
+    pub fn new<const REMAP: u8>(
         peri: impl Peripheral<P = T> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T>> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T>> + 'd,
+        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
+        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
@@ -47,6 +46,7 @@ impl<'d, T: Instance> Can<'d, T> {
             pac::gpio::vals::Mode::OUTPUT_50MHZ,
             pac::gpio::vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
         );
+        T::set_remap(REMAP);
 
         // //here should remap functionality be added
         // T::remap(0b10);
@@ -134,29 +134,27 @@ where
     }
 }
 
-pub trait SealedInstance: RccPeripheral {
+pub trait SealedInstance: RccPeripheral + RemapPeripheral {
     fn regs() -> pac::can::Can;
-    /// Either `0b00`, `0b10` or `b11` on CAN1. `0` or `1` on CAN2.
-    fn remap(rm: u8) -> ();
+    // Either `0b00`, `0b10` or `b11` on CAN1. `0` or `1` on CAN2.
+    // fn remap(rm: u8) -> ();
 }
 
 pub trait Instance: SealedInstance + 'static {}
-pub trait RxPin<T: Instance>: hal::gpio::Pin {}
-pub trait TxPin<T: Instance>: hal::gpio::Pin {}
 
-impl SealedInstance for hal::peripherals::CAN1 {
-    fn regs() -> pac::can::Can {
-        pac::CAN1
-    }
-    fn remap(rm: u8) {
-        pac::AFIO.pcfr1().modify(|w| w.set_can1_rm(rm));
-    }
-}
+pin_trait!(RxPin, Instance);
+pin_trait!(TxPin, Instance);
 
-impl Instance for hal::peripherals::CAN1 {}
+foreach_peripheral!(
+    (can, $inst:ident) => {
+        impl SealedInstance for peripherals::$inst {
+            fn regs() -> crate::pac::can::Can {
+                crate::pac::$inst
+            }
+        }
 
-impl RxPin<hal::peripherals::CAN1> for hal::peripherals::PB8 {}
-impl TxPin<hal::peripherals::CAN1> for hal::peripherals::PB9 {}
-
-impl RxPin<hal::peripherals::CAN1> for hal::peripherals::PA11 {}
-impl TxPin<hal::peripherals::CAN1> for hal::peripherals::PA12 {}
+        impl Instance for peripherals::$inst {
+           // type Interrupt = crate::_generated::peripheral_interrupts::$inst::GLOBAL;
+        }
+    };
+);

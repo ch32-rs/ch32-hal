@@ -14,9 +14,6 @@ pub(crate) mod internal;
 
 mod macros;
 
-#[cfg(feature = "can")]
-pub mod can;
-
 pub mod time;
 /// Operating modes for peripherals.
 pub mod mode {
@@ -92,6 +89,9 @@ pub mod usbhs;
 
 #[cfg(usbpd)]
 pub mod usbpd;
+
+#[cfg(can)]
+pub mod can;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;
