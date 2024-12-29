@@ -396,6 +396,8 @@ fn main() {
         // USBPD, handled by usbpd/mod.rs
         //(("usbpd", "CC1"), quote!(crate::usbpd::Cc1Pin)),
         //(("usbpd", "CC2"), quote!(crate::usbpd::Cc2Pin)),
+        (("can", "TX"), quote!(crate::can::TxPin)),
+        (("can", "RX"), quote!(crate::can::RxPin)),
     ]
     .into();
 
