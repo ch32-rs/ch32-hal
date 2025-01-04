@@ -67,3 +67,15 @@ macro_rules! println {
         }
     }
 }
+
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => {
+        {
+            use core::fmt::Write;
+            use core::write;
+
+            write!(&mut $crate::debug::SDIPrint, $($arg)*).unwrap();
+        }
+    }
+}
