@@ -53,7 +53,9 @@ impl Registers {
     ) {
         self.0.fctlr().modify(|w| w.set_finit(true)); // Enable filter init mode
         self.0.fwr().modify(|w| w.set_fact(filter.bank, true)); // Activate new filter in filter bank
-        self.0.fscfgr().modify(|w| w.set_fsc(filter.bank, filter.bit_mode.val_bool())); // Set filter scale config (32bit or 16bit mode) 
+        self.0
+            .fscfgr()
+            .modify(|w| w.set_fsc(filter.bank, filter.bit_mode.val_bool())); // Set filter scale config (32bit or 16bit mode)
         self.0
             .fr(filter.fr_id_value_reg())
             .write_value(crate::pac::can::regs::Fr(filter.id_value)); // Set filter's id value to match/mask
@@ -132,32 +134,5 @@ impl Registers {
         }
 
         super::TxStatus::OtherError
-    }
-
-    pub fn fifo_has_messages_pending(&self, fifo: &super::CanFifo) -> bool {
-        self.0.rfifo(fifo.val()).read().fmp() != 0
-    }
-
-    pub fn reset_fifo(&self, fifo: &super::CanFifo) {
-        self.0.rfifo(fifo.val()).modify(|w| w.set_fmp(0));
-        self.0.rfifo(fifo.val()).modify(|w| w.set_fovr(false));
-    }
-
-    pub fn read_frame_fifo(&self, fifo: &super::CanFifo) -> super::frame::CanFrame {
-        let dlc = self.0.rxmdtr(fifo.val()).read().dlc() as usize;
-        let raw_id = self.0.rxmir(fifo.val()).read().stid();
-
-        let id = embedded_can::StandardId::new(raw_id).unwrap();
-
-        let frame_data_unordered: u64 =
-            ((self.0.rxmdhr(fifo.val()).read().0 as u64) << 32) | self.0.rxmdlr(fifo.val()).read().0 as u64;
-
-        let frame = super::frame::CanFrame::new_from_data_registers(id, frame_data_unordered, dlc);
-
-        self.0.rfifo(fifo.val()).write(|v| {
-            v.set_fmp(0);
-        });
-
-        frame
     }
 }
