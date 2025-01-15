@@ -3,7 +3,7 @@ use super::filter::{BitMode, FilterMode};
 use super::{CanFilter, CanFrame};
 use crate::can::registers::Registers;
 use crate::can::util;
-use crate::{self as hal, into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral, RemapPeripheral};
+use crate::{into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral, RemapPeripheral};
 
 pub struct Can<'d, T: Instance> {
     _peri: PeripheralRef<'d, T>,
@@ -97,13 +97,30 @@ impl<'d, T: Instance> Can<'d, T> {
         Registers(T::regs()).transmit_status(self.last_mailbox_used)
     }
 
-    /// Returns a received frame if available.
-    pub fn receive(&self) -> nb::Result<CanFrame, CanError> {
-        if !Registers(T::regs()).fifo_has_messages_pending(&self.fifo) {
-            return nb::Result::Err(nb::Error::WouldBlock);
+    /// Try to read the next message from the queue.
+    /// If there are no messages, an error is returned.
+    pub fn try_recv(&self) -> nb::Result<CanFrame, CanError> {
+        let can = &T::regs();
+        let fifo = self.fifo.val();
+
+        //check pending messages
+        if can.rfifo(self.fifo.val()).read().fmp() == 0 {
+            return Err(nb::Error::WouldBlock);
         }
 
-        let frame = Registers(T::regs()).read_frame_fifo(&self.fifo);
+        let dlc = can.rxmdtr(fifo).read().dlc() as usize;
+        let raw_id = can.rxmir(fifo).read().stid();
+
+        let id = embedded_can::StandardId::new(raw_id).unwrap();
+
+        let frame_data_unordered: u64 = ((can.rxmdhr(fifo).read().0 as u64) << 32) | can.rxmdlr(fifo).read().0 as u64;
+
+        let frame = CanFrame::new_from_data_registers(id, frame_data_unordered, dlc);
+
+        can.rfifo(fifo).write(|w| {
+            //set the data was read
+            w.set_rfom(true);
+        });
 
         Ok(frame)
     }
@@ -130,7 +147,7 @@ where
 
     /// Returns a received frame if available.
     fn receive(&mut self) -> nb::Result<Self::Frame, Self::Error> {
-        Can::receive(self)
+        Can::try_recv(self)
     }
 }
 
