@@ -1,8 +1,6 @@
 mod bit16;
 mod bit32;
 
-use core::marker::PhantomData;
-
 /// Filter mode, either identifier mask or identifier list
 pub trait FilterMode {
     fn val_bool(&self) -> bool;
@@ -79,6 +77,6 @@ impl<BIT: BitMode, MODE: FilterMode> CanFilter<BIT, MODE> {
 /// By default rtr is disabled
 #[derive(Default)]
 pub struct FilterOptions {
-    pub rtr_enabled: bool,
-    //todo: add ide?
+    pub use_rtr: bool,
+    pub use_extended_id: bool,
 }

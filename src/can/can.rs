@@ -65,8 +65,30 @@ impl<'d, T: Instance> Can<'d, T> {
         Ok(this)
     }
 
+    /// Each filter bank consists of 2 32-bit registers CAN_FxR0 and CAN_FxR1
     pub fn add_filter<BIT: BitMode, MODE: FilterMode>(&self, filter: CanFilter<BIT, MODE>) {
-        Registers(T::regs()).add_filter(filter, &self.fifo);
+        let can = T::regs();
+        let fifo = &self.fifo;
+
+        can.fctlr().modify(|w| w.set_finit(true)); // Enable filter init mode
+
+        can.fscfgr()
+            .modify(|w| w.set_fsc(filter.bank, filter.bit_mode.val_bool())); // Set filter scale config (32bit or 16bit mode)
+
+        can.fr(filter.fr_id_value_reg())
+            .write_value(crate::pac::can::regs::Fr(filter.id_value)); // Set filter's id value to match/mask
+
+        can.fr(filter.fr_id_mask_reg())
+            .write_value(crate::pac::can::regs::Fr(filter.id_mask)); // Set filter's id bits to mask
+
+        can.fmcfgr().modify(|w| w.set_fbm(filter.bank, filter.mode.val_bool())); // Set new filter's operating mode
+
+        can.fafifor()
+            .modify(|w| w.set_ffa(filter.bank, fifo.val_bool())); // Associate CAN's FIFO to new filter
+
+        can.fwr().modify(|w| w.set_fact(filter.bank, true)); // Activate new filter
+
+        can.fctlr().modify(|w| w.set_finit(false)); // Exit filter init mode
     }
 
     /// Puts a frame in the transmit buffer to be sent on the bus.
