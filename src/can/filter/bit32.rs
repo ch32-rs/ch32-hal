@@ -61,7 +61,7 @@ pub struct Bit32IdReg<'a>(&'a mut u32);
 impl Bit32IdReg<'_> {
     pub fn set(&mut self, id: Id, opts: FilterOptions) {
         *self.0 = 0;
-        *self.0 |= (opts.rtr_enabled as u32) << 1;
+        *self.0 |= (opts.use_rtr as u32) << 1;
 
         match id {
             Id::Standard(id) => {
