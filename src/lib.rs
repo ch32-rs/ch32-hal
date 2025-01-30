@@ -1,10 +1,11 @@
 #![no_std]
 #![allow(static_mut_refs, unexpected_cfgs)]
-#![feature(naked_functions)]
 
 pub use ch32_metapac as pac;
 pub(crate) use embassy_hal_internal::{impl_peripheral, peripherals_definition, peripherals_struct};
 pub use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+#[cfg(feature = "rt")]
+pub use qingke_rt::{entry, interrupt};
 
 // This must go FIRST so that all the other modules see its macros.
 include!(concat!(env!("OUT_DIR"), "/_macros.rs"));
@@ -50,13 +51,13 @@ mod interrupt_ext;
 
 pub use crate::_generated::{peripherals, Peripherals};
 
-#[cfg(any(systick_rv2, systick_rv3))]
+#[cfg(not(time_driver_systick))]
 pub mod delay;
 pub mod dma;
 
 #[cfg(adc)]
 pub mod adc;
-#[cfg(peri_dac1)]
+#[cfg(dac)]
 pub mod dac;
 pub mod exti;
 pub mod gpio;
@@ -73,10 +74,17 @@ pub mod spi;
 pub mod timer;
 pub mod usart;
 
-#[cfg(usb)]
+/// Common structures for USB drivers
 pub mod usb;
+
+#[cfg(otg)]
+pub mod otg_fs;
+
 #[cfg(usbd)]
 pub mod usbd;
+
+#[cfg(usbhs_v3)]
+pub mod usbhs;
 
 #[cfg(usbpd)]
 pub mod usbpd;
@@ -111,12 +119,22 @@ impl Default for Config {
     }
 }
 
+/// Initialize the HAL with the provided configuration.
+///
+/// This returns the peripheral singletons that can be used for creating drivers.
+///
+/// This should only be called once at startup, otherwise it panics.
 pub fn init(config: Config) -> Peripherals {
+    // Do this first, so that it panics if user is calling `init` a second time
+    // before doing anything important.
+    let p = Peripherals::take();
+
     unsafe {
         rcc::init(config.rcc);
+        delay::init();
 
-        #[cfg(any(systick_rv2, systick_rv3))]
-        delay::Delay::init();
+        #[cfg(feature = "embassy")]
+        embassy::init();
     }
 
     ::critical_section::with(|cs| unsafe {
@@ -125,7 +143,7 @@ pub fn init(config: Config) -> Peripherals {
         exti::init(cs);
     });
 
-    Peripherals::take()
+    p
 }
 
 #[macro_export]
@@ -136,8 +154,8 @@ macro_rules! bind_interrupts {
 
         $(
             #[allow(non_snake_case)]
-            #[no_mangle]
-            unsafe extern "C" fn $irq() {
+            #[$crate::interrupt]
+            unsafe fn $irq() {
                 $(
                     <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
                 )*

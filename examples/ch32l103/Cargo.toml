@@ -6,27 +6,29 @@ edition = "2021"
 [dependencies]
 ch32-hal = { path = "../../", features = [
     "ch32l103c8t6",
+    "memory-x",
     "embassy",
     "rt",
-    "time-driver-tim2"
+    "time-driver-tim2",
 ], default-features = false }
 embassy-executor = { version = "0.6.0", features = [
-    "nightly",
     "integrated-timers",
     "arch-riscv32",
     "executor-thread",
 ] }
-embassy-time = { version = "0.3.0" }
+embassy-time = { version = "0.3.2" }
 
-qingke-rt = { version = "0.2.1" }
-qingke = "0.2.0"
-# qingke-rt = { version = "0.2.0", path = "../../../qingke/qingke-rt" }
-# qingke = { version = "0.2.0", path = "../../../qingke" }
+# This is okay because we should automatically use whatever ch32-hal uses
+qingke = "*"
+qingke-rt = "*"
 
-panic-halt = "0.2.0"
+panic-halt = "1.0"
 embedded-hal = "1.0.0"
 
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
 lto = true
 opt-level = "z" # Optimize for size.
+
+[profile.dev]
+opt-level = 1 # At least some opt so binary is not insane

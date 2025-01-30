@@ -32,7 +32,6 @@ async fn main(spawner: Spawner) -> ! {
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSI;
     let p = hal::init(config);
-    hal::embassy::init();
 
     // GPIO
     spawner.spawn(blink(p.PA15.degrade(), 500)).unwrap();

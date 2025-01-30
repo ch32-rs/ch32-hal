@@ -385,9 +385,14 @@ fn main() {
         (("sdio", "D6"), quote!(crate::sdio::D6Pin)),
         (("sdio", "D6"), quote!(crate::sdio::D7Pin)),
         (("sdio", "D8"), quote!(crate::sdio::D8Pin)),
+        // otg_fs
+        (("otg", "DP"), quote!(crate::otg_fs::DpPin)),
+        (("otg", "DM"), quote!(crate::otg_fs::DmPin)),
         // USB is splitted into multiple impls
         (("usbd", "DP"), quote!(crate::usbd::DpPin)),
         (("usbd", "DM"), quote!(crate::usbd::DmPin)),
+        (("usbhs", "DP"), quote!(crate::usbhs::DpPin)),
+        (("usbhs", "DM"), quote!(crate::usbhs::DmPin)),
         // USBPD, handled by usbpd/mod.rs
         //(("usbpd", "CC1"), quote!(crate::usbpd::Cc1Pin)),
         //(("usbpd", "CC2"), quote!(crate::usbpd::Cc2Pin)),
@@ -441,7 +446,7 @@ fn main() {
                     let ch: u8 = pin.signal.strip_prefix("OUT").unwrap().parse().unwrap();
 
                     g.extend(quote! {
-                    impl_dac_pin!( #peri, #pin_name, #ch);
+                        impl_dac_pin!( #peri, #pin_name, #ch);
                     })
                 }
             }

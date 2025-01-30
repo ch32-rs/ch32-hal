@@ -2,6 +2,8 @@
 
 #![macro_use]
 
+use core::marker::PhantomData;
+
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::pac::adc::vals;
@@ -89,7 +91,7 @@ impl<'d, T: Instance> Adc<'d, T> {
     }
 
     // regular conversion
-    pub fn configure_channel(&mut self, channel: &mut impl AdcPin<T>, rank: u8, sample_time: SampleTime) {
+    pub fn configure_channel(&mut self, channel: &mut impl AdcChannel<T>, rank: u8, sample_time: SampleTime) {
         channel.set_as_analog();
 
         let channel = channel.channel();
@@ -121,7 +123,7 @@ impl<'d, T: Instance> Adc<'d, T> {
     }
 
     // Get_ADC_Val
-    pub fn convert(&mut self, channel: &mut impl AdcPin<T>, sample_time: SampleTime) -> u16 {
+    pub fn convert(&mut self, channel: &mut impl AdcChannel<T>, sample_time: SampleTime) -> u16 {
         self.configure_channel(channel, 1, sample_time);
 
         T::regs().ctlr2().modify(|w| w.set_swstart(true));
@@ -139,14 +141,9 @@ trait SealedInstance {
     fn state() -> &'static State;
 }
 
-pub(crate) trait SealedAdcPin<T: Instance> {
+pub(crate) trait SealedAdcChannel<T: Instance> {
     fn set_as_analog(&mut self) {}
 
-    #[allow(unused)]
-    fn channel(&self) -> u8;
-}
-
-trait SealedInternalChannel<T> {
     #[allow(unused)]
     fn channel(&self) -> u8;
 }
@@ -158,10 +155,32 @@ pub trait Instance: SealedInstance + crate::Peripheral<P = Self> + crate::periph
 
 /// ADC pin.
 #[allow(private_bounds)]
-pub trait AdcPin<T: Instance>: SealedAdcPin<T> {}
-/// ADC internal channel.
-#[allow(private_bounds)]
-pub trait InternalChannel<T>: SealedInternalChannel<T> {}
+pub trait AdcChannel<T: Instance>: SealedAdcChannel<T> + Sized {
+    fn degrade_adc(mut self) -> AnyAdcChannel<T> {
+        self.set_as_analog();
+
+        AnyAdcChannel {
+            channel: self.channel(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A type-erased channel for a given ADC instance.
+///
+/// This is useful in scenarios where you need the ADC channels to have the same type, such as
+/// storing them in an array.
+pub struct AnyAdcChannel<T> {
+    channel: u8,
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> AdcChannel<T> for AnyAdcChannel<T> {}
+impl<T: Instance> SealedAdcChannel<T> for AnyAdcChannel<T> {
+    fn channel(&self) -> u8 {
+        self.channel
+    }
+}
 
 foreach_peripheral!(
     (adc, $inst:ident) => {
@@ -184,9 +203,9 @@ foreach_peripheral!(
 
 macro_rules! impl_adc_pin {
     ($inst:ident, $pin:ident, $ch:expr) => {
-        impl crate::adc::AdcPin<peripherals::$inst> for crate::peripherals::$pin {}
+        impl crate::adc::AdcChannel<peripherals::$inst> for crate::peripherals::$pin {}
 
-        impl crate::adc::SealedAdcPin<peripherals::$inst> for crate::peripherals::$pin {
+        impl crate::adc::SealedAdcChannel<peripherals::$inst> for crate::peripherals::$pin {
             fn set_as_analog(&mut self) {
                 <Self as crate::gpio::SealedPin>::set_as_analog(self);
             }
@@ -203,16 +222,16 @@ mod ch_internal {
     use super::*;
 
     pub struct VddaDiv2;
-    impl<T: Instance> AdcPin<T> for VddaDiv2 {}
-    impl<T: Instance> SealedAdcPin<T> for VddaDiv2 {
+    impl<T: Instance> AdcChannel<T> for VddaDiv2 {}
+    impl<T: Instance> SealedAdcChannel<T> for VddaDiv2 {
         fn channel(&self) -> u8 {
             18
         }
     }
 
     pub struct VrefInt;
-    impl<T: Instance> AdcPin<T> for VrefInt {}
-    impl<T: Instance> SealedAdcPin<T> for VrefInt {
+    impl<T: Instance> AdcChannel<T> for VrefInt {}
+    impl<T: Instance> SealedAdcChannel<T> for VrefInt {
         fn set_as_analog(&mut self) {
             T::regs().ctlr2().modify(|w| w.set_tsvrefe(true));
         }
@@ -222,8 +241,8 @@ mod ch_internal {
     }
 
     pub struct Temperature;
-    impl<T: Instance> AdcPin<T> for Temperature {}
-    impl<T: Instance> SealedAdcPin<T> for Temperature {
+    impl<T: Instance> AdcChannel<T> for Temperature {}
+    impl<T: Instance> SealedAdcChannel<T> for Temperature {
         fn set_as_analog(&mut self) {
             T::regs().ctlr2().modify(|w| w.set_tsvrefe(true));
         }
@@ -237,8 +256,8 @@ mod ch_internal {
     use super::*;
 
     pub struct VrefInt;
-    impl<T: Instance> AdcPin<T> for VrefInt {}
-    impl<T: Instance> SealedAdcPin<T> for VrefInt {
+    impl<T: Instance> AdcChannel<T> for VrefInt {}
+    impl<T: Instance> SealedAdcChannel<T> for VrefInt {
         fn channel(&self) -> u8 {
             15
         }
@@ -249,8 +268,8 @@ mod ch_internal {
     use super::*;
 
     pub struct VrefInt;
-    impl<T: Instance> AdcPin<T> for VrefInt {}
-    impl<T: Instance> SealedAdcPin<T> for VrefInt {
+    impl<T: Instance> AdcChannel<T> for VrefInt {}
+    impl<T: Instance> SealedAdcChannel<T> for VrefInt {
         fn set_as_analog(&mut self) {
             T::regs().ctlr2().modify(|w| w.set_tsvrefe(true));
         }
@@ -260,8 +279,8 @@ mod ch_internal {
     }
 
     pub struct Temperature;
-    impl<T: Instance> AdcPin<T> for Temperature {}
-    impl<T: Instance> SealedAdcPin<T> for Temperature {
+    impl<T: Instance> AdcChannel<T> for Temperature {}
+    impl<T: Instance> SealedAdcChannel<T> for Temperature {
         fn set_as_analog(&mut self) {
             T::regs().ctlr2().modify(|w| w.set_tsvrefe(true));
         }
@@ -276,16 +295,16 @@ mod ch_internal {
     use super::*;
 
     pub struct Vref;
-    impl<T: Instance> AdcPin<T> for Vref {}
-    impl<T: Instance> SealedAdcPin<T> for Vref {
+    impl<T: Instance> AdcChannel<T> for Vref {}
+    impl<T: Instance> SealedAdcChannel<T> for Vref {
         fn channel(&self) -> u8 {
             8
         }
     }
 
     pub struct Vcal;
-    impl<T: Instance> AdcPin<T> for Vcal {}
-    impl<T: Instance> SealedAdcPin<T> for Vcal {
+    impl<T: Instance> AdcChannel<T> for Vcal {}
+    impl<T: Instance> SealedAdcChannel<T> for Vcal {
         fn channel(&self) -> u8 {
             9
         }
@@ -360,16 +379,16 @@ mod ch_internal {
     }
     impl InvertingPin for peripherals::PB7 {}
 
-    impl<T: Instance> AdcPin<T> for Isp {}
-    impl<T: Instance> SealedAdcPin<T> for Isp {
+    impl<T: Instance> AdcChannel<T> for Isp {}
+    impl<T: Instance> SealedAdcChannel<T> for Isp {
         fn channel(&self) -> u8 {
             8
         }
     }
 
     pub struct VhvDiv5;
-    impl<T: Instance> AdcPin<T> for VhvDiv5 {}
-    impl<T: Instance> SealedAdcPin<T> for VhvDiv5 {
+    impl<T: Instance> AdcChannel<T> for VhvDiv5 {}
+    impl<T: Instance> SealedAdcChannel<T> for VhvDiv5 {
         fn channel(&self) -> u8 {
             15
         }

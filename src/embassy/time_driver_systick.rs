@@ -1,6 +1,5 @@
 //! SysTick-based time driver.
 
-use core::arch::asm;
 use core::cell::Cell;
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use core::{mem, ptr};
@@ -9,11 +8,9 @@ use critical_section::{CriticalSection, Mutex};
 use embassy_time_driver::{AlarmHandle, Driver};
 use pac::systick::vals;
 use qingke::interrupt::Priority;
-#[cfg(feature = "highcode")]
-use qingke_rt::highcode;
 use qingke_rt::interrupt;
 
-use crate::{pac, println};
+use crate::pac;
 
 pub const ALARM_COUNT: usize = 1;
 
@@ -130,20 +127,21 @@ impl Driver for SystickDriver {
         let period = self.period.load(Ordering::Relaxed) as u64;
         rb.cnt().read() / period
     }
+
     unsafe fn allocate_alarm(&self) -> Option<AlarmHandle> {
-        let id = self.alarm_count.fetch_update(Ordering::AcqRel, Ordering::Acquire, |x| {
+        let id = critical_section::with(|_| {
+            let x = self.alarm_count.load(Ordering::Acquire);
             if x < ALARM_COUNT as u8 {
-                Some(x + 1)
+                self.alarm_count.store(x + 1, Ordering::Release);
+                Some(x)
             } else {
                 None
             }
         });
 
-        match id {
-            Ok(id) => Some(AlarmHandle::new(id)),
-            Err(_) => None,
-        }
+        id.map(|id| AlarmHandle::new(id))
     }
+
     fn set_alarm_callback(&self, alarm: AlarmHandle, callback: fn(*mut ()), ctx: *mut ()) {
         critical_section::with(|cs| {
             let alarm = self.get_alarm(cs, alarm);
@@ -152,6 +150,7 @@ impl Driver for SystickDriver {
             alarm.ctx.set(ctx);
         })
     }
+
     fn set_alarm(&self, alarm: AlarmHandle, timestamp: u64) -> bool {
         critical_section::with(|cs| {
             let rb = &crate::pac::SYSTICK;

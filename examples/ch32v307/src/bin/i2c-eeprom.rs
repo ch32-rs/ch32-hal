@@ -40,13 +40,12 @@ impl EEPROM {
     }
 }
 
-#[embassy_executor::main(entry = "qingke_rt::entry")]
+#[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     // let p = hal::init(Default::default());
     //let p = hal::init(Default::default());
     let p = hal::init(hal::Config::default());
-    hal::embassy::init();
 
     let i2c_sda = p.PB11;
     let i2c_scl = p.PB10;

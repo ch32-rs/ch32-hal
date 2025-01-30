@@ -9,6 +9,9 @@ target = "riscv32ec-unknown-none-elf.json"
 
 runner = "wlink -v flash --enable-sdi-print --watch-serial"
 
+# Flash and debug chip with probe-rs. https://probe.rs/
+# runner = "probe-rs run --chip ch32v003"
+
 [unstable]
 build-std = ["core"]
 # build-std = ["core", "compiler_builtins"]

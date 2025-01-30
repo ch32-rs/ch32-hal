@@ -285,7 +285,6 @@ async fn main(_spawner: Spawner) -> ! {
         }
     }
     let p = hal::init(config);
-    hal::embassy::init();
 
     // SPI2
     let cs = p.PB12;

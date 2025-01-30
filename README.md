@@ -7,6 +7,11 @@
 
 Rust HAL(Hardware Abstraction Layer) crate for WCH's 32-bit RISC-V microcontrollers.
 
+> **Note**
+> This project is under development. While it's usable for experimentation and testing,
+> it may not be fully stable for production environments.
+> We welcome user feedback and encourage reporting any issues you encounter to help improve the hal crate.
+
 This HAL crates is the [Embassy](https://github.com/embassy-rs/embassy) framework driver for WCH's 32-bit RISC-V microcontrollers.
 
 This HAL crates uses the metapac approach to support multiple chips in the same crate.
@@ -27,21 +32,29 @@ others should work if you are careful as most peripherals are similar enough.
 
 For a full list of chip capabilities and peripherals, check the [ch32-data](https://github.com/ch32-rs/ch32-data) repository.
 
-| Family | Status | Embassy | RCC | GPIO | UART*| SPI*| I2C | ADC | Timer(PWM) | EXTI*| RTC | DMA*| Delay | Others |
-|--------|--------|---------|-----|------|------|-----|-----|-----|------------|------|-----|-----|-------| ------ |
-| V2/V3  |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ✅   |     | ✅  |       | RNG, SDIO |
-| V1     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ❓   |     | ❓  | ✅    | |
-| V0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅         | ❓   |     | ❓  | ✅    | |
-| X0     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ❓  | ✅  | ✅         | ✅   |     | ✅  |       | |
-| L1     |        | ✅      | ✅  | ✅   | ✅   | ✅  | ❓  | ✅  | ✅         | ❓   |     | ❓  |       | |
-| CH641  |        | ✅      | ✅  | ✅   | ❓   | N/A | ❓  | ✅  | ✅         | ❓   |     | ❓  | ✅    | ISP |
-| CH643  | TODO   |         |     |      |      |     |     |     |            |      |     |     |       | |
+| Family      | V2/V3  | V1  | V0  | X0  | L1  | CH641  | CH643  |
+|-------------|--------|-----|-----|-----|-----|--------|--------|
+| Embassy     | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| RCC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| GPIO        | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| UART*       | ✅     | ✅  | ✅ | ✅  | ✅   | ❓      |        |
+| SPI*        | ✅     | ✅  | ✅ | ✅  | ✅   | N/A    |        |
+| I2C         | ✅     | ✅  | ✅ | ❓  | ❓   | ❓      |        |
+| ADC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| Timer(PWM)  | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| USB/OTG FS  | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
+| USB HS      | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
+
 
 - ✅ : Expected to work
+- ❌ : Not implemented
 - ❓ : Not tested
 - `*` marks the async driver
 - TODO: I haven't got a dev board yet, help-wanted
 - N/A: Not available
+
+### Notes
+- For USB OTGFS and HS, look at the `mod.rs` respsectively to understand what is / is not tested.
 
 ### TODOs
 
@@ -60,7 +73,7 @@ This section lists some key items that are not implemented yet. And should be no
 
 This is a list for awesome projects that are built using ch32-hal
 
-- ... not yet :(
+- [Hackoween 2024 badge](https://github.com/rappet/hackoween-badge)
 
 ## Minimum supported Rust version(MSRV)
 

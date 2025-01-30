@@ -2,6 +2,7 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
+#![feature(naked_functions)]
 
 use ch32_hal as hal;
 use embassy_executor::Spawner;
@@ -20,7 +21,6 @@ async fn main(spawner: Spawner) -> ! {
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
     let p = hal::init(config);
-    hal::embassy::init();
 
     // Connector pinout:
     // GND, VCC, PC17, PC16

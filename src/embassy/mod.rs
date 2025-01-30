@@ -10,8 +10,20 @@ pub mod time_driver_impl;
 #[path = "time_driver_tim.rs"]
 pub mod time_driver_impl;
 
-// This should be called after global clocks inited
-pub fn init() {
+/// Initialize the Embassy time driver.
+///
+/// System global clocks must be initialized before calling this function.
+///
+/// # Safety
+///
+/// This function should be called only once.
+///
+/// # Implementation Notes
+///
+/// The WCH QingKe RISC-V core deviates from standard RISC-V specification:
+/// - `WFI` instruction will not wake up from disabled interrupts
+/// - Either `WFITOWFE` or `SEVONPEND` must be enabled for proper wake-up behavior
+pub unsafe fn init() {
     crate::pac::PFIC.sctlr().modify(|w| w.set_sevonpend(true));
 
     #[cfg(all(qingke_v4, not(time_driver_timer)))]

@@ -83,7 +83,7 @@ pub enum Duty {
 #[derive(Copy, Clone)]
 pub struct Config {
     /// Timeout.
-    #[cfg(feature = "time")]
+    #[cfg(feature = "embassy")]
     pub timeout: embassy_time::Duration,
     pub duty: Duty,
 }
@@ -91,7 +91,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            #[cfg(feature = "time")]
+            #[cfg(feature = "embassy")]
             timeout: embassy_time::Duration::from_millis(1000),
             duty: Duty::Duty2_1,
         }
@@ -100,16 +100,16 @@ impl Default for Config {
 
 #[derive(Copy, Clone)]
 struct Timeout {
-    #[cfg(feature = "time")]
-    deadline: Instant,
+    #[cfg(feature = "embassy")]
+    deadline: embassy_time::Instant,
 }
 
 #[allow(dead_code)]
 impl Timeout {
     #[inline]
     fn check(self) -> Result<(), Error> {
-        #[cfg(feature = "time")]
-        if Instant::now() > self.deadline {
+        #[cfg(feature = "embassy")]
+        if embassy_time::Instant::now() > self.deadline {
             return Err(Error::Timeout);
         }
 
@@ -118,7 +118,7 @@ impl Timeout {
 
     #[inline]
     fn with<R>(self, fut: impl Future<Output = Result<R, Error>>) -> impl Future<Output = Result<R, Error>> {
-        #[cfg(feature = "time")]
+        #[cfg(feature = "embassy")]
         {
             use futures::FutureExt;
 
@@ -128,7 +128,7 @@ impl Timeout {
             })
         }
 
-        #[cfg(not(feature = "time"))]
+        #[cfg(not(feature = "embassy"))]
         fut
     }
 }
@@ -137,8 +137,8 @@ impl Timeout {
 pub struct I2c<'d, T: Instance, M: Mode> {
     tx_dma: Option<ChannelAndRequest<'d>>,
     rx_dma: Option<ChannelAndRequest<'d>>,
-    #[cfg(feature = "time")]
-    timeout: Duration,
+    #[cfg(feature = "embassy")]
+    timeout: embassy_time::Duration,
     _phantom: PhantomData<(&'d mut T, M)>,
 }
 
@@ -201,7 +201,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         let mut this = Self {
             tx_dma,
             rx_dma,
-            #[cfg(feature = "time")]
+            #[cfg(feature = "embassy")]
             timeout: config.timeout,
             _phantom: PhantomData,
         };
@@ -213,8 +213,8 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
     fn timeout(&self) -> Timeout {
         Timeout {
-            #[cfg(feature = "time")]
-            deadline: Instant::now() + self.timeout,
+            #[cfg(feature = "embassy")]
+            deadline: embassy_time::Instant::now() + self.timeout,
         }
     }
 }
@@ -963,6 +963,30 @@ impl<'d, T: Instance, M: Mode> embedded_hal::i2c::I2c for I2c<'d, T, M> {
         &mut self,
         address: u8,
         operations: &mut [embedded_hal::i2c::Operation<'_>],
+    ) -> Result<(), Self::Error> {
+        let _ = address;
+        let _ = operations;
+        todo!()
+    }
+}
+
+impl<'d, T: Instance> embedded_hal_async::i2c::I2c for I2c<'d, T, Async> {
+    async fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
+        self.read(address, read).await
+    }
+
+    async fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
+        self.write(address, write).await
+    }
+
+    async fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
+        self.write_read(address, write, read).await
+    }
+
+    async fn transaction(
+        &mut self,
+        address: u8,
+        operations: &mut [embedded_hal_async::i2c::Operation<'_>],
     ) -> Result<(), Self::Error> {
         let _ = address;
         let _ = operations;

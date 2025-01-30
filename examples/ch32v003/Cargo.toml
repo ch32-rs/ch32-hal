@@ -6,26 +6,25 @@ edition = "2021"
 [dependencies]
 ch32-hal = { path = "../../", features = [
     "ch32v003f4u6",
+    "memory-x",
     "embassy",
     "time-driver-tim2",
     "rt",
 ] }
 embassy-executor = { version = "0.6.0", features = [
-    "nightly",
     "integrated-timers",
-    "arch-riscv32",
+    "arch-spin",
     "executor-thread",
-    # "task-arena-size-512", or nightly
+    "task-arena-size-128", # or better use nightly, but fails on recent Rust versions
 ] }
 embassy-time = { version = "0.3.0" }
 
-qingke-rt = { version = "0.2.1", features = ["highcode"] }
-qingke = "0.2.0"
-# qingke-rt = { version = "0.2.0", path = "../../../qingke/qingke-rt" }
-# qingke = { version = "0.2.0", path = "../../../qingke" }
+# This is okay because we should automatically use whatever ch32-hal uses
+qingke = "*"
+qingke-rt = { version = "*", features = ["highcode"] }
 
 
-panic-halt = "0.2.0"
+panic-halt = "1.0"
 
 embedded-hal = "1.0.0"
 

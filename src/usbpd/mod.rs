@@ -161,7 +161,7 @@ impl<'d, T: Instance> UsbPdPhy<'d, T> {
         // The detection voltage is 0.22V, sufficient to detect the default power(500mA/900mA)
 
         T::port_cc_reg(self.cc1).modify(|w| w.set_cc_ce(vals::PortCcCe::V0_22));
-        embassy_time::Delay.delay_us(2);
+        crate::delay::Delay.delay_us(2);
 
         if T::port_cc_reg(self.cc1).read().pa_cc_ai() {
             // CC1 is connected
@@ -171,7 +171,7 @@ impl<'d, T: Instance> UsbPdPhy<'d, T> {
             Ok(())
         } else {
             T::port_cc_reg(self.cc2).modify(|w| w.set_cc_ce(vals::PortCcCe::V0_22));
-            embassy_time::Delay.delay_us(2);
+            crate::delay::Delay.delay_us(2);
 
             if T::port_cc_reg(self.cc2).read().pa_cc_ai() {
                 // CC2 is connected

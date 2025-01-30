@@ -1,4 +1,4 @@
-//! SYSTICK based delay implementation for Qingke V2
+//! SYSTICK based delay implementation for Qingke V2 and V4
 
 use pac::systick::vals;
 

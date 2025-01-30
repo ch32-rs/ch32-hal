@@ -22,3 +22,21 @@ Link: [OSHWHUB](https://oshwhub.com/andelf/linedog)
 
 - BUZZ: PC4 (TIM1CH4)
 - WS2812: PA2
+
+## Running Examples
+
+### Using [wlink](https://github.com/ch32-rs/wlink)
+- Install wlink using the installation instructions: https://github.com/ch32-rs/wlink?tab=readme-ov-file#install
+
+- Edit the [`.cargo/config.toml`](.cargo/config.toml) file so the runner is `wlink`. This may already be the default runner.
+
+- Build and run the [blinky](src/bin/blinky.rs) example with `cargo run --release --bin blinky`.
+
+### Using [probe-rs](https://probe.rs/)
+
+- Install probe-rs using the installation instructions: https://probe.rs/docs/getting-started/installation/
+    - If you are on a Linux based system, you may have to add udev rules to allow probe-rs access to the WCH-Link debugger. https://probe.rs/docs/getting-started/probe-setup/#linux%3A-udev-rules
+
+- Edit the [`.cargo/config.toml`](.cargo/config.toml) file so the runner is `probe-rs run --chip ch32v003`.
+
+- Build and run the [blinky](src/bin/blinky.rs) example with `cargo run --release --bin blinky`.

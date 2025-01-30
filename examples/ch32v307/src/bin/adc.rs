@@ -10,13 +10,12 @@ use hal::adc::SampleTime;
 use hal::gpio::{Level, Output};
 use hal::println;
 
-#[embassy_executor::main(entry = "qingke_rt::entry")]
+#[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_96MHZ_HSI;
     let p = hal::init(config);
-    hal::embassy::init();
 
     let delay = Delay;
 

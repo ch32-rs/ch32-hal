@@ -35,13 +35,12 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-#[embassy_executor::main(entry = "qingke_rt::entry")]
+#[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(_spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE;
     let p = hal::init(Default::default());
-    hal::embassy::init();
 
     let i2c_sda = p.PB11;
     let i2c_scl = p.PB10;
