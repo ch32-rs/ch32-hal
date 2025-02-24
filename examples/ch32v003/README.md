@@ -25,6 +25,13 @@ Link: [OSHWHUB](https://oshwhub.com/andelf/linedog)
 
 ## Running Examples
 
+### using rust-nightly for building
+
+call `rustup install nightly` and `rustup override set nightly` to build this project with rust nightly,
+which allows to compilation for riscv32ec using the [json-file](riscv32ec-unknown-none-elf.json) provided.
+
+You might need to install the sources for core with `rustup component add rust-src`
+
 ### Using [wlink](https://github.com/ch32-rs/wlink)
 - Install wlink using the installation instructions: https://github.com/ch32-rs/wlink?tab=readme-ov-file#install
 
