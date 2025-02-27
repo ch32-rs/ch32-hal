@@ -11,7 +11,7 @@ use {ch32_hal as hal, panic_halt as _};
 fn main() -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
-    config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSE;
+    config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
     let p = hal::init(config);
 
     let mut delay = Delay;

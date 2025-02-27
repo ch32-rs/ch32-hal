@@ -12,7 +12,9 @@ use {ch32_hal as hal, panic_halt as _};
 #[qingke_rt::entry]
 fn main() -> ! {
     hal::debug::SDIPrint::enable();
-    let p = hal::init(Default::default());
+    let mut config = hal::Config::default();
+    config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
+    let p = hal::init(config);
 
     let pin = PwmPin::new_ch4::<0>(p.PC4);
     let mut pwm = SimplePwm::new(
