@@ -238,9 +238,10 @@ impl<const WIDTH: u16, const HEIGHT: u16, const OFFSETX: u16, const OFFSETY: u16
 fn main() -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
-    config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSE;
+    config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
     let p = hal::init(config);
 
+    hal::println!("spi-lcd-st7335-cube example starting");
 
     // SPI1, remap 0
     let cs = p.PC1;
