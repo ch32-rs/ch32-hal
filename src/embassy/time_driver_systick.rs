@@ -117,7 +117,16 @@ impl SystickDriver {
     #[inline]
     fn raw_cnt(&self) -> u64 {
         let rb = crate::pac::SYSTICK;
-        rb.cnt().read()
+        // Typical implementation of reading 64-bit value from two 32-bit
+        // self-incrementing registers: H->L->H loop.
+        // See-also: https://github.com/ch32-rs/ch32-hal/issues/4
+        loop {
+            let cnt_high = rb.cnth().read();
+            let cnt_low = rb.cntl().read();
+            if rb.cnth().read() == cnt_high {
+                return (cnt_high as u64) << 32 | cnt_low as u64;
+            }
+        }
     }
 }
 
@@ -125,7 +134,7 @@ impl Driver for SystickDriver {
     fn now(&self) -> u64 {
         let rb = crate::pac::SYSTICK;
         let period = self.period.load(Ordering::Relaxed) as u64;
-        rb.cnt().read() / period
+        self.raw_cnt() / period
     }
 
     unsafe fn allocate_alarm(&self) -> Option<AlarmHandle> {
@@ -162,7 +171,6 @@ impl Driver for SystickDriver {
 
             let period = self.period.load(Ordering::Relaxed) as u64;
 
-            // See-also: https://github.com/ch32-rs/ch32-hal/issues/4
             let t = self.raw_cnt();
             let timestamp = timestamp * period;
             if timestamp <= t {
