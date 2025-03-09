@@ -3,22 +3,18 @@
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 
-use ch32_hal as hal;
-// use panic_halt as _;
-use defmt::info;
 use embassy_executor::Spawner;
 use embassy_futures::yield_now;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
-use embassy_net::{self, IpAddress, Ipv4Address, Ipv4Cidr, Stack, StackResources, StaticConfigV4};
+use embassy_net::{self, Stack, StackResources};
 use embassy_time::{Duration, Timer};
-use hal::delay::Delay;
 use hal::eth::generic_smi::GenericSMI;
 use hal::eth::{Device, EthernetStationManagement, Runner, State};
 use hal::rcc::*;
 use hal::time::Hertz;
 use hal::{eth, interrupt, println};
-use heapless::Vec;
 use static_cell::StaticCell;
+use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::task]
 async fn ethernet_task(runner: Runner<'static, GenericSMI>) -> ! {
@@ -32,24 +28,9 @@ async fn net_task(stack: &'static Stack<Device<'static>>) -> ! {
     stack.run().await
 }
 
-#[embassy_executor::task]
-async fn tick() {
-    loop {
-        Timer::after(Duration::from_millis(1000)).await;
-        println!("tick");
-    }
-}
-
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = println!("\n\n\n{}", info);
-
-    loop {}
-}
-
 #[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(spawner: Spawner) -> ! {
-    // configure core speed at 120MHz
+    // configure core speed at 60MHz
     let _p = ch32_hal::init(ch32_hal::Config {
         rcc: ch32_hal::rcc::Config {
             hse: Some(Hse {
@@ -75,34 +56,18 @@ async fn main(spawner: Spawner) -> ! {
     let core_freq: u32 = 60_000_000;
 
     ch32_hal::debug::SDIPrint::enable();
-    Timer::after(Duration::from_millis(1000)).await; // let some time to the debug interface to start
+    Timer::after(Duration::from_millis(100)).await; // let some time to the debug interface to start
     println!("Hello CH32!");
-    let ret = spawner.spawn(tick()).unwrap();
-    println!("tick task: {ret:?}");
-
-    info!("plop");
-
-    // loop {
-    //     Timer::after(Duration::from_millis(1000)).await;
-    //     println!("tick2");
-    // }
 
     // Ethernet setup
     let mac_addr = eth::get_mac();
     println!("mac_addr: {mac_addr:?}");
     static STATE: StaticCell<State<2, 2>> = StaticCell::new();
-    println!("STATE: done");
     let state = STATE.init_with(|| State::<2, 2>::new());
-    println!("state: done");
     let phy = GenericSMI::new(0);
-    println!("phy: done");
     let (device, runner) = hal::eth::new(mac_addr, state, core_freq, phy).await.unwrap();
-    println!("device: done");
-    // println!("runner: {runner:?}");
-    let station_management: EthernetStationManagement<ch32_hal::peripherals::ETH> = EthernetStationManagement::new();
-    println!("station_management: done");
-    let ret = spawner.spawn(ethernet_task(runner));
-    println!("eth task: {ret:?}");
+    let _station_management: EthernetStationManagement<ch32_hal::peripherals::ETH> = EthernetStationManagement::new();
+    spawner.spawn(ethernet_task(runner)).unwrap();
 
     // Generate random seed
     let seed = 0xdeadbeef_abadbabe;
@@ -118,32 +83,13 @@ async fn main(spawner: Spawner) -> ! {
     ));
 
     // Launch network task
-    let ret = spawner.spawn(net_task(&stack));
-    println!("net task: {ret:?}");
-
-    // loop {
-    //     Timer::after(Duration::from_millis(1000)).await;
-    //     // println!("tick");
-    // }
+    spawner.spawn(net_task(&stack)).unwrap();
 
     println!("Waiting for DHCP...");
     let cfg = wait_for_config(stack).await;
     let local_addr = cfg.address.address();
     println!("IP address: {:?}", local_addr);
-    // stack.set_config_v4(embassy_net::ConfigV4::Static(StaticConfigV4 {
-    //     address: Ipv4Cidr::new(Ipv4Address { 0: [192, 168, 1, 10] }, 24),
-    //     /// Default gateway.
-    //     gateway: None,
-    //     /// DNS servers.
-    //     dns_servers: Vec::new(),
-    // }));
 
-    // FIXME!
-    // RX packets either aren't received by the stack, or smoltcp (silently) discards them for some
-    // reason. It could be worth checking what smoltcp expects as packet format, and also memory
-    // content
-
-    // }
     // Then we can use it!
     let mut rx_buffer = [0; 300];
     let mut tx_buffer = [0; 300];

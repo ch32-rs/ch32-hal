@@ -9,15 +9,12 @@ ch32-hal = { path = "../../", features = [
     "memory-x",
     "embassy",
     "rt",
-    "time-driver-tim1",
-    "defmt",
-    # "time-driver-any",
+    "time-driver-any",
 ], default-features = false }
 embassy-executor = { version = "0.6.0", features = [
     "integrated-timers",
     "arch-spin",
     "executor-thread",
-    # "task-arena-size-8192",
 ] }
 
 critical-section = "1.2.0"
@@ -26,7 +23,7 @@ critical-section = "1.2.0"
 qingke-rt = "*"
 qingke = "*"
 
-# panic-halt = "1.0"
+panic-halt = "1.0"
 
 embassy-net = { version = "0.4.0", features = [
     "proto-ipv4",
@@ -39,7 +36,6 @@ static_cell = "2.1.0"
 portable-atomic = { version = "*", features = ["critical-section"] }
 embassy-futures = "0.1.1"
 embassy-time = "0.3"
-heapless = "0.8.0"
 smoltcp = { version = "*", default-features = false, features = [
     "proto-ipv4",
     "medium-ethernet",
