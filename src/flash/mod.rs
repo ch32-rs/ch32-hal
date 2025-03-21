@@ -4,7 +4,7 @@ use embedded_storage::nor_flash::{NorFlashError, NorFlashErrorKind};
 mod common;
 pub use common::*;
 
-pub use crate::pac::{FLASH_BASE, FLASH_SIZE, WRITE_SIZE};
+pub use crate::pac::{FLASH_SIZE, WRITE_SIZE};
 
 /// Read size (always 1)
 pub const READ_SIZE: usize = 1;

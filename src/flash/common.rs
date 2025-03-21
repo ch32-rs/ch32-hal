@@ -7,9 +7,13 @@ use embassy_hal_internal::{into_ref, PeripheralRef};
 use embedded_storage::nor_flash::ReadNorFlash;
 
 use super::{family, Async, Blocking, Error, FlashSector, FLASH_SIZE, READ_SIZE, WRITE_SIZE};
-use crate::pac::FLASH_BASE;
 use crate::peripherals::FLASH;
 use crate::Peripheral;
+
+// FIXME! the pac incorrectly defines it to 0 (wich is the mapped execute address).
+pub const FLASH_BASE: usize = 0x0800_0000;
+// when the pac is fixed, remove this const and use
+// use crate::pac::FLASH_BASE;
 
 /// Internal flash memory driver.
 pub struct Flash<'d, MODE = Async> {
