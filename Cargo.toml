@@ -49,6 +49,8 @@ rand_core = "0.6.3"
 sdio-host = "0.5.0"
 embassy-hal-internal = "0.2.0"
 
+embedded-storage = "0.3.1"
+
 [build-dependencies]
 ch32-metapac = { features = [
     "metadata",
