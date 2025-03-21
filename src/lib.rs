@@ -89,6 +89,9 @@ pub mod usbhs;
 #[cfg(usbpd)]
 pub mod usbpd;
 
+#[cfg(flash)]
+pub mod flash;
+
 #[cfg(feature = "embassy")]
 pub mod embassy;
 
