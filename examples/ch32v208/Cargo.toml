@@ -9,19 +9,40 @@ ch32-hal = { path = "../../", features = [
     "memory-x",
     "embassy",
     "rt",
+    "time-driver-tim1",
 ], default-features = false }
 embassy-executor = { version = "0.6.0", features = [
     "integrated-timers",
-    "arch-riscv32",
+    "arch-spin",
     "executor-thread",
 ] }
-embassy-time = { version = "0.3.2" }
+
+critical-section = "1.2.0"
 
 # This is okay because we should automatically use whatever ch32-hal uses
 qingke-rt = "*"
 qingke = "*"
 
 panic-halt = "1.0"
+
+embassy-net = { version = "0.4.0", features = [
+    "proto-ipv4",
+    "udp",
+    "medium-ethernet",
+    "dhcpv4",
+    "log",
+] }
+static_cell = "2.1.0"
+portable-atomic = { version = "*", features = ["critical-section"] }
+embassy-futures = "0.1.1"
+embassy-time = "0.3"
+smoltcp = { version = "*", default-features = false, features = [
+    "socket-udp",
+    "proto-ipv4",
+    "medium-ethernet",
+    "log",
+] }
+defmt = "0.3.10"
 
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
