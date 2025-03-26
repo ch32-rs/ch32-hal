@@ -9,7 +9,7 @@ ch32-hal = { path = "../../", features = [
     "memory-x",
     "embassy",
     "rt",
-    "time-driver-any",
+    "time-driver-tim1",
 ], default-features = false }
 embassy-executor = { version = "0.6.0", features = [
     "integrated-timers",
@@ -37,6 +37,7 @@ portable-atomic = { version = "*", features = ["critical-section"] }
 embassy-futures = "0.1.1"
 embassy-time = "0.3"
 smoltcp = { version = "*", default-features = false, features = [
+    "socket-udp",
     "proto-ipv4",
     "medium-ethernet",
     "log",
