@@ -13,7 +13,7 @@ use embassy_time::Timer;
 use {ch32_metapac as pac, embassy_net_driver_channel as ch};
 
 use crate::eth::{Instance, StationManagement, PHY};
-use crate::{interrupt, println};
+use crate::interrupt;
 
 // If you change this update the docs of State
 const MTU: usize = 1514;
@@ -69,7 +69,6 @@ unsafe fn ETH() {
 
     // reception
     if flags.rxif() {
-        // println!(">");
         let sender = RX_CH.sender();
         if let Err(_) = sender.try_send(pac::ETH.erxln().read().0) {
             // there is no room in the buffer for this packet, consider it lost and restart
@@ -82,14 +81,12 @@ unsafe fn ETH() {
 
     // transmission done
     if flags.txif() {
-        // println!("<");
         let sender = TX_CH.sender();
         let _ = sender.try_send(());
     }
 
     // link changed
     if flags.linkif() {
-        // println!("=");
         let sender = LINK_CH.sender();
         let _ = sender.try_send(());
     }
@@ -97,7 +94,6 @@ unsafe fn ETH() {
     mac.eie().modify(|w| {
         w.set_intie(true);
     });
-    // println!("#");
 }
 
 // lock to the SMI control registers
@@ -117,7 +113,6 @@ pub struct Runner<'d, P: PHY> {
 impl<'d, P: PHY> Runner<'d, P> {
     /// Run the driver.
     pub async fn run(mut self) -> ! {
-        println!("ETH: Runner run");
         let (state_chan, mut rx_chan, mut tx_chan) = self.ch.split();
         let tx_receiver = TX_CH.receiver();
         let rx_receiver = RX_CH.receiver();
@@ -140,8 +135,6 @@ impl<'d, P: PHY> Runner<'d, P> {
                             });
                             rx_receiver.receive().await;
                             let len = self.mac.erxln().read().0;
-                            println!("RX: {len} B @ 0x{:X}", buf.as_ptr() as usize);
-                            // println!("RX: {len} B @ 0x{:X} {:?}", buf.as_ptr() as usize, &buf[..len as usize]);
                             rx_chan.rx_done(len as usize);
                         }
                     },
@@ -151,7 +144,6 @@ impl<'d, P: PHY> Runner<'d, P> {
                             // start send buf
                             let address: u16 = buf.as_ptr() as u16;
                             let len: u16 = buf.len() as u16;
-                            println!("TX: {len} B @0X{address:X}");
                             self.mac.etxst().write(|w| w.set_etxst(address));
                             self.mac.etxln().write(|w| w.set_etxln(len));
                             self.mac.econ1().modify(|w| {
@@ -159,20 +151,17 @@ impl<'d, P: PHY> Runner<'d, P> {
                             });
                             tx_receiver.receive().await;
                             tx_chan.tx_done();
-                            // println!("TX done");
                         }
                     },
                 ),
                 async {
                     loop {
-                        println!("Link event: processing");
                         link_receiver.receive().await;
                         if self.phy.link_up(&mut self.station_management) {
                             state_chan.set_link_state(LinkState::Up);
                         } else {
                             state_chan.set_link_state(LinkState::Down);
                         }
-                        // println!("Link event done");
                     }
                 },
             )
