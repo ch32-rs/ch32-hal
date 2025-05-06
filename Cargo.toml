@@ -32,8 +32,8 @@ defmt = { version = "0.3.8", optional = true }
 
 embassy-sync = { version = "0.6.0" }
 embassy-futures = { version = "0.1.1" }
-embassy-time-driver = { version = "0.1.0", optional = true }
-embassy-time = { version = "0.3.2", optional = true }
+embassy-time-driver = { version = "0.2.0", optional = true }
+embassy-time = { version = "0.4.0", optional = true }
 embassy-usb-driver = "0.1.0"
 
 nb = "1.1.0"
