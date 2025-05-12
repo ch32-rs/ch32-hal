@@ -246,7 +246,7 @@ impl RtcDriver {
 
                 if at < t + 0xc000 {
                     // just enable it. `set_alarm` has already set the correct CCR val.
-                      w.set_ccie(1, true);
+                    w.set_ccie(1, true);
                 }
             })
         })
@@ -276,13 +276,13 @@ impl RtcDriver {
             return false;
         }
 
-            // Write the CCR value regardless of whether we're going to enable it now or not.
-            // This way, when we enable it later, the right value is already set.
-            r.chcvr(n + 1).write_value(timestamp as u16);
+        // Write the CCR value regardless of whether we're going to enable it now or not.
+        // This way, when we enable it later, the right value is already set.
+        r.chcvr(n + 1).write_value(timestamp as u16);
 
-            // Enable it if it'll happen soon. Otherwise, `next_period` will enable it.
-            let diff = timestamp - t;
-            r.dmaintenr().modify(|w| w.set_ccie(n + 1, diff < 0xc000));
+        // Enable it if it'll happen soon. Otherwise, `next_period` will enable it.
+        let diff = timestamp - t;
+        r.dmaintenr().modify(|w| w.set_ccie(n + 1, diff < 0xc000));
 
         // Reevaluate if the alarm timestamp is still in the future
         let t = self.now();
