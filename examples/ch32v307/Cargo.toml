@@ -41,6 +41,11 @@ embedded-hal = "1.0.0"
 # for usbfs_dfu
 usb-dfu-target = "0.1.0"
 
+# for spi-lcd
+embedded-hal-bus = "0.3.0"
+# for spi-lcd
+st7735-lcd = "0.10.0"
+
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
 lto = true
