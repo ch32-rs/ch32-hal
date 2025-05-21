@@ -74,6 +74,7 @@ This section lists some key items that are not implemented yet. And should be no
 This is a list for awesome projects that are built using ch32-hal
 
 - [Hackoween 2024 badge](https://github.com/rappet/hackoween-badge)
+- [ST7735 LED demo](https://github.com/Yttehs-HDX/CH32-ST7735-Demo)
 
 ## Minimum supported Rust version(MSRV)
 
