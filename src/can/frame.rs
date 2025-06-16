@@ -19,7 +19,7 @@ impl CanFrame {
 
         Some(CanFrame {
             id: id.into(),
-            dlc: 8,
+            dlc: raw_data.len(),
             data,
             is_remote: false,
         })
