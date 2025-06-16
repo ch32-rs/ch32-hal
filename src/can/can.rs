@@ -51,16 +51,16 @@ impl<'d, T: Instance> Can<'d, T> {
         // //here should remap functionality be added
         // T::remap(0b10);
 
-        Registers(T::regs()).enter_init_mode(); // CAN enter initialization mode
+        Registers::new::<T>().enter_init_mode(); // CAN enter initialization mode
 
         // Configure bit timing parameters and CAN operating mode
         let Some(bit_timings) = util::calc_can_timings(T::frequency().0, bitrate) else {
             return Err(CanInitError::InvalidTimings);
         };
 
-        Registers(T::regs()).set_bit_timing_and_mode(bit_timings, mode);
+        Registers::new::<T>().set_bit_timing_and_mode(bit_timings, mode);
 
-        Registers(T::regs()).leave_init_mode(); // Exit CAN initialization mode
+        Registers::new::<T>().leave_init_mode(); // Exit CAN initialization mode
 
         Ok(this)
     }
@@ -98,12 +98,12 @@ impl<'d, T: Instance> Can<'d, T> {
     /// Returns `Err(WouldBlock)` if the transmit buffer is full and no frame can be
     /// replaced.
     pub fn transmit(&self, frame: &CanFrame) -> nb::Result<Option<CanFrame>, CanError> {
-        let mailbox_num = match Registers(T::regs()).find_free_mailbox() {
+        let mailbox_num = match Registers::new::<T>().find_free_mailbox() {
             Some(n) => n,
             None => return Err(nb::Error::WouldBlock),
         };
 
-        Registers(T::regs()).write_frame_mailbox(mailbox_num, frame);
+        Registers::new::<T>().write_frame_mailbox(mailbox_num, frame);
 
         // Success in readying packet for transmit. No packets can be replaced in the
         // transmit buffer so return None in accordance with embedded-can.
@@ -116,7 +116,7 @@ impl<'d, T: Instance> Can<'d, T> {
             return TxStatus::OtherError;
         }
 
-        Registers(T::regs()).transmit_status(self.last_mailbox_used)
+        Registers::new::<T>().transmit_status(self.last_mailbox_used)
     }
 
     /// Try to read the next message from the queue.
