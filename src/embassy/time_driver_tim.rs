@@ -262,14 +262,13 @@ impl RtcDriver {
     fn set_alarm(&self, cs: CriticalSection, timestamp: u64) -> bool {
         let r = regs_gp16();
 
-        let n = 0;
         self.alarm.borrow(cs).timestamp.set(timestamp);
 
         let t = self.now();
         if timestamp <= t {
             // If alarm timestamp has passed the alarm will not fire.
             // Disarm the alarm and return `false` to indicate that.
-            r.dmaintenr().modify(|w| w.set_ccie(n + 1, false));
+            r.dmaintenr().modify(|w| w.set_ccie(1, false));
 
             self.alarm.borrow(cs).timestamp.set(u64::MAX);
 
@@ -278,11 +277,11 @@ impl RtcDriver {
 
         // Write the CCR value regardless of whether we're going to enable it now or not.
         // This way, when we enable it later, the right value is already set.
-        r.chcvr(n + 1).write_value(timestamp as u16);
+        r.chcvr(1).write_value(timestamp as u16);
 
         // Enable it if it'll happen soon. Otherwise, `next_period` will enable it.
         let diff = timestamp - t;
-        r.dmaintenr().modify(|w| w.set_ccie(n + 1, diff < 0xc000));
+        r.dmaintenr().modify(|w| w.set_ccie(1, diff < 0xc000));
 
         // Reevaluate if the alarm timestamp is still in the future
         let t = self.now();
@@ -291,7 +290,7 @@ impl RtcDriver {
             // the alarm may or may not have fired.
             // Disarm the alarm and return `false` to indicate that.
             // It is the caller's responsibility to handle this ambiguity.
-            r.dmaintenr().modify(|w| w.set_ccie(n + 1, false));
+            r.dmaintenr().modify(|w| w.set_ccie(1, false));
 
             self.alarm.borrow(cs).timestamp.set(u64::MAX);
 

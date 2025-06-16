@@ -26,9 +26,9 @@ pub mod time_driver_impl;
 pub unsafe fn init() {
     crate::pac::PFIC.sctlr().modify(|w| w.set_sevonpend(true));
 
-    #[cfg(all(qingke_v4, not(time_driver_timer)))]
-    time_driver_impl::init();
-
-    #[cfg(time_driver_timer)]
+    #[cfg(any(qingke_v4, time_driver_timer))]
     critical_section::with(|cs| time_driver_impl::init(cs));
+
+    #[cfg(not(any(qingke_v4, time_driver_timer)))]
+    compile_error!("No timer source for embassy given");
 }
