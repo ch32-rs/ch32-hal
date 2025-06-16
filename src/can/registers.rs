@@ -78,10 +78,14 @@ impl Registers {
             .write_value(crate::pac::can::regs::Txmdlr(tx_data_low));
         self.0.txmir(mailbox_num).write_value(crate::pac::can::regs::Txmir(0x0)); // Clear CAN TXMIR register
         self.0.txmir(mailbox_num).modify(|w| {
-            w.set_stid(match frame.id {
-                embedded_can::Id::Standard(id) => id.as_raw(),
-                embedded_can::Id::Extended(_) => unimplemented!(),
-            }); // Using CAN Standard ID for message
+            match frame.id {
+                embedded_can::Id::Standard(id) => w.set_stid(id.as_raw()),
+                embedded_can::Id::Extended(id) => {
+                    w.set_stid(id.standard_id().as_raw() as u16);
+                    w.set_exid(id.as_raw());
+                    w.set_ide(true);
+                }
+            }
             w.set_txrq(true); // Initiate mailbox transfer request
         });
     }

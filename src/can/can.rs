@@ -131,9 +131,14 @@ impl<'d, T: Instance> Can<'d, T> {
         }
 
         let dlc = can.rxmdtr(fifo).read().dlc() as usize;
-        let raw_id = can.rxmir(fifo).read().stid();
+        let rxmir = can.rxmir(fifo).read();
 
-        let id = embedded_can::StandardId::new(raw_id).unwrap();
+        let id = if rxmir.ide() {
+            let raw_id = ((rxmir.stid() as u32) << 18) | rxmir.exid();
+            embedded_can::Id::from(unsafe { embedded_can::ExtendedId::new_unchecked(raw_id & 0x1FFFFFFF) })
+        } else {
+            embedded_can::Id::Standard(embedded_can::StandardId::new(rxmir.stid()).unwrap())
+        };
 
         let frame_data_unordered: u64 = ((can.rxmdhr(fifo).read().0 as u64) << 32) | can.rxmdlr(fifo).read().0 as u64;
 
