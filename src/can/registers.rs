@@ -69,7 +69,7 @@ impl Registers {
             | ((frame.data[1] as u32) << 8)
             | frame.data[0] as u32;
 
-        self.0.txmdtr(mailbox_num).modify(|w| w.set_dlc(8)); // Set message length in bytes
+        self.0.txmdtr(mailbox_num).modify(|w| w.set_dlc(frame.dlc as u8)); // Set message length in bytes
         self.0
             .txmdhr(mailbox_num)
             .write_value(crate::pac::can::regs::Txmdhr(tx_data_high));
