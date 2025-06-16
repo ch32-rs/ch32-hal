@@ -1,10 +1,15 @@
 use super::filter::{BitMode, FilterMode};
+use crate::can::Instance;
 
 const CAN_TX_TIMEOUT: u32 = 0xFFF;
 
 pub(crate) struct Registers(pub crate::pac::can::Can);
 
 impl Registers {
+    pub fn new<T: Instance>() -> Self {
+        Self(T::regs())
+    }
+
     pub fn enter_init_mode(&self) {
         self.0.ctlr().modify(|w| {
             w.set_sleep(false); // Wake up
