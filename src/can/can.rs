@@ -6,7 +6,16 @@ use super::{CanFilter, CanFrame};
 use crate::can::registers::Registers;
 use crate::can::util;
 use crate::mode::{Mode, NonBlocking};
-use crate::{into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral, RemapPeripheral};
+use crate::{interrupt, into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral, RemapPeripheral};
+
+/// Receive interrupt handler.
+pub struct ReceiveInterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> interrupt::typelevel::Handler<T::ReceiveInterrupt> for ReceiveInterruptHandler<T> {
+    unsafe fn on_interrupt() {}
+}
 
 pub struct Can<'d, T: Instance, M: Mode> {
     _peri: PeripheralRef<'d, T>,
@@ -126,6 +135,11 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
         // //here should remap functionality be added
         // T::remap(0b10);
 
+        unsafe {
+            use crate::interrupt::typelevel::Interrupt;
+            T::ReceiveInterrupt::enable();
+        };
+
         Registers::new::<T>().enter_init_mode(); // CAN enter initialization mode
 
         // Configure bit timing parameters and CAN operating mode
@@ -207,7 +221,9 @@ pub trait SealedInstance: RccPeripheral + RemapPeripheral {
     // fn remap(rm: u8) -> ();
 }
 
-pub trait Instance: SealedInstance + 'static {}
+pub trait Instance: SealedInstance + 'static {
+    type ReceiveInterrupt: crate::interrupt::typelevel::Interrupt;
+}
 
 pin_trait!(RxPin, Instance);
 pin_trait!(TxPin, Instance);
@@ -225,7 +241,7 @@ foreach_peripheral!(
         }
 
         impl Instance for peripherals::$inst {
-           // type Interrupt = crate::_generated::peripheral_interrupts::$inst::GLOBAL;
+           type ReceiveInterrupt = crate::_generated::peripheral_interrupts::$inst::RX0;
         }
     };
 );
