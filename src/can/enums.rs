@@ -96,6 +96,7 @@ impl CanMode {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum CanFifo {
     Fifo0,
     Fifo1,
