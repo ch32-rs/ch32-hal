@@ -34,9 +34,12 @@ pub mod mode {
     pub struct Blocking;
     /// Async mode.
     pub struct Async;
+    /// NB mode.
+    pub struct NonBlocking;
 
     impl_mode!(Blocking);
     impl_mode!(Async);
+    impl_mode!(NonBlocking);
 }
 
 pub mod rcc;
