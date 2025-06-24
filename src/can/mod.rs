@@ -5,7 +5,7 @@ mod frame;
 mod registers;
 mod util;
 
-pub use can::{Can, Instance, TxPin, RxPin};
+pub use can::{Can, Instance, TxPin, RxPin, ReceiveInterruptHandler};
 pub use embedded_can::{ExtendedId, Id, StandardId};
 pub use enums::{CanError, CanFifo, CanMode, TxStatus};
 pub use filter::{Bit16Mode, Bit32Mode, CanFilter, ListMode, MaskMode};
