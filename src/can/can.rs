@@ -5,7 +5,7 @@ use super::filter::{BitMode, FilterMode};
 use super::{CanFilter, CanFrame};
 use crate::can::registers::Registers;
 use crate::can::util;
-use crate::mode::{Mode, NonBlocking};
+use crate::mode::{Async, Mode, NonBlocking};
 use crate::{interrupt, into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral, RemapPeripheral};
 
 /// Receive interrupt handler.
@@ -27,6 +27,20 @@ pub struct Can<'d, T: Instance, M: Mode> {
 #[derive(Debug)]
 pub enum CanInitError {
     InvalidTimings,
+}
+
+impl<'d, T: Instance> Can<'d, T, Async> {
+    pub fn new_async<const REMAP: u8>(
+        peri: impl Peripheral<P = T> + 'd,
+        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
+        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::ReceiveInterrupt, ReceiveInterruptHandler<T>> + 'd,
+        fifo: CanFifo,
+        mode: CanMode,
+        bitrate: u32,
+    ) -> Result<Self, CanInitError> {
+        Self::new_inner(peri, rx, tx, fifo, mode, bitrate)
+    }
 }
 
 impl<'d, T: Instance> Can<'d, T, NonBlocking> {
