@@ -64,6 +64,10 @@ impl Registers {
         return None;
     }
 
+    pub fn pending_messages(&self, fifo: super::CanFifo) -> u8 {
+        self.0.rfifo(fifo.val()).read().fmp()
+    }
+
     pub fn write_frame_mailbox(&self, mailbox_num: usize, frame: &super::CanFrame) {
         let tx_data_high: u32 = ((frame.data[7] as u32) << 24)
             | ((frame.data[6] as u32) << 16)

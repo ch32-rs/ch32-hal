@@ -55,19 +55,19 @@ impl<'d, T: Instance> Can<'d, T, NonBlocking> {
     /// Try to read the next message from the queue.
     /// If there are no messages, an error is returned.
     pub fn try_recv(&self) -> nb::Result<CanFrame, CanError> {
-        let can = &T::regs();
+        let regs = Registers::new::<T>();
         let fifo = self.fifo.val();
 
         //check pending messages
-        if can.rfifo(self.fifo.val()).read().fmp() == 0 {
+        if regs.pending_messages(self.fifo) == 0 {
             return Err(nb::Error::WouldBlock);
         }
 
-        let dlc = can.rxmdtr(fifo).read().dlc() as usize;
+        let dlc = regs.0.rxmdtr(fifo).read().dlc() as usize;
         if dlc > 8 {
             return Err(nb::Error::Other(CanError::Form));
         }
-        let rxmir = can.rxmir(fifo).read();
+        let rxmir = regs.0.rxmir(fifo).read();
 
         let id = if rxmir.ide() {
             let raw_id = ((rxmir.stid() as u32) << 18) | rxmir.exid();
@@ -76,11 +76,12 @@ impl<'d, T: Instance> Can<'d, T, NonBlocking> {
             embedded_can::Id::Standard(embedded_can::StandardId::new(rxmir.stid()).unwrap())
         };
 
-        let frame_data_unordered: u64 = ((can.rxmdhr(fifo).read().0 as u64) << 32) | can.rxmdlr(fifo).read().0 as u64;
+        let frame_data_unordered: u64 =
+            ((regs.0.rxmdhr(fifo).read().0 as u64) << 32) | regs.0.rxmdlr(fifo).read().0 as u64;
 
         let frame = CanFrame::new_from_data_registers(id, frame_data_unordered, dlc);
 
-        can.rfifo(fifo).write(|w| {
+        regs.0.rfifo(fifo).write(|w| {
             //set the data was read
             w.set_rfom(true);
         });
