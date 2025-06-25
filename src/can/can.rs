@@ -10,7 +10,7 @@ use super::{CanFilter, CanFrame};
 use crate::can::registers::Registers;
 use crate::can::util;
 use crate::internal::drop::OnDrop;
-use crate::mode::{Async, Mode, NonBlocking};
+use crate::mode::{Async, Blocking, Mode, NonBlocking};
 use crate::{interrupt, into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral, RemapPeripheral};
 
 /// Receive interrupt handler.
@@ -81,6 +81,19 @@ impl<'d, T: Instance> Can<'d, T, Async> {
         drop(on_drop);
 
         self.receive_inner()
+    }
+}
+
+impl<'d, T: Instance> Can<'d, T, Blocking> {
+    pub fn new_blocking<const REMAP: u8>(
+        peri: impl Peripheral<P = T> + 'd,
+        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
+        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        fifo: CanFifo,
+        mode: CanMode,
+        bitrate: u32,
+    ) -> Result<Self, CanInitError> {
+        Self::new_inner(peri, rx, tx, fifo, mode, bitrate)
     }
 }
 
