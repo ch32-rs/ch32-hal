@@ -1,10 +1,15 @@
+use core::future::poll_fn;
 use core::marker::PhantomData;
+use core::task::Poll;
+
+use embassy_sync::waitqueue::AtomicWaker;
 
 use super::enums::*;
 use super::filter::{BitMode, FilterMode};
 use super::{CanFilter, CanFrame};
 use crate::can::registers::Registers;
 use crate::can::util;
+use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Mode, NonBlocking};
 use crate::{interrupt, into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral, RemapPeripheral};
 
@@ -14,7 +19,15 @@ pub struct ReceiveInterruptHandler<T: Instance> {
 }
 
 impl<T: Instance> interrupt::typelevel::Handler<T::ReceiveInterrupt> for ReceiveInterruptHandler<T> {
-    unsafe fn on_interrupt() {}
+    unsafe fn on_interrupt() {
+        let regs = &T::regs();
+        T::state().waker.wake();
+        critical_section::with(|_| {
+            regs.intenr().modify(|w| {
+                w.set_fmpie0(false); // Disable FIFO 0 message pending interrupt
+            });
+        });
+    }
 }
 
 pub struct Can<'d, T: Instance, M: Mode> {
@@ -40,6 +53,34 @@ impl<'d, T: Instance> Can<'d, T, Async> {
         bitrate: u32,
     ) -> Result<Self, CanInitError> {
         Self::new_inner(peri, rx, tx, fifo, mode, bitrate)
+    }
+
+    pub async fn recv(&self) -> Result<CanFrame, CanError> {
+        let on_drop = OnDrop::new(|| {
+            // Disable interrupt if the future is canceled
+            T::regs().intenr().modify(|w| {
+                w.set_fmpie0(false); // Disable FIFO 0 message pending interrupt
+            })
+        });
+        poll_fn(|cx| {
+            T::state().waker.register(cx.waker());
+
+            let regs = Registers::new::<T>();
+
+            if regs.pending_messages(self.fifo) == 0 {
+                // No messages available, wait for a new message
+                regs.0.intenr().modify(|w| {
+                    w.set_fmpie0(true); // Enable FIFO 0 message pending interrupt
+                });
+                Poll::Pending
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        })
+        .await?;
+        drop(on_drop);
+
+        self.receive_inner()
     }
 }
 
@@ -237,10 +278,25 @@ where
     }
 }
 
+struct State {
+    #[allow(unused)]
+    waker: AtomicWaker,
+}
+
+impl State {
+    const fn new() -> Self {
+        Self {
+            waker: AtomicWaker::new(),
+        }
+    }
+}
+
 pub trait SealedInstance: RccPeripheral + RemapPeripheral {
     fn regs() -> pac::can::Can;
     // Either `0b00`, `0b10` or `b11` on CAN1. `0` or `1` on CAN2.
     // fn remap(rm: u8) -> ();
+
+    fn state() -> &'static State;
 }
 
 pub trait Instance: SealedInstance + 'static {
@@ -259,6 +315,11 @@ foreach_peripheral!(
                 return unsafe { crate::pac::can::Can::from_ptr(crate::pac::$inst.as_ptr()) };
                 #[cfg(not(ch32l1))]
                 return crate::pac::$inst;
+            }
+
+            fn state() -> &'static State {
+                static STATE: State = State::new();
+                &STATE
             }
         }
 
