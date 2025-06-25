@@ -79,37 +79,13 @@ impl<'d, T: Instance> Can<'d, T, NonBlocking> {
     /// If there are no messages, an error is returned.
     pub fn try_recv(&self) -> nb::Result<CanFrame, CanError> {
         let regs = Registers::new::<T>();
-        let fifo = self.fifo.val();
 
         //check pending messages
         if regs.pending_messages(self.fifo) == 0 {
             return Err(nb::Error::WouldBlock);
         }
 
-        let dlc = regs.0.rxmdtr(fifo).read().dlc() as usize;
-        if dlc > 8 {
-            return Err(nb::Error::Other(CanError::Form));
-        }
-        let rxmir = regs.0.rxmir(fifo).read();
-
-        let id = if rxmir.ide() {
-            let raw_id = ((rxmir.stid() as u32) << 18) | rxmir.exid();
-            embedded_can::Id::from(unsafe { embedded_can::ExtendedId::new_unchecked(raw_id & 0x1FFFFFFF) })
-        } else {
-            embedded_can::Id::Standard(embedded_can::StandardId::new(rxmir.stid()).unwrap())
-        };
-
-        let frame_data_unordered: u64 =
-            ((regs.0.rxmdhr(fifo).read().0 as u64) << 32) | regs.0.rxmdlr(fifo).read().0 as u64;
-
-        let frame = CanFrame::new_from_data_registers(id, frame_data_unordered, dlc);
-
-        regs.0.rfifo(fifo).write(|w| {
-            //set the data was read
-            w.set_rfom(true);
-        });
-
-        Ok(frame)
+        self.receive_inner().map_err(nb::Error::Other)
     }
 }
 
@@ -201,6 +177,38 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
         }
 
         Registers::new::<T>().transmit_status(self.last_mailbox_used)
+    }
+
+    /// Receives a CAN frame from the hardware. Caller must make sure that a frame is available
+    /// in the FIFO before calling this method.
+    fn receive_inner(&self) -> Result<CanFrame, CanError> {
+        let regs = Registers::new::<T>();
+        let fifo = self.fifo.val();
+
+        let dlc = regs.0.rxmdtr(fifo).read().dlc() as usize;
+        if dlc > 8 {
+            return Err(CanError::Form);
+        }
+        let rxmir = regs.0.rxmir(fifo).read();
+
+        let id = if rxmir.ide() {
+            let raw_id = ((rxmir.stid() as u32) << 18) | rxmir.exid();
+            embedded_can::Id::from(unsafe { embedded_can::ExtendedId::new_unchecked(raw_id & 0x1FFFFFFF) })
+        } else {
+            embedded_can::Id::Standard(embedded_can::StandardId::new(rxmir.stid()).unwrap())
+        };
+
+        let frame_data_unordered: u64 =
+            ((regs.0.rxmdhr(fifo).read().0 as u64) << 32) | regs.0.rxmdlr(fifo).read().0 as u64;
+
+        let frame = CanFrame::new_from_data_registers(id, frame_data_unordered, dlc);
+
+        regs.0.rfifo(fifo).write(|w| {
+            //set the data was read
+            w.set_rfom(true);
+        });
+
+        Ok(frame)
     }
 }
 
