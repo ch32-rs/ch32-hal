@@ -1,6 +1,8 @@
 #![no_std]
 #![allow(static_mut_refs, unexpected_cfgs)]
 
+use core::future::Future;
+
 pub use ch32_metapac as pac;
 pub(crate) use embassy_hal_internal::{impl_peripheral, peripherals_definition, peripherals_struct};
 pub use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
@@ -40,6 +42,41 @@ pub mod mode {
     impl_mode!(Blocking);
     impl_mode!(Async);
     impl_mode!(NonBlocking);
+}
+
+#[derive(Copy, Clone)]
+struct Timeout {
+    #[cfg(feature = "embassy")]
+    deadline: embassy_time::Instant,
+}
+
+#[allow(dead_code)]
+impl Timeout {
+    #[inline]
+    fn check(self) -> Option<()> {
+        #[cfg(feature = "embassy")]
+        if embassy_time::Instant::now() > self.deadline {
+            return None;
+        }
+
+        Some(())
+    }
+
+    #[inline]
+    fn with<R>(self, fut: impl Future<Output = Option<R>>) -> impl Future<Output = Option<R>> {
+        #[cfg(feature = "embassy")]
+        {
+            use futures::FutureExt;
+
+            embassy_futures::select::select(embassy_time::Timer::at(self.deadline), fut).map(|r| match r {
+                embassy_futures::select::Either::First(_) => None,
+                embassy_futures::select::Either::Second(r) => r,
+            })
+        }
+
+        #[cfg(not(feature = "embassy"))]
+        fut
+    }
 }
 
 pub mod rcc;
