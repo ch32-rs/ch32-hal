@@ -1,8 +1,7 @@
 //! SysTick-based time driver.
 
 use core::cell::{Cell, RefCell};
-use core::sync::atomic::{compiler_fence, AtomicU32, Ordering};
-
+use core::sync::atomic::{AtomicU32, Ordering};
 use critical_section::CriticalSection;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
@@ -59,23 +58,24 @@ impl SystickDriver {
         // UNDOCUMENTED:  Avoid initial interrupt
         r.cmp().write(|w| *w = u64::MAX - 1);
         r.cmp().write_value(0);
-        critical_section::with(|_| {
-            r.sr().write(|w| w.set_cntif(false)); // clear
 
-            // Configration: Upcount, No reload, HCLK as clock source
-            r.ctlr().modify(|w| {
-                //  w.set_init(true);
-                w.set_mode(vals::Mode::UPCOUNT);
-                w.set_stre(false);
-                w.set_stclk(vals::Stclk::HCLK_DIV8);
-                w.set_ste(true);
-            });
-        })
+        //Count value compare flag
+        r.sr().write(|w| w.set_cntif(false)); // clear
+
+        // Configration: Upcount, No reload, HCLK as clock source
+        r.ctlr().modify(|w| {
+            //  w.set_init(true);
+            w.set_mode(vals::Mode::UPCOUNT);//Counter mode
+            w.set_stre(false);//Auto reload count enable bit
+            w.set_stclk(vals::Stclk::HCLK_DIV8);//Counter system clock sourse selection bit
+            w.set_ste(true);//Counter enable control bit
+        });
     }
 
     #[inline(always)]
     fn on_interrupt(&self) {
         let r = &crate::pac::SYSTICK;
+        //Count value compare flag
         r.sr().write(|w| w.set_cntif(false)); // clear IF
 
         let period = self.period.load(Ordering::Relaxed) as u64;
@@ -89,23 +89,14 @@ impl SystickDriver {
             return u64::MAX;
         });
 
-        let new_cmp = u64::min(next_timestamp * period, self.raw_cnt().wrapping_add(period));
-        r.cmp().write_value(new_cmp + 1);
+        let new_cmp = u64::min(next_timestamp.saturating_mul(period), self.raw_cnt().wrapping_add(period));
+        r.cmp().write_value(new_cmp.saturating_add(1));
     }
 
     #[inline]
     fn raw_cnt(&self) -> u64 {
         let r = crate::pac::SYSTICK;
-        // Typical implementation of reading 64-bit value from two 32-bit
-        // self-incrementing registers: H->L->H loop.
-        // See-also: https://github.com/ch32-rs/ch32-hal/issues/4
-        loop {
-            let cnt_high = r.cnth().read();
-            let cnt_low = r.cntl().read();
-            if r.cnth().read() == cnt_high {
-                return (cnt_high as u64) << 32 | cnt_low as u64;
-            }
-        }
+        return r.cnt().read();
     }
 
     fn trigger_alarm(&self, cs: CriticalSection) {
@@ -122,17 +113,18 @@ impl SystickDriver {
 
         let period = self.period.load(Ordering::Relaxed) as u64;
 
-            let t = self.raw_cnt();
-            let timestamp = timestamp * period;
-            if timestamp <= t {
-                // If alarm timestamp has passed the alarm will not fire.
-                // Disarm the alarm and return `false` to indicate that.
+        // See-also: https://github.com/ch32-rs/ch32-hal/issues/4
+        let t = self.raw_cnt();
+        let timestamp = timestamp.saturating_mul(period);
+        if timestamp <= t {
+            // If alarm timestamp has passed the alarm will not fire.
+            // Disarm the alarm and return `false` to indicate that.
 
             self.alarm.borrow(cs).timestamp.set(u64::MAX);
 
             return false;
         }
-
+        //Counter interrupt enable control bit
         r.ctlr().modify(|w| w.set_stie(true));
 
         true
@@ -141,7 +133,6 @@ impl SystickDriver {
 
 impl Driver for SystickDriver {
     fn now(&self) -> u64 {
-        let r = crate::pac::SYSTICK;
         let period = self.period.load(Ordering::Relaxed) as u64;
         self.raw_cnt() / period
     }

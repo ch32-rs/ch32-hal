@@ -170,7 +170,7 @@ impl RtcDriver {
 
         let timer_freq = T::frequency();
 
-        r.ctlr1().modify(|w| w.set_cen(false));
+        r.ctlr1().modify(|w| w.set_cen(false));//Counter enable
         r.cnt().write_value(0);
 
         let psc = timer_freq.0 / TICK_HZ as u32 - 1;
@@ -179,27 +179,27 @@ impl RtcDriver {
             Ok(n) => n,
         };
 
-        r.psc().write_value(psc);
-        r.atrlr().write_value(u16::MAX);
+        r.psc().write_value(psc);//prescaler
+        r.atrlr().write_value(u16::MAX);//auto-reload register
 
         // Set URS, generate update and clear URS
-        r.ctlr1().modify(|w| w.set_urs(vals::Urs::COUNTERONLY));
-        r.swevgr().write(|w| w.set_ug(true));
-        r.ctlr1().modify(|w| w.set_urs(vals::Urs::ANYEVENT));
+        r.ctlr1().modify(|w| w.set_urs(vals::Urs::COUNTERONLY));//Update request source
+        r.swevgr().write(|w| w.set_ug(true));//Update generation
+        r.ctlr1().modify(|w| w.set_urs(vals::Urs::ANYEVENT));//Update request source
 
         // Mid-way point. CC1
-        r.chcvr(0).write_value(0x8000);
+        r.chcvr(0).write_value(0x8000);//capture/compare register 1
 
         // Enable overflow and half-overflow interrupts
         r.dmaintenr().write(|w| {
-            w.set_uie(true);
-            w.set_ccie(0, true);
+            w.set_uie(true);//Update interrupt enable
+            w.set_ccie(0, true);//Capture/Compare 1 interrupt enable
         });
 
         <T as GeneralInstance16bit>::CaptureCompareInterrupt::unpend();
         unsafe { <T as GeneralInstance16bit>::CaptureCompareInterrupt::enable() };
 
-        r.ctlr1().modify(|w| w.set_cen(true));
+        r.ctlr1().modify(|w| w.set_cen(true));//Counter enable
     }
 
     fn on_interrupt(&self) {
@@ -207,8 +207,8 @@ impl RtcDriver {
 
         // XXX: reduce the size of this critical section ?
         critical_section::with(|cs| {
-            let sr = r.intfr().read();
-            let dier = r.dmaintenr().read();
+            let sr = r.intfr().read();//status register
+            let dier = r.dmaintenr().read();//DMA/Interrupt enable register
 
             // Clear all interrupt flags. Bits in SR are "write 0 to clear", so write the bitwise NOT.
             // Other approaches such as writing all zeros, or RMWing won't work, they can
@@ -216,16 +216,16 @@ impl RtcDriver {
             r.intfr().write_value(regs::Intfr(!sr.0));
 
             // Overflow
-            if sr.uif() {
+            if sr.uif() {//Update interrupt flag
                 self.next_period();
             }
 
             // Half overflow
-            if sr.ccif(0) {
+            if sr.ccif(0) {//Capture/compare 1 interrupt flag
                 self.next_period();
             }
 
-            if sr.ccif(1) && dier.ccie(1) {
+            if sr.ccif(1) && dier.ccie(1) {//Capture/compare 1 interrupt flag & Capture/Compare 1 interrupt enable
                 self.trigger_alarm(cs);
             }
         })
@@ -246,7 +246,7 @@ impl RtcDriver {
 
                 if at < t + 0xc000 {
                     // just enable it. `set_alarm` has already set the correct CCR val.
-                    w.set_ccie(1, true);
+                    w.set_ccie(1, true);//Capture/Compare 1 interrupt enable
                 }
             })
         })
@@ -268,7 +268,7 @@ impl RtcDriver {
         if timestamp <= t {
             // If alarm timestamp has passed the alarm will not fire.
             // Disarm the alarm and return `false` to indicate that.
-            r.dmaintenr().modify(|w| w.set_ccie(1, false));
+            r.dmaintenr().modify(|w| w.set_ccie(1, false));//Capture/Compare 1 interrupt enable
 
             self.alarm.borrow(cs).timestamp.set(u64::MAX);
 
@@ -277,11 +277,11 @@ impl RtcDriver {
 
         // Write the CCR value regardless of whether we're going to enable it now or not.
         // This way, when we enable it later, the right value is already set.
-        r.chcvr(1).write_value(timestamp as u16);
+        r.chcvr(1).write_value(timestamp as u16);//capture/compare register 1
 
         // Enable it if it'll happen soon. Otherwise, `next_period` will enable it.
         let diff = timestamp - t;
-        r.dmaintenr().modify(|w| w.set_ccie(1, diff < 0xc000));
+        r.dmaintenr().modify(|w| w.set_ccie(1, diff < 0xc000));//Capture/Compare 1 interrupt enable
 
         // Reevaluate if the alarm timestamp is still in the future
         let t = self.now();
@@ -290,7 +290,7 @@ impl RtcDriver {
             // the alarm may or may not have fired.
             // Disarm the alarm and return `false` to indicate that.
             // It is the caller's responsibility to handle this ambiguity.
-            r.dmaintenr().modify(|w| w.set_ccie(1, false));
+            r.dmaintenr().modify(|w| w.set_ccie(1, false));//Capture/Compare 1 interrupt enable
 
             self.alarm.borrow(cs).timestamp.set(u64::MAX);
 
