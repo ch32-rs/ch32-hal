@@ -28,7 +28,4 @@ pub unsafe fn init() {
 
     #[cfg(any(qingke_v4, time_driver_timer))]
     critical_section::with(|cs| time_driver_impl::init(cs));
-
-    #[cfg(not(any(qingke_v4, time_driver_timer)))]
-    compile_error!("No timer source for embassy given");
 }
