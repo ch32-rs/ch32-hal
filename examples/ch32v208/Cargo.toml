@@ -14,7 +14,7 @@ embassy-executor = { version = "0.7.0", features = [
     "arch-riscv32",
     "executor-thread",
 ] }
-embassy-time = { version = "0.4.0" }
+embassy-time = {version = "0.4.0", features = ["tick-hz-10_000",]}
 
 # This is okay because we should automatically use whatever ch32-hal uses
 qingke-rt = "*"
