@@ -35,4 +35,7 @@ micromath = { version = "2.1.0", features = ["num-traits"] }
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
 lto = true
-opt-level = "s" # Optimize for size.
+opt-level = "z" # Optimize for size.
+
+[profile.dev]
+overflow-checks = false
