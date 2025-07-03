@@ -437,7 +437,8 @@ fn main() -> ! {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = println!("\n\n\n{}", info);
+    // CH32V003 is so resource constrained, adding strings is a bad idea.
+    // let _ = println!("\n\n\n{}", info);
 
     loop {}
 }
