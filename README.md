@@ -55,9 +55,6 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 
 ### Notes
 - For USB OTGFS and HS, look at the `mod.rs` respsectively to understand what is / is not tested.
-- Default clock frequency of examples is 8Mhz with an embassy tick frequency of 10Khz. This is changed
-  because default embassy tick of embassy_time is 1Mhz which is too fast.
-  Chose an embassy tick frequency fiting to your project.
 
 ### TODOs
 
