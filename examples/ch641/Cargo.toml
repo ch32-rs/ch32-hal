@@ -16,7 +16,7 @@ embassy-executor = { version = "0.7.0", features = [
     "executor-thread",
     "task-arena-size-128", # or better use nightly, but fails on recent Rust versions
 ] }
-embassy-time = {version = "0.4.0", features = ["tick-hz-10_000",]}
+embassy-time = "0.4.0"
 embedded-hal = "1.0.0"
 
 qingke-rt = "*"
