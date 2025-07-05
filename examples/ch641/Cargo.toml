@@ -11,13 +11,12 @@ ch32-hal = { path = "../../", features = [
     "time-driver-tim2",
     "rt",
 ] }
-embassy-executor = { version = "0.6.0", features = [
-    "integrated-timers",
+embassy-executor = { version = "0.7.0", features = [
     "arch-riscv32",
     "executor-thread",
     "task-arena-size-128", # or better use nightly, but fails on recent Rust versions
 ] }
-embassy-time = { version = "0.3.2" }
+embassy-time = "0.4.0"
 embedded-hal = "1.0.0"
 
 qingke-rt = "*"

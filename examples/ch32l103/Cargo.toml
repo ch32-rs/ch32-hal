@@ -11,12 +11,11 @@ ch32-hal = { path = "../../", features = [
     "rt",
     "time-driver-tim2",
 ], default-features = false }
-embassy-executor = { version = "0.6.0", features = [
-    "integrated-timers",
+embassy-executor = { version = "0.7.0", features = [
     "arch-riscv32",
     "executor-thread",
 ] }
-embassy-time = { version = "0.3.2" }
+embassy-time = "0.4.0"
 
 # This is okay because we should automatically use whatever ch32-hal uses
 qingke = "*"
