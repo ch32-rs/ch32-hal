@@ -11,7 +11,9 @@ use crate::can::registers::Registers;
 use crate::can::util;
 use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode, NonBlocking};
-use crate::{interrupt, into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral, RemapPeripheral};
+use crate::{
+    interrupt, into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral, RemapPeripheral, Timeout,
+};
 
 /// Receive interrupt handler.
 pub struct ReceiveInterruptHandler<T: Instance> {
@@ -30,10 +32,30 @@ impl<T: Instance> interrupt::typelevel::Handler<T::ReceiveInterrupt> for Receive
     }
 }
 
+/// Can config
+#[non_exhaustive]
+#[derive(Copy, Clone)]
+pub struct Config {
+    /// Timeout.
+    #[cfg(feature = "embassy")]
+    pub timeout: embassy_time::Duration,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            #[cfg(feature = "embassy")]
+            timeout: embassy_time::Duration::from_millis(1000),
+        }
+    }
+}
+
 pub struct Can<'d, T: Instance, M: Mode> {
     _peri: PeripheralRef<'d, T>,
     fifo: CanFifo,
     last_mailbox_used: usize,
+    #[cfg(feature = "embassy")]
+    timeout: embassy_time::Duration,
     _phantom: PhantomData<(&'d mut T, M)>,
 }
 
@@ -51,8 +73,9 @@ impl<'d, T: Instance> Can<'d, T, Async> {
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
+        config: Config,
     ) -> Result<Self, CanInitError> {
-        Self::new_inner(peri, rx, tx, fifo, mode, bitrate)
+        Self::new_inner(peri, rx, tx, fifo, mode, bitrate, config)
     }
 
     pub async fn recv(&self) -> Result<CanFrame, CanError> {
@@ -92,8 +115,39 @@ impl<'d, T: Instance> Can<'d, T, Blocking> {
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
+        config: Config,
     ) -> Result<Self, CanInitError> {
-        Self::new_inner(peri, rx, tx, fifo, mode, bitrate)
+        Self::new_inner(peri, rx, tx, fifo, mode, bitrate, config)
+    }
+
+    /// Puts a frame in the transmit buffer to be sent on the bus.
+    ///
+    /// If the transmit buffer is full, this function will block until a mailbox becomes available or the timeout is reached.
+    fn blocking_transmit(&mut self, frame: &CanFrame) -> Result<(), CanError> {
+        let regs = Registers::new::<T>();
+        let timeout = self.timeout();
+
+        let mailbox_num = loop {
+            if let Some(mailbox_num) = regs.find_free_mailbox() {
+                break mailbox_num;
+            };
+            timeout.check().ok_or(CanError::Timeout)?;
+        };
+        regs.write_frame_mailbox(mailbox_num, frame);
+        self.last_mailbox_used = mailbox_num;
+        Ok(())
+    }
+
+    /// Blocks until a frame was received or an error occurred.
+    fn blocking_recv(&self) -> Result<CanFrame, CanError> {
+        let timeout = self.timeout();
+
+        while Registers::new::<T>().pending_messages(self.fifo) == 0 {
+            timeout.check().ok_or(CanError::Timeout)?;
+        }
+
+        let frame = self.receive_inner()?;
+        Ok(frame)
     }
 }
 
@@ -105,8 +159,9 @@ impl<'d, T: Instance> Can<'d, T, NonBlocking> {
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
+        config: Config,
     ) -> Result<Self, CanInitError> {
-        Self::new_inner(peri, rx, tx, fifo, mode, bitrate)
+        Self::new_inner(peri, rx, tx, fifo, mode, bitrate, config)
     }
 
     /// Puts a frame in the transmit buffer to be sent on the bus.
@@ -154,6 +209,7 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
+        config: Config,
     ) -> Result<Self, CanInitError> {
         into_ref!(peri, rx, tx);
 
@@ -161,6 +217,7 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
             _peri: peri,
             fifo,
             last_mailbox_used: usize::MAX,
+            timeout: config.timeout,
             _phantom: PhantomData,
         };
         T::enable_and_reset(); // Enable CAN peripheral
@@ -264,6 +321,13 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
 
         Ok(frame)
     }
+
+    fn timeout(&self) -> Timeout {
+        Timeout {
+            #[cfg(feature = "embassy")]
+            deadline: embassy_time::Instant::now() + self.timeout,
+        }
+    }
 }
 
 /// These trait methods are only usable within the embedded_can context.
@@ -288,6 +352,25 @@ where
     /// Returns a received frame if available.
     fn receive(&mut self) -> nb::Result<Self::Frame, Self::Error> {
         Can::try_recv(self)
+    }
+}
+
+impl<'d, T> embedded_can::blocking::Can for Can<'d, T, Blocking>
+where
+    T: Instance,
+{
+    type Frame = CanFrame;
+    type Error = CanError;
+
+    /// Puts a frame in the transmit buffer. Blocks until space is available in
+    /// the transmit buffer.
+    fn transmit(&mut self, frame: &Self::Frame) -> Result<(), Self::Error> {
+        Can::blocking_transmit(self, frame)
+    }
+
+    /// Blocks until a frame was received or an error occured.
+    fn receive(&mut self) -> Result<Self::Frame, Self::Error> {
+        Can::blocking_recv(self)
     }
 }
 

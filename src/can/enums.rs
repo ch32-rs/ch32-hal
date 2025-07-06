@@ -21,6 +21,8 @@ pub enum CanError {
     BusPassive,
     ///  At least one of error counter has reached the Error_Warning limit of 96.
     BusWarning,
+    /// Timeout error.
+    Timeout,
 }
 
 impl core::fmt::Display for CanError {
@@ -35,6 +37,7 @@ impl core::fmt::Display for CanError {
             Self::BusOff => write!(f, "The peripheral is in Bus Off mode"),
             Self::BusPassive => write!(f, "The peripheral is in Bus Passive mode"),
             Self::BusWarning => write!(f, "A peripheral error counter has reached the Warning threshold"),
+            Self::Timeout => write!(f, "Operation timed out"),
         }
     }
 }
@@ -51,6 +54,7 @@ impl Into<embedded_can::ErrorKind> for CanError {
             Self::BusOff => embedded_can::ErrorKind::Other,
             Self::BusPassive => embedded_can::ErrorKind::Other,
             Self::BusWarning => embedded_can::ErrorKind::Other,
+            Self::Timeout => embedded_can::ErrorKind::Other,
         }
     }
 }
