@@ -20,7 +20,7 @@ embassy-time = "0.4.0"
 
 # This is okay because we should automatically use whatever ch32-hal uses
 qingke = "*"
-qingke-rt = { version = "*", features = ["highcode"] }
+qingke-rt = { version = "0.5.0", features=["highcode"] }
 
 
 panic-halt = "1.0"
