@@ -1,6 +1,6 @@
 //! Inter-Integrated-Circuit (I2C)
 
-use core::future::{poll_fn, Future};
+use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
@@ -14,7 +14,7 @@ use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode};
 // use crate::interrupt::Interrupt;
 use crate::time::Hertz;
-use crate::{interrupt, into_ref, peripherals, Peripheral};
+use crate::{interrupt, into_ref, peripherals, Peripheral, Timeout};
 
 /// Event interrupt handler.
 pub struct EventInterruptHandler<T: Instance> {
@@ -95,41 +95,6 @@ impl Default for Config {
             timeout: embassy_time::Duration::from_millis(1000),
             duty: Duty::Duty2_1,
         }
-    }
-}
-
-#[derive(Copy, Clone)]
-struct Timeout {
-    #[cfg(feature = "embassy")]
-    deadline: embassy_time::Instant,
-}
-
-#[allow(dead_code)]
-impl Timeout {
-    #[inline]
-    fn check(self) -> Result<(), Error> {
-        #[cfg(feature = "embassy")]
-        if embassy_time::Instant::now() > self.deadline {
-            return Err(Error::Timeout);
-        }
-
-        Ok(())
-    }
-
-    #[inline]
-    fn with<R>(self, fut: impl Future<Output = Result<R, Error>>) -> impl Future<Output = Result<R, Error>> {
-        #[cfg(feature = "embassy")]
-        {
-            use futures::FutureExt;
-
-            embassy_futures::select::select(embassy_time::Timer::at(self.deadline), fut).map(|r| match r {
-                embassy_futures::select::Either::First(_) => Err(Error::Timeout),
-                embassy_futures::select::Either::Second(r) => r,
-            })
-        }
-
-        #[cfg(not(feature = "embassy"))]
-        fut
     }
 }
 
@@ -319,7 +284,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
             // Wait until START condition was generated
             while !Self::check_and_clear_error_flags()?.sb() {
-                timeout.check()?;
+                timeout.check().ok_or(Error::Timeout)?;
             }
 
             // Check if we were the ones to generate START
@@ -334,7 +299,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
             // Wait for the address to be acknowledged
             // Check for any I2C errors. If a NACK occurs, the ADDR bit will never be set.
             while !Self::check_and_clear_error_flags()?.addr() {
-                timeout.check()?;
+                timeout.check().ok_or(Error::Timeout)?;
             }
 
             // Clear condition by reading SR2
@@ -361,7 +326,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
             // Check for any I2C errors. If a NACK occurs, the ADDR bit will never be set.
             !Self::check_and_clear_error_flags()?.tx_e()
         } {
-            timeout.check()?;
+            timeout.check().ok_or(Error::Timeout)?;
         }
 
         // Push out a byte of data
@@ -374,7 +339,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
             // Check for any potential error conditions.
             !Self::check_and_clear_error_flags()?.btf()
         } {
-            timeout.check()?;
+            timeout.check().ok_or(Error::Timeout)?;
         }
 
         Ok(())
@@ -387,7 +352,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
             !T::regs().star1().read().rx_ne()
         } {
-            timeout.check()?;
+            timeout.check().ok_or(Error::Timeout)?;
         }
 
         let value = T::regs().datar().read().datar();
@@ -414,7 +379,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
             // Wait until START condition was generated
             while !Self::check_and_clear_error_flags()?.sb() {
-                timeout.check()?;
+                timeout.check().ok_or(Error::Timeout)?;
             }
 
             // Check if we were the ones to generate START
@@ -428,7 +393,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
             // Wait until address was sent
             // Wait for the address to be acknowledged
             while !Self::check_and_clear_error_flags()?.addr() {
-                timeout.check()?;
+                timeout.check().ok_or(Error::Timeout)?;
             }
 
             // Clear condition by reading SR2
