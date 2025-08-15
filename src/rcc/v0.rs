@@ -146,7 +146,7 @@ pub(crate) unsafe fn init(config: Config) {
         AHBPrescaler::DIV7 => sysclk / 7,
         AHBPrescaler::DIV8 => sysclk / 8,
         AHBPrescaler::DIV16 => sysclk / 16,
-        AHBPrescaler::DIV32 => sysclk / 16,
+        AHBPrescaler::DIV32 => sysclk / 32,
         AHBPrescaler::DIV64 => sysclk / 64,
         AHBPrescaler::DIV128 => sysclk / 128,
         AHBPrescaler::DIV256 => sysclk / 256,
