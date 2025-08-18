@@ -3,7 +3,7 @@
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 
-use ch32_hal::flash::{Flash, FLASH_BASE};
+use ch32_hal::flash::Flash;
 use ch32_hal::rcc::*;
 use ch32_hal::{interrupt, println};
 use embassy_executor::Spawner;
@@ -41,11 +41,11 @@ async fn main(_spawner: Spawner) -> ! {
     Timer::after_millis(1000).await;
 
     let mut f = Flash::new_blocking(p.FLASH);
-    const size: u32 = 256;
+    const SIZE: u32 = 256;
     let start: u32 = 1024 * 32;
     let stop = start + 256 * 3;
-    for offset in (start..stop).step_by(size as usize) {
-        println!("Testing offset: {:#X}, size: {:#X}", offset, size);
+    for offset in (start..stop).step_by(SIZE as usize) {
+        println!("Testing offset: {:#X}, size: {:#X}", offset, SIZE);
 
         println!("Reading...");
         let mut buf = [0u8; 32];
@@ -53,7 +53,7 @@ async fn main(_spawner: Spawner) -> ! {
         println!("Read: {:?}", buf);
 
         println!("Erasing...");
-        println!("{:?}", f.blocking_erase(offset, offset + size));
+        println!("{:?}", f.blocking_erase(offset, offset + SIZE));
 
         println!("Reading...");
         let mut buf = [0u8; 32];
@@ -61,7 +61,7 @@ async fn main(_spawner: Spawner) -> ! {
         println!("Read after erase: {:?}", buf);
 
         println!("Writing...");
-        println!("{:?}", f.blocking_write(offset, &[0xabu8; size as usize]));
+        println!("{:?}", f.blocking_write(offset, &[0xabu8; SIZE as usize]));
 
         println!("Reading...");
         let mut buf = [0u8; 32];
