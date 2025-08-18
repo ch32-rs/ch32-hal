@@ -1,4 +1,5 @@
 //! Flash memory (FLASH)
+//! CH32 FLASH is relatively close to STM32. This module is heavily inspired from embassy-stm32
 use embedded_storage::nor_flash::{NorFlashError, NorFlashErrorKind};
 
 mod common;
@@ -33,7 +34,7 @@ pub use family::*;
 
 /// Flash error
 ///
-/// See STM32 Reference Manual for your chip for details.
+/// See CH32 Reference Manual for your chip for details.
 #[allow(missing_docs)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
