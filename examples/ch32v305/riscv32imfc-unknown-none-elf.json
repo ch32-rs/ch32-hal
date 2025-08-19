@@ -7,7 +7,6 @@
   "eh-frame-header": false,
   "emit-debug-gdb-scripts": false,
   "features": "+m,+f,+c,+forced-atomics",
-  "is-builtin": false,
   "linker": "rust-lld",
   "linker-flavor": "gnu-lld",
   "llvm-abiname": "ilp32f",
