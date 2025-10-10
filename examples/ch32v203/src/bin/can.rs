@@ -3,16 +3,26 @@
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 
-use ch32_hal::can::{Can, CanFifo, CanFilter, CanFrame, CanMode, StandardId};
+use ch32_hal::can::{Can, CanFifo, CanFilter, CanFrame, CanMode, Config, StandardId};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Ticker};
+use embedded_can::blocking::Can as _;
 use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(_spawner: Spawner) {
     let p = hal::init(Default::default());
 
-    let can = Can::new(p.CAN1, p.PA11, p.PA12, CanFifo::Fifo1, CanMode::Normal, 500_000).expect("Valid");
+    let mut can = Can::new_blocking(
+        p.CAN1,
+        p.PA11,
+        p.PA12,
+        CanFifo::Fifo1,
+        CanMode::Normal,
+        500_000,
+        Config::default(),
+    )
+    .expect("Valid");
     let mut filter = CanFilter::new_id_list();
 
     filter
