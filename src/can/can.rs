@@ -217,6 +217,7 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
             _peri: peri,
             fifo,
             last_mailbox_used: usize::MAX,
+            #[cfg(feature = "embassy")]
             timeout: config.timeout,
             _phantom: PhantomData,
         };
