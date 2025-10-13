@@ -68,7 +68,7 @@ impl<'d, T: Instance, D: Dir> Endpoint<'d, T, D> {
                 let res = match status.token() {
                     UsbToken::OUT => {
                         let len = r.rx_len().read() as usize;
-                        if len == buf.len() {
+                        if len <= buf.len() {
                             self.data.buffer.read_volatile(&mut buf[..len]);
                             Poll::Ready(Ok(len))
                         } else {
