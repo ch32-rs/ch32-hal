@@ -21,6 +21,7 @@ critical-section = "1.2.0"
 
 embassy-time = "0.4.0"
 embassy-usb = "0.5.1"
+embassy-futures = "0.1.2"
 nb = "1.1.0"
 
 # This is okay because we should automatically use whatever ch32-hal uses
