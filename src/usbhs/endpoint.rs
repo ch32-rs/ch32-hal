@@ -8,14 +8,14 @@ use embassy_usb_driver::{Direction, EndpointError, EndpointIn, EndpointInfo, End
 use super::{EndpointData, Instance, EP_WAKERS};
 use crate::usb::{Dir, In, Out};
 
-pub struct Endpoint<'d, T: Instance, D: Dir> {
+pub struct Endpoint<'d, T: Instance, D: Dir, const SIZE: usize> {
     _phantom: PhantomData<(&'d mut T, D)>,
     info: EndpointInfo,
-    pub(crate) data: EndpointData<'d>,
+    pub(crate) data: EndpointData<'d, SIZE>,
 }
 
-impl<'d, T: Instance, D: Dir> Endpoint<'d, T, D> {
-    pub(crate) fn new(info: EndpointInfo, data: EndpointData<'d>) -> Self {
+impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
+    pub(crate) fn new(info: EndpointInfo, data: EndpointData<'d, SIZE>) -> Self {
         let index = info.addr.index();
         T::dregs().ep_max_len(index).write(|v| v.set_len(info.max_packet_size));
         if info.ep_type != EndpointType::Control {
@@ -152,7 +152,7 @@ impl<'d, T: Instance, D: Dir> Endpoint<'d, T, D> {
     }
 }
 
-impl<'d, T: Instance, D: Dir> embassy_usb_driver::Endpoint for Endpoint<'d, T, D> {
+impl<'d, T: Instance, D: Dir, const SIZE: usize> embassy_usb_driver::Endpoint for Endpoint<'d, T, D, SIZE> {
     fn info(&self) -> &EndpointInfo {
         &self.info
     }
@@ -162,7 +162,7 @@ impl<'d, T: Instance, D: Dir> embassy_usb_driver::Endpoint for Endpoint<'d, T, D
     }
 }
 
-impl<'d, T: Instance> EndpointOut for Endpoint<'d, T, Out> {
+impl<'d, T: Instance, const SIZE: usize> EndpointOut for Endpoint<'d, T, Out, SIZE> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
         if !self.is_enabled() {
             error!("read from disabled ep {}", self.info.addr.index());
@@ -184,7 +184,7 @@ impl<'d, T: Instance> EndpointOut for Endpoint<'d, T, Out> {
     }
 }
 
-impl<'d, T: Instance> EndpointIn for Endpoint<'d, T, In> {
+impl<'d, T: Instance, const SIZE: usize> EndpointIn for Endpoint<'d, T, In, SIZE> {
     async fn write(&mut self, buf: &[u8]) -> Result<(), EndpointError> {
         if !self.is_enabled() {
             error!("write to disabled ep {}", self.info.addr.index());
