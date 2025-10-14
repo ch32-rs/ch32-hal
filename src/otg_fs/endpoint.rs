@@ -10,14 +10,14 @@ use crate::interrupt::typelevel::Interrupt;
 use crate::usb::{Dir, EndpointData, In, Out};
 
 /// USB endpoint.
-pub struct Endpoint<'d, T, D> {
+pub struct Endpoint<'d, T, D, const SIZE: usize> {
     _phantom: PhantomData<&'d (T, D)>,
     info: EndpointInfo,
-    data: EndpointData<'d>,
+    data: EndpointData<'d, SIZE>,
 }
 
-impl<'d, T: Instance, D: Dir> Endpoint<'d, T, D> {
-    pub(crate) fn new(info: EndpointInfo, data: EndpointData<'d>) -> Self {
+impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
+    pub(crate) fn new(info: EndpointInfo, data: EndpointData<'d, SIZE>) -> Self {
         T::regs()
             .uep_dma(info.addr.index() as usize)
             .write_value(data.buffer.addr() as u32);
@@ -67,7 +67,7 @@ impl<'d, T: Instance, D: Dir> Endpoint<'d, T, D> {
     }
 }
 
-impl<'d, T: Instance, D: Dir> embassy_usb_driver::Endpoint for Endpoint<'d, T, D> {
+impl<'d, T: Instance, D: Dir, const SIZE: usize> embassy_usb_driver::Endpoint for Endpoint<'d, T, D, SIZE> {
     fn info(&self) -> &EndpointInfo {
         &self.info
     }
@@ -77,7 +77,7 @@ impl<'d, T: Instance, D: Dir> embassy_usb_driver::Endpoint for Endpoint<'d, T, D
     }
 }
 
-impl<'d, T: Instance> embassy_usb_driver::EndpointIn for Endpoint<'d, T, In> {
+impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointIn for Endpoint<'d, T, In, SIZE> {
     async fn write(&mut self, buf: &[u8]) -> Result<(), EndpointError> {
         trace!("endpoint {} IN", self.info.addr.index());
         if !self.is_enabled() {
@@ -133,7 +133,7 @@ impl<'d, T: Instance> embassy_usb_driver::EndpointIn for Endpoint<'d, T, In> {
     }
 }
 
-impl<'d, T: Instance> embassy_usb_driver::EndpointOut for Endpoint<'d, T, Out> {
+impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for Endpoint<'d, T, Out, SIZE> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
         trace!("endpoint {} OUT", self.info.addr.index());
         if !self.is_enabled() {
@@ -192,13 +192,13 @@ impl<'d, T: Instance> embassy_usb_driver::EndpointOut for Endpoint<'d, T, Out> {
     }
 }
 
-pub struct ControlPipe<'d, T> {
-    ep0_buf: EndpointData<'d>,
+pub struct ControlPipe<'d, T, const SIZE: usize> {
+    ep0_buf: EndpointData<'d, SIZE>,
     _phantom: PhantomData<T>,
 }
 
-impl<'d, T: Instance> ControlPipe<'d, T> {
-    pub(crate) fn new(ep0_buf: EndpointData<'d>) -> Self {
+impl<'d, T: Instance, const SIZE: usize> ControlPipe<'d, T, SIZE> {
+    pub(crate) fn new(ep0_buf: EndpointData<'d, SIZE>) -> Self {
         Self {
             ep0_buf,
             _phantom: PhantomData,
@@ -206,7 +206,7 @@ impl<'d, T: Instance> ControlPipe<'d, T> {
     }
 }
 
-impl<'d, T> embassy_usb_driver::ControlPipe for ControlPipe<'d, T>
+impl<'d, T, const SIZE: usize> embassy_usb_driver::ControlPipe for ControlPipe<'d, T, SIZE>
 where
     T: Instance,
 {

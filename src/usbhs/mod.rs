@@ -124,13 +124,13 @@ impl<T: Instance> interrupt::typelevel::Handler<T::WakeupInterrupt> for WakeupIn
     }
 }
 
-pub struct Driver<'d, T: Instance, const NR_EP: usize> {
+pub struct Driver<'d, T: Instance, const NR_EP: usize, const SIZE: usize> {
     phantom: PhantomData<&'d T>,
-    allocator: EndpointBufferAllocator<'d, NR_EP>,
+    allocator: EndpointBufferAllocator<'d, NR_EP, SIZE>,
     allocated: Bitmap<MAX_NR_EP>,
 }
 
-impl<'d, T: Instance, const NR_EP: usize> Driver<'d, T, NR_EP> {
+impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP, SIZE> {
     pub fn new(
         _peri: Peri<'d, T>,
         _irqs: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>
@@ -138,7 +138,7 @@ impl<'d, T: Instance, const NR_EP: usize> Driver<'d, T, NR_EP> {
             + 'd,
         dp: Peri<'d, impl DpPin<T, 0>>,
         dm: Peri<'d, impl DmPin<T, 0>>,
-        ep_buffer: &'d mut [EndpointDataBuffer; NR_EP],
+        ep_buffer: &'d mut [EndpointDataBuffer<SIZE>; NR_EP],
     ) -> Self {
         assert!(ep_buffer.len() > 0);
 
@@ -199,7 +199,7 @@ impl<'d, T: Instance, const NR_EP: usize> Driver<'d, T, NR_EP> {
         max_packet_size: u16,
         interval_ms: u8,
         dir: Direction,
-    ) -> Result<Endpoint<'d, T, D>, EndpointAllocError> {
+    ) -> Result<Endpoint<'d, T, D, SIZE>, EndpointAllocError> {
         let addr = match ep_addr {
             Some(addr) => {
                 // Use the provided endpoint address
@@ -246,10 +246,12 @@ impl<'d, T: Instance, const NR_EP: usize> Driver<'d, T, NR_EP> {
     }
 }
 
-impl<'d, T: Instance, const NR_EP: usize> embassy_usb_driver::Driver<'d> for Driver<'d, T, NR_EP> {
-    type EndpointOut = Endpoint<'d, T, Out>;
-    type EndpointIn = Endpoint<'d, T, In>;
-    type ControlPipe = ControlPipe<'d, T>;
+impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver::Driver<'d>
+    for Driver<'d, T, NR_EP, SIZE>
+{
+    type EndpointOut = Endpoint<'d, T, Out, SIZE>;
+    type EndpointIn = Endpoint<'d, T, In, SIZE>;
+    type ControlPipe = ControlPipe<'d, T, SIZE>;
     type Bus = Bus<'d, T>;
 
     fn alloc_endpoint_out(
