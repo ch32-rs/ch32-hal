@@ -9,13 +9,13 @@ use super::endpoint::Endpoint;
 use super::{Instance, EP_WAKERS};
 use crate::usb::InOut;
 
-pub struct ControlPipe<'d, T: Instance> {
+pub struct ControlPipe<'d, T: Instance, const SIZE: usize> {
     _phantom: PhantomData<&'d mut T>,
-    ep0: Endpoint<'d, T, InOut>,
+    ep0: Endpoint<'d, T, InOut, SIZE>,
 }
 
-impl<'d, T: Instance> ControlPipe<'d, T> {
-    pub(crate) fn new(ep0: Endpoint<'d, T, InOut>) -> Self {
+impl<'d, T: Instance, const SIZE: usize> ControlPipe<'d, T, SIZE> {
+    pub(crate) fn new(ep0: Endpoint<'d, T, InOut, SIZE>) -> Self {
         Self {
             _phantom: PhantomData,
             ep0,
@@ -23,7 +23,7 @@ impl<'d, T: Instance> ControlPipe<'d, T> {
     }
 }
 
-impl<'d, T: Instance> embassy_usb_driver::ControlPipe for ControlPipe<'d, T> {
+impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::ControlPipe for ControlPipe<'d, T, SIZE> {
     fn max_packet_size(&self) -> usize {
         use embassy_usb_driver::Endpoint;
 
