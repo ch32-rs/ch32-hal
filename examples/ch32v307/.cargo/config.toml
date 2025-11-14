@@ -1,10 +1,10 @@
 [build]
-target = "riscv32imfc-unknown-none-elf.json"
+target = "riscv32imac-unknown-none-elf.json"
 
 [unstable]
 build-std = ["core"]
 
-[target.riscv32imfc-unknown-none-elf]
+[target.riscv32imac-unknown-none-elf]
 runner = "wlink flash --enable-sdi-print --watch-serial"
 # runner = "wlink -v flash --no-erase --dry-run"
 # runner = "probe-rs run --chip CH32V307"
