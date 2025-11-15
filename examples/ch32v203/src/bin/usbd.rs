@@ -20,6 +20,8 @@ bind_interrupts!(struct Irqs {
 //
 // See https://embassy.dev/book/#_the_usb_examples_are_not_working_on_my_board_is_there_anything_else_i_need_to_configure
 // for more information.
+//
+// println will not work without probe.
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
     let p = hal::init(hal::Config {
@@ -34,8 +36,7 @@ async fn main(_spawner: Spawner) {
     config.manufacturer = Some("Embassy");
     config.product = Some("USB-serial example");
     config.serial_number = Some("12345678");
-    config.max_power = 100;
-    config.max_packet_size_0 = 64;
+
 
     // Windows compatibility requires these; CDC-ACM
     config.device_class = 0x02;
@@ -47,7 +48,6 @@ async fn main(_spawner: Spawner) {
     // It needs some buffers for building the descriptors.
     let mut config_descriptor = [0; 256];
     let mut bos_descriptor = [0; 256];
-    let mut msos_descriptor = [0; 256];
     let mut control_buf = [0; 64];
 
     let mut state = State::new();

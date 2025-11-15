@@ -18,7 +18,7 @@ ch32-hal = { path = "../../", features = [
 ], default-features = false }
 
 embassy-executor = { version = "0.7.0", features = [
-    "integrated-timers",
+    #"integrated-timers",
     # "arch-riscv32",
     "arch-spin", # TODO: Required for USBD to connect properly
     "executor-thread",
