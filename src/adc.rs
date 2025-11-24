@@ -7,7 +7,7 @@ use core::marker::PhantomData;
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::pac::adc::vals;
-#[cfg(any(adc_v1, adc_v3))]
+#[cfg(adc_v3)]
 pub use crate::pac::adc::vals::Pga;
 pub use crate::pac::adc::vals::SampleTime;
 use crate::{into_ref, peripherals, Peripheral};
@@ -97,7 +97,7 @@ impl<'d, T: Instance> Adc<'d, T> {
     }
 
     // regular conversion
-    #[cfg(any(adc_v1, adc_v3))]
+    #[cfg(adc_v3)]
     pub fn configure_channel(&mut self, channel: &mut impl AdcChannel<T>, rank: u8, sample_time: SampleTime, pga: Pga) {
         channel.set_as_analog();
 
@@ -137,7 +137,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         }
     }
 
-    #[cfg(not(any(adc_v1, adc_v3)))]
+    #[cfg(not(adc_v3))]
     pub fn configure_channel(&mut self, channel: &mut impl AdcChannel<T>, rank: u8, sample_time: SampleTime) {
         channel.set_as_analog();
 
@@ -170,7 +170,7 @@ impl<'d, T: Instance> Adc<'d, T> {
     }
 
     // Get_ADC_Val
-    #[cfg(any(adc_v1, adc_v3))]
+    #[cfg(adc_v3)]
     pub fn convert(&mut self, channel: &mut impl AdcChannel<T>, sample_time: SampleTime, pga: Pga) -> u16 {
         self.configure_channel(channel, 1, sample_time, pga);
 
@@ -182,7 +182,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         T::regs().rdatar().read().data()
     }
 
-    #[cfg(not(any(adc_v1, adc_v3)))]
+    #[cfg(not(adc_v3))]
     pub fn convert(&mut self, channel: &mut impl AdcChannel<T>, sample_time: SampleTime) -> u16 {
         self.configure_channel(channel, 1, sample_time);
 
