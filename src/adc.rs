@@ -7,6 +7,8 @@ use core::marker::PhantomData;
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::pac::adc::vals;
+#[cfg(any(adc_v1, adc_v3))]
+pub use crate::pac::adc::vals::Pga;
 pub use crate::pac::adc::vals::SampleTime;
 use crate::{into_ref, peripherals, Peripheral};
 
@@ -87,10 +89,55 @@ impl<'d, T: Instance> Adc<'d, T> {
         // ADC ON
         T::regs().ctlr2().modify(|w| w.set_adon(true));
 
+        // start self-calibration
+        T::regs().ctlr2().modify(|w| w.set_rstcal(true));
+        while T::regs().ctlr2().read().rstcal() {} // wait for calibration to be done
+
         Self { adc }
     }
 
     // regular conversion
+    #[cfg(any(adc_v1, adc_v3))]
+    pub fn configure_channel(&mut self, channel: &mut impl AdcChannel<T>, rank: u8, sample_time: SampleTime, pga: Pga) {
+        channel.set_as_analog();
+
+        let channel = channel.channel();
+
+        // sample time config
+        if channel < 10 {
+            T::regs().samptr2().modify(|w| w.set_smp(channel as usize, sample_time));
+        } else {
+            T::regs()
+                .samptr1()
+                .modify(|w| w.set_smp((channel - 10) as usize, sample_time));
+        }
+
+        // PGA config
+        T::regs().ctlr1().modify(|w| {
+            w.set_pga(pga);
+            if pga != Pga::X1 {
+                w.set_bufen(true);
+            }
+        });
+
+        // regular sequence config
+        assert!(rank < 17 || rank > 0);
+        if rank < 7 {
+            T::regs()
+                .rsqr3()
+                .modify(|w| w.set_sq((rank - 1) as usize, channel & 0b11111));
+        } else if rank < 13 {
+            T::regs()
+                .rsqr2()
+                .modify(|w| w.set_sq((rank - 7) as usize, channel & 0b11111));
+        } else {
+            T::regs()
+                .rsqr1()
+                .modify(|w| w.set_sq((rank - 13) as usize, channel & 0b11111));
+        }
+    }
+
+    #[cfg(not(any(adc_v1, adc_v3)))]
     pub fn configure_channel(&mut self, channel: &mut impl AdcChannel<T>, rank: u8, sample_time: SampleTime) {
         channel.set_as_analog();
 
@@ -123,6 +170,19 @@ impl<'d, T: Instance> Adc<'d, T> {
     }
 
     // Get_ADC_Val
+    #[cfg(any(adc_v1, adc_v3))]
+    pub fn convert(&mut self, channel: &mut impl AdcChannel<T>, sample_time: SampleTime, pga: Pga) -> u16 {
+        self.configure_channel(channel, 1, sample_time, pga);
+
+        T::regs().ctlr2().modify(|w| w.set_swstart(true));
+
+        // while not end of conversion
+        while !T::regs().statr().read().eoc() {}
+
+        T::regs().rdatar().read().data()
+    }
+
+    #[cfg(not(any(adc_v1, adc_v3)))]
     pub fn convert(&mut self, channel: &mut impl AdcChannel<T>, sample_time: SampleTime) -> u16 {
         self.configure_channel(channel, 1, sample_time);
 
