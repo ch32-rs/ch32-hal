@@ -90,8 +90,11 @@ impl<'d, T: Instance> Adc<'d, T> {
         T::regs().ctlr2().modify(|w| w.set_adon(true));
 
         // start self-calibration
-        T::regs().ctlr2().modify(|w| w.set_rstcal(true));
-        while T::regs().ctlr2().read().rstcal() {} // wait for calibration to be done
+        #[cfg(any(adc_v1, adc_v3))]
+        {
+            T::regs().ctlr2().modify(|w| w.set_rstcal(true));
+            while T::regs().ctlr2().read().rstcal() {} // wait for calibration to be done
+        }
 
         Self { adc }
     }
