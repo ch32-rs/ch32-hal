@@ -14,12 +14,11 @@ use core::sync::atomic::AtomicBool;
 use core::task::Poll;
 
 use embassy_sync::waitqueue::AtomicWaker;
-use embedded_hal::delay::DelayNs;
 use pac::InterruptNumber;
 
 use crate::gpio::Pull;
 use crate::pac::usbpd::vals;
-use crate::{interrupt, pac, println, Peri, RccPeripheral};
+use crate::{interrupt, pac, println, Peri, PeripheralType, RccPeripheral};
 
 #[derive(Debug)]
 pub enum Error {
@@ -82,7 +81,7 @@ pub struct UsbPdPhy<'d, T: Instance> {
     cc2: vals::CcSel,
 }
 
-impl<'d, T: Instance> UsbPdPhy<'d, T> {
+impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
     /// Create a new SPI driver.
     pub fn new(
         _peri: Peri<'d, T>,
