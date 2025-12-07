@@ -16,6 +16,7 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         chip:
           - ch32l103f8u6
