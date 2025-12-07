@@ -15,7 +15,7 @@ env:
 
 jobs:
   build-hal:
-    name: Build HAL (${{ matrix.chip }})
+    name: HAL (${{ matrix.chip }})
     strategy:
       fail-fast: false
       matrix:
@@ -65,11 +65,24 @@ jobs:
           mkdir -p ../ch32-data/build/
           cd ../ch32-data/build/
           git clone https://github.com/ch32-rs/ch32-metapac.git
-      - name: Build HAL
+      - name: Build
         run: cargo build --features ${{ matrix.chip }},embassy,rt,memory-x --no-default-features --target ${{ matrix.target }}
 
   build-examples:
-    name: Build Examples
+    name: Examples (${{ matrix.example }})
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - ch32l103
+          - ch32v003
+          - ch32v103
+          - ch32v203
+          - ch32v208
+          - ch32v305
+          - ch32v307
+          - ch32x035
+          - ch641
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,9 +98,5 @@ jobs:
           mkdir -p ../ch32-data/build/
           cd ../ch32-data/build/
           git clone https://github.com/ch32-rs/ch32-metapac.git
-      - name: Build Examples
-        run: |
-          for d in examples/*/; do
-            echo "Building $d"
-            (cd "$d" && cargo build --release)
-          done
+      - name: Build
+        run: cd examples/${{ matrix.example }} && cargo build --release
