@@ -8,10 +8,11 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use hal::gpio::{AnyPin, Level, Output, Pin};
 use hal::usart::UartTx;
+use hal::Peri;
 use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::task]
-async fn blink(pin: AnyPin) {
+async fn blink(pin: Peri<'static, AnyPin>) {
     let mut led = Output::new(pin, Level::Low, Default::default());
 
     loop {
@@ -27,7 +28,7 @@ async fn main(spawner: Spawner) -> ! {
     let p = hal::init(Default::default());
 
     // GPIO
-    spawner.spawn(blink(p.PA0.degrade())).unwrap();
+    spawner.spawn(blink(p.PA0.into())).unwrap();
 
     let mut cfg = usart::Config::default();
     let mut uart = UartTx::new_blocking(p.USART1, p.PA9, cfg).unwrap();

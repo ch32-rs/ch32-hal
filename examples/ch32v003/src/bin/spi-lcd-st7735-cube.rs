@@ -254,7 +254,7 @@ fn main() -> ! {
     let mut led = Output::new(p.PD6, Level::Low, Default::default());
 
     let mut cs = Output::new(cs, Level::High, Default::default());
-    let dc = Output::new(dc.degrade(), Level::High, Default::default());
+    let dc = Output::new(dc, Level::High, Default::default());
     let mut rst = Output::new(rst, Level::High, Default::default());
 
     cs.set_low();

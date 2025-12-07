@@ -14,7 +14,6 @@ ch32-hal = { path = "../../", features = [
 embassy-executor = { version = "0.9.1", features = [
     "arch-spin",
     "executor-thread",
-    "task-arena-size-256", # or better use nightly, but fails on recent Rust versions
 ] }
 embassy-time = "0.5.0"
 
