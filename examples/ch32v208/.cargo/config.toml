@@ -4,3 +4,4 @@ target = "riscv32imc-unknown-none-elf"
 [target."riscv32imc-unknown-none-elf"]
 runner = "wlink -v flash --enable-sdi-print --watch-serial"
 # runner = "wlink -v flash"
+# runner = "probe-rs run --chip CH32V208"
