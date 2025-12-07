@@ -25,11 +25,11 @@ use embedded_hal::delay::DelayNs;
 use hal::gpio::{AnyPin, Input, Level, Output, Pin};
 use hal::prelude::*;
 use hal::spi::Spi;
-use hal::{peripherals, println};
+use hal::{peripherals, println, Peri};
 use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::task]
-async fn blink(pin: AnyPin) {
+async fn blink(pin: Peri<'static, AnyPin>) {
     let mut led = Output::new(pin, Level::Low, Default::default());
 
     loop {
@@ -279,7 +279,7 @@ async fn main(spawner: Spawner) -> ! {
     let button = Input::new(button, hal::gpio::Pull::None);
 
     let mut cs = Output::new(cs, Level::High, Default::default());
-    let dc = Output::new(dc.degrade(), Level::High, Default::default());
+    let dc = Output::new(dc, Level::High, Default::default());
     let mut rst = Output::new(rst, Level::High, Default::default());
 
     cs.set_low();
@@ -301,7 +301,7 @@ async fn main(spawner: Spawner) -> ! {
     println!("display init ok");
 
     // GPIO, // T1C4
-    spawner.spawn(blink(led.degrade())).unwrap();
+    spawner.spawn(blink(led.into())).unwrap();
 
     display.clear(Rgb565::BLACK).unwrap();
 

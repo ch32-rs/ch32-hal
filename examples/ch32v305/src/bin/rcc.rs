@@ -8,10 +8,11 @@ use embassy_time::{Duration, Timer};
 use hal::gpio::{AnyPin, Level, Output, Pin};
 use hal::println;
 use hal::time::Hertz;
+use hal::Peri;
 use {ch32_hal as hal, panic_halt as _};
 
 #[embassy_executor::task(pool_size = 3)]
-async fn blink(pin: AnyPin, interval_ms: u64) {
+async fn blink(pin: Peri<'static, AnyPin>, interval_ms: u64) {
     let mut led = Output::new(pin, Level::Low, Default::default());
 
     loop {
@@ -53,9 +54,9 @@ async fn main(spawner: Spawner) -> ! {
     println!("PCLK2: {}Hz", hal::rcc::clocks().pclk2.0);
 
     // GPIO
-    spawner.spawn(blink(p.PC9.degrade(), 1000)).unwrap();
-    spawner.spawn(blink(p.PB4.degrade(), 100)).unwrap();
-    spawner.spawn(blink(p.PB8.degrade(), 100)).unwrap();
+    spawner.spawn(blink(p.PC9.into(), 1000)).unwrap();
+    spawner.spawn(blink(p.PB4.into(), 100)).unwrap();
+    spawner.spawn(blink(p.PB8.into(), 100)).unwrap();
     let mut tick = 0;
     loop {
         Timer::after_millis(1000).await;

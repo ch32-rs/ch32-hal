@@ -6,6 +6,7 @@
 use core::arch::asm;
 
 use ch32_hal as hal;
+use hal::Peri;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use hal::dma::Priority;
@@ -23,7 +24,7 @@ use hal::{interrupt, println};
 //}
 
 #[embassy_executor::task(pool_size = 3)]
-async fn blink(pin: AnyPin, interval_ms: u64) {
+async fn blink(pin: Peri<'static, AnyPin>, interval_ms: u64) {
     let mut led = Output::new(pin, Level::Low, Default::default());
 
     loop {
@@ -55,7 +56,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // GPIO
     // let mut led = Output::new(p.PB12, Level::High, Default::default());
-    spawner.spawn(blink(p.PB12.degrade(), 1000)).unwrap();
+    spawner.spawn(blink(p.PB12.into(), 1000)).unwrap();
 
     let buf = b"Hello World\r\n";
     loop {
