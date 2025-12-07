@@ -38,7 +38,7 @@ use endpoint::{ControlPipe, Endpoint};
 use crate::gpio::{AFType, Speed};
 use crate::interrupt::typelevel::Interrupt;
 use crate::usb::{Dir, EndpointBufferAllocator, EndpointDataBuffer, In, Out};
-use crate::{interrupt, peripherals, Peripheral, RccPeripheral};
+use crate::{interrupt, peripherals, Peri, PeripheralType, RccPeripheral};
 
 pub mod endpoint;
 
@@ -112,15 +112,13 @@ where
     T: Instance,
 {
     pub fn new(
-        _usb: impl Peripheral<P = T> + 'd,
+        _usb: Peri<'d, T>,
         // _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        dp: impl Peripheral<P = impl crate::gpio::Pin> + 'd,
-        dm: impl Peripheral<P = impl crate::gpio::Pin> + 'd,
+        dp: Peri<'d, impl crate::gpio::Pin>,
+        dm: Peri<'d, impl crate::gpio::Pin>,
         ep_buffer: &'d mut [EndpointDataBuffer; NR_EP],
     ) -> Self {
         assert!(ep_buffer.len() > 0);
-        let dp = dp.into_ref();
-        let dm = dm.into_ref();
 
         dp.set_as_af_output(AFType::OutputPushPull, Speed::High);
         dm.set_as_af_output(AFType::OutputPushPull, Speed::High);
@@ -470,7 +468,7 @@ trait SealedInstance: RccPeripheral {
 
 /// OTG_FS peripheral instance
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + 'static {
+pub trait Instance: SealedInstance + PeripheralType + 'static {
     type Interrupt: interrupt::typelevel::Interrupt;
 }
 

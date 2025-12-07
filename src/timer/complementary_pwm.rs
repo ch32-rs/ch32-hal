@@ -9,13 +9,13 @@ use crate::gpio::{AFType, AnyPin};
 use crate::pac::timer::vals::Ckd;
 use crate::time::Hertz;
 use crate::timer::low_level::OutputCompareMode;
-use crate::{into_ref, Peripheral, PeripheralRef};
+use crate::Peri;
 
 /// Complementary PWM pin wrapper.
 ///
 /// This wraps a pin to make it usable with PWM.
 pub struct ComplementaryPwmPin<'d, T, C> {
-    _pin: PeripheralRef<'d, AnyPin>,
+    _pin: Peri<'d, AnyPin>,
     phantom: PhantomData<(T, C)>,
 }
 
@@ -23,16 +23,14 @@ macro_rules! complementary_channel_impl {
     ($new_chx:ident, $channel:ident, $pin_trait:ident) => {
         impl<'d, T: AdvancedInstance> ComplementaryPwmPin<'d, T, $channel> {
             #[doc = concat!("Create a new ", stringify!($channel), " complementary PWM pin instance.")]
-            pub fn $new_chx<const REMAP: u8>(pin: impl Peripheral<P = impl $pin_trait<T, REMAP>> + 'd) -> Self {
-                into_ref!(pin);
-
+            pub fn $new_chx<const REMAP: u8>(pin: Peri<'d, impl $pin_trait<T, REMAP>>) -> Self {
                 T::set_remap(REMAP);
                 critical_section::with(|_| {
                     pin.set_low();
                     pin.set_as_af_output(AFType::OutputPushPull, Default::default());
                 });
                 ComplementaryPwmPin {
-                    _pin: pin.map_into(),
+                    _pin: pin.into(),
                     phantom: PhantomData,
                 }
             }
@@ -53,7 +51,7 @@ impl<'d, T: AdvancedInstance> ComplementaryPwm<'d, T> {
     /// Create a new complementary PWM driver.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        tim: impl Peripheral<P = T> + 'd,
+        tim: Peri<'d, T>,
         _ch1: Option<PwmPin<'d, T, Ch1>>,
         _ch1n: Option<ComplementaryPwmPin<'d, T, Ch1>>,
         _ch2: Option<PwmPin<'d, T, Ch2>>,
@@ -69,7 +67,7 @@ impl<'d, T: AdvancedInstance> ComplementaryPwm<'d, T> {
         Self::new_inner(tim, freq, counting_mode)
     }
 
-    fn new_inner(tim: impl Peripheral<P = T> + 'd, freq: Hertz, counting_mode: CountingMode) -> Self {
+    fn new_inner(tim: Peri<'d, T>, freq: Hertz, counting_mode: CountingMode) -> Self {
         let mut this = Self { inner: Timer::new(tim) };
 
         this.inner.set_counting_mode(counting_mode);

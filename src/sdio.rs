@@ -17,7 +17,7 @@ use crate::interrupt::typelevel::Interrupt;
 use crate::pac::sdio::Sdio as RegBlock;
 use crate::peripheral::RccPeripheral;
 use crate::time::Hertz;
-use crate::{interrupt, into_ref, peripherals, Peripheral, PeripheralRef};
+use crate::{interrupt, peripherals, Peri, PeripheralType};
 
 /// Interrupt handler.
 pub struct InterruptHandler<T: Instance> {
@@ -233,16 +233,16 @@ impl Default for Config {
 
 /// Sdmmc device
 pub struct Sdmmc<'d, T: Instance, Dma: SdioDma<T> = NoDma> {
-    _peri: PeripheralRef<'d, T>,
+    _peri: Peri<'d, T>,
     #[allow(unused)]
-    dma: PeripheralRef<'d, Dma>,
+    dma: Peri<'d, Dma>,
 
-    clk: PeripheralRef<'d, AnyPin>,
-    cmd: PeripheralRef<'d, AnyPin>,
-    d0: PeripheralRef<'d, AnyPin>,
-    d1: Option<PeripheralRef<'d, AnyPin>>,
-    d2: Option<PeripheralRef<'d, AnyPin>>,
-    d3: Option<PeripheralRef<'d, AnyPin>>,
+    clk: Peri<'d, AnyPin>,
+    cmd: Peri<'d, AnyPin>,
+    d0: Peri<'d, AnyPin>,
+    d1: Option<Peri<'d, AnyPin>>,
+    d2: Option<Peri<'d, AnyPin>>,
+    d3: Option<Peri<'d, AnyPin>>,
 
     config: Config,
     /// Current clock to card
@@ -257,16 +257,14 @@ pub struct Sdmmc<'d, T: Instance, Dma: SdioDma<T> = NoDma> {
 impl<'d, T: Instance, Dma: SdioDma<T>> Sdmmc<'d, T, Dma> {
     /// Create a new SDMMC driver, with 1 data lane.
     pub fn new_1bit(
-        sdmmc: impl Peripheral<P = T> + 'd,
+        sdmmc: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        dma: impl Peripheral<P = Dma> + 'd,
-        clk: impl Peripheral<P = impl CkPin<T, 0>> + 'd,
-        cmd: impl Peripheral<P = impl CmdPin<T, 0>> + 'd,
-        d0: impl Peripheral<P = impl D0Pin<T, 0>> + 'd,
+        dma: Peri<'d, Dma>,
+        clk: Peri<'d, impl CkPin<T, 0>>,
+        cmd: Peri<'d, impl CmdPin<T, 0>>,
+        d0: Peri<'d, impl D0Pin<T, 0>>,
         config: Config,
     ) -> Self {
-        into_ref!(clk, cmd, d0);
-
         critical_section::with(|_| {
             clk.set_as_af_output(AFType::OutputPushPull, Speed::High);
             cmd.set_as_af_output(AFType::OutputPushPull, Speed::High);
@@ -276,9 +274,9 @@ impl<'d, T: Instance, Dma: SdioDma<T>> Sdmmc<'d, T, Dma> {
         Self::new_inner(
             sdmmc,
             dma,
-            clk.map_into(),
-            cmd.map_into(),
-            d0.map_into(),
+            clk.into(),
+            cmd.into(),
+            d0.into(),
             None,
             None,
             None,
@@ -288,19 +286,17 @@ impl<'d, T: Instance, Dma: SdioDma<T>> Sdmmc<'d, T, Dma> {
 
     /// Create a new SDMMC driver, with 4 data lanes.
     pub fn new_4bit(
-        sdmmc: impl Peripheral<P = T> + 'd,
+        sdmmc: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        dma: impl Peripheral<P = Dma> + 'd,
-        clk: impl Peripheral<P = impl CkPin<T, 0>> + 'd,
-        cmd: impl Peripheral<P = impl CmdPin<T, 0>> + 'd,
-        d0: impl Peripheral<P = impl D0Pin<T, 0>> + 'd,
-        d1: impl Peripheral<P = impl D1Pin<T, 0>> + 'd,
-        d2: impl Peripheral<P = impl D2Pin<T, 0>> + 'd,
-        d3: impl Peripheral<P = impl D3Pin<T, 0>> + 'd,
+        dma: Peri<'d, Dma>,
+        clk: Peri<'d, impl CkPin<T, 0>>,
+        cmd: Peri<'d, impl CmdPin<T, 0>>,
+        d0: Peri<'d, impl D0Pin<T, 0>>,
+        d1: Peri<'d, impl D1Pin<T, 0>>,
+        d2: Peri<'d, impl D2Pin<T, 0>>,
+        d3: Peri<'d, impl D3Pin<T, 0>>,
         config: Config,
     ) -> Self {
-        into_ref!(clk, cmd, d0, d1, d2, d3);
-
         critical_section::with(|_| {
             clk.set_as_af_output(AFType::OutputPushPull, Speed::High);
             cmd.set_as_af_output(AFType::OutputPushPull, Speed::High);
@@ -313,12 +309,12 @@ impl<'d, T: Instance, Dma: SdioDma<T>> Sdmmc<'d, T, Dma> {
         Self::new_inner(
             sdmmc,
             dma,
-            clk.map_into(),
-            cmd.map_into(),
-            d0.map_into(),
-            Some(d1.map_into()),
-            Some(d2.map_into()),
-            Some(d3.map_into()),
+            clk.into(),
+            cmd.into(),
+            d0.into(),
+            Some(d1.into()),
+            Some(d2.into()),
+            Some(d3.into()),
             config,
         )
     }
@@ -326,17 +322,16 @@ impl<'d, T: Instance, Dma: SdioDma<T>> Sdmmc<'d, T, Dma> {
 
 impl<'d, T: Instance, Dma: SdioDma<T> + 'd> Sdmmc<'d, T, Dma> {
     fn new_inner(
-        sdmmc: impl Peripheral<P = T> + 'd,
-        dma: impl Peripheral<P = Dma> + 'd,
-        clk: PeripheralRef<'d, AnyPin>,
-        cmd: PeripheralRef<'d, AnyPin>,
-        d0: PeripheralRef<'d, AnyPin>,
-        d1: Option<PeripheralRef<'d, AnyPin>>,
-        d2: Option<PeripheralRef<'d, AnyPin>>,
-        d3: Option<PeripheralRef<'d, AnyPin>>,
+        sdmmc: Peri<'d, T>,
+        dma: Peri<'d, Dma>,
+        clk: Peri<'d, AnyPin>,
+        cmd: Peri<'d, AnyPin>,
+        d0: Peri<'d, AnyPin>,
+        d1: Option<Peri<'d, AnyPin>>,
+        d2: Option<Peri<'d, AnyPin>>,
+        d3: Option<Peri<'d, AnyPin>>,
         config: Config,
     ) -> Self {
-        into_ref!(sdmmc, dma);
 
         T::enable_and_reset();
 
@@ -429,7 +424,7 @@ impl<'d, T: Instance, Dma: SdioDma<T> + 'd> Sdmmc<'d, T, Dma> {
         let transfer = unsafe {
             let request = self.dma.request();
             Transfer::new_read(
-                &mut self.dma,
+                self.dma.clone_unchecked(),
                 request,
                 regs.fifo().as_ptr() as *mut u32,
                 buffer,
@@ -469,7 +464,7 @@ impl<'d, T: Instance, Dma: SdioDma<T> + 'd> Sdmmc<'d, T, Dma> {
         let transfer = unsafe {
             let request = self.dma.request();
             Transfer::new_write(
-                &mut self.dma,
+                self.dma.clone_unchecked(),
                 request,
                 buffer,
                 regs.fifo().as_ptr() as *mut u32,
@@ -1245,7 +1240,7 @@ trait SealedInstance {
 
 /// SDMMC instance trait.
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + RccPeripheral + 'static {
+pub trait Instance: SealedInstance + RccPeripheral + PeripheralType + 'static {
     /// Interrupt for this instance.
     type Interrupt: interrupt::typelevel::Interrupt;
 }

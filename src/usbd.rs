@@ -20,7 +20,7 @@ use crate::pac::usbd::regs;
 use crate::pac::usbd::vals::{EpType, Stat};
 use crate::pac::{EXTEND, USBRAM};
 use crate::peripheral::RccPeripheral;
-use crate::{interrupt, into_ref, Peripheral};
+use crate::{interrupt, Peri, PeripheralType};
 
 /// Interrupt handler.
 pub struct InterruptHandler<T: Instance> {
@@ -225,12 +225,11 @@ pub struct Driver<'d, T: Instance> {
 impl<'d, T: Instance> Driver<'d, T> {
     /// Create a new USB driver.
     pub fn new(
-        _usb: impl Peripheral<P = T> + 'd,
+        _usb: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        dp: impl Peripheral<P = impl DpPin<T, 0>> + 'd,
-        dm: impl Peripheral<P = impl DmPin<T, 0>> + 'd,
+        dp: Peri<'d, impl DpPin<T, 0>>,
+        dm: Peri<'d, impl DmPin<T, 0>>,
     ) -> Self {
-        into_ref!(dp, dm);
 
         {
             //dp.set_as_af_output(crate::gpio::AFType::OutputPushPull, Speed::High);
@@ -1047,7 +1046,7 @@ trait SealedInstance {
 
 /// USB instance trait.
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + RccPeripheral + 'static {
+pub trait Instance: SealedInstance + RccPeripheral + PeripheralType + 'static {
     /// Interrupt for this USB instance.
     type Interrupt: interrupt::typelevel::Interrupt;
 }

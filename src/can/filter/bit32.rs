@@ -1,5 +1,3 @@
-use core::marker::PhantomData;
-
 use embedded_can::Id;
 
 use super::{Bit16Mode, Bit32Mode, CanFilter, FilterMode, FilterOptions, ListMode, MaskMode};

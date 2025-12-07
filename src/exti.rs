@@ -7,7 +7,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use qingke_rt::interrupt;
 
 use crate::gpio::{AnyPin, Input, Level, Pin as GpioPin, Pull};
-use crate::{impl_peripheral, into_ref, peripherals, Peripheral};
+use crate::{impl_peripheral, peripherals, Peri};
 
 const EXTI_COUNT: usize = 24;
 const NEW_AW: AtomicWaker = AtomicWaker::new();
@@ -57,11 +57,10 @@ impl<'d> Unpin for ExtiInput<'d> {}
 
 impl<'d> ExtiInput<'d> {
     pub fn new<T: GpioPin>(
-        pin: impl Peripheral<P = T> + 'd,
-        ch: impl Peripheral<P = T::ExtiChannel> + 'd,
+        pin: Peri<'d, T>,
+        ch: Peri<'d, T::ExtiChannel>,
         pull: Pull,
     ) -> Self {
-        into_ref!(pin, ch);
         // Needed if using AnyPin+AnyChannel.
         assert_eq!(pin.pin(), ch.number());
 
@@ -195,7 +194,7 @@ impl<'a> Future for ExtiInputFuture<'a> {
 trait SealedChannel {}
 
 #[allow(private_bounds)]
-pub trait Channel: SealedChannel + Sized {
+pub trait Channel: SealedChannel + embassy_hal_internal::PeripheralType + Sized {
     fn number(&self) -> u8;
     fn degrade(self) -> AnyChannel {
         AnyChannel {
