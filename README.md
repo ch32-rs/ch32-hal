@@ -56,6 +56,25 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 ### Notes
 - For USB OTGFS and HS, look at the `mod.rs` respsectively to understand what is / is not tested.
 
+### Important: ROM/RAM Split Configuration (CH32V2/V3)
+
+> **Warning**
+> All CH32V2 and CH32V3 series chips support configurable ROM/RAM split. The configuration is stored in
+> `FLASH_OBR.RAM_CODE_MOD` register (read-only at runtime, can only be modified via external tools).
+>
+> If your program crashes immediately after flashing (e.g., Store Access Fault at stack addresses),
+> your chip's ROM/RAM configuration likely doesn't match the linker script.
+
+**Symptoms:**
+- Program crashes with `mcause=0x7` (Store/AMO access fault)
+- Stack pointer (`sp`) points to invalid memory region
+- No output or immediate crash after reset
+
+**Solution:**
+Use WCH's official tool (WCHISPTool) to configure the ROM/RAM split to match the default values defined in [ch32-data](https://github.com/ch32-rs/ch32-data).
+
+The linker script expects the **default RAM size** for each chip. Check your chip's YAML definition in ch32-data for the expected memory layout.
+
 ### TODOs
 
 This section lists some key items that are not implemented yet. And should be noted when using this crate.
