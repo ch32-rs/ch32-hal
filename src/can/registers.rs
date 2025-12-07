@@ -1,4 +1,3 @@
-use super::filter::{BitMode, FilterMode};
 use crate::can::Instance;
 
 const CAN_TX_TIMEOUT: u32 = 0xFFF;

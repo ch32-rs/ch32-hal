@@ -25,7 +25,7 @@ use crate::internal::drop::OnDrop;
 use crate::interrupt::typelevel::Interrupt;
 use crate::mode::{Async, Blocking, Mode};
 use crate::time::Hertz;
-use crate::{interrupt, into_ref, pac, peripherals, Peripheral, PeripheralRef};
+use crate::{interrupt, pac, peripherals, Peri};
 
 /// Interrupt handler.
 pub struct InterruptHandler<T: Instance> {
@@ -175,8 +175,8 @@ enum ReadCompletionEvent {
 /// Tx-only UART Driver.
 pub struct UartTx<'d, T: Instance, M: Mode> {
     _phantom: PhantomData<(T, M)>,
-    tx: Option<PeripheralRef<'d, AnyPin>>,
-    cts: Option<PeripheralRef<'d, AnyPin>>,
+    tx: Option<Peri<'d, AnyPin>>,
+    cts: Option<Peri<'d, AnyPin>>,
     tx_dma: Option<ChannelAndRequest<'d>>,
 }
 
@@ -186,9 +186,9 @@ impl<'d, T: Instance, M: Mode> UartTx<'d, T, M> {
     }
 
     fn new_inner(
-        _peri: impl Peripheral<P = T> + 'd,
-        tx: Option<PeripheralRef<'d, AnyPin>>,
-        cts: Option<PeripheralRef<'d, AnyPin>>,
+        _peri: Peri<'d, T>,
+        tx: Option<Peri<'d, AnyPin>>,
+        cts: Option<Peri<'d, AnyPin>>,
         tx_dma: Option<ChannelAndRequest<'d>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
@@ -232,37 +232,33 @@ impl<'d, T: Instance, M: Mode> UartTx<'d, T, M> {
 impl<'d, T: Instance> UartTx<'d, T, Async> {
     /// Useful if you only want Uart Tx. It saves 1 pin and consumes a little less power.
     pub fn new<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
-        tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
+        peri: Peri<'d, T>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
+        tx_dma: Peri<'d, impl TxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, tx, tx_dma);
-
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         T::set_remap(REMAP);
 
-        Self::new_inner(peri, Some(tx.map_into()), None, new_dma!(tx_dma), config)
+        Self::new_inner(peri, Some(tx.into()), None, new_dma!(tx_dma), config)
     }
 
     /// Create a new tx-only UART with a clear-to-send pin
     pub fn new_with_cts<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
-        cts: impl Peripheral<P = impl CtsPin<T, REMAP>> + 'd,
-        tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
+        peri: Peri<'d, T>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
+        cts: Peri<'d, impl CtsPin<T, REMAP>>,
+        tx_dma: Peri<'d, impl TxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, tx, cts, tx_dma);
-
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         cts.set_as_input(Pull::None);
         T::set_remap(REMAP);
 
         Self::new_inner(
             peri,
-            Some(tx.map_into()),
-            Some(cts.map_into()),
+            Some(tx.into()),
+            Some(cts.into()),
             new_dma!(tx_dma),
             config,
         )
@@ -287,32 +283,28 @@ impl<'d, T: Instance> UartTx<'d, T, Blocking> {
     ///
     /// Useful if you only want Uart Tx. It saves 1 pin and consumes a little less power.
     pub fn new_blocking<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, tx);
-
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         T::set_remap(REMAP);
 
-        Self::new_inner(peri, Some(tx.map_into()), None, None, config)
+        Self::new_inner(peri, Some(tx.into()), None, None, config)
     }
 
     /// Create a new blocking tx-only UART with a clear-to-send pin
     pub fn new_blocking_with_cts<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
-        cts: impl Peripheral<P = impl CtsPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
+        cts: Peri<'d, impl CtsPin<T, REMAP>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, tx, cts);
-
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         cts.set_as_input(Pull::None);
         T::set_remap(REMAP);
 
-        Self::new_inner(peri, Some(tx.map_into()), Some(cts.map_into()), None, config)
+        Self::new_inner(peri, Some(tx.into()), Some(cts.into()), None, config)
     }
 }
 
@@ -322,8 +314,8 @@ impl<'d, T: Instance> UartTx<'d, T, Blocking> {
 /// Rx-only UART Driver.
 pub struct UartRx<'d, T: Instance, M: Mode> {
     _phantom: PhantomData<(T, M)>,
-    rx: Option<PeripheralRef<'d, AnyPin>>,
-    rts: Option<PeripheralRef<'d, AnyPin>>,
+    rx: Option<Peri<'d, AnyPin>>,
+    rts: Option<Peri<'d, AnyPin>>,
     rx_dma: Option<ChannelAndRequest<'d>>,
     detect_previous_overrun: bool,
     buffered_sr: ch32_metapac::usart::regs::Statr,
@@ -331,9 +323,9 @@ pub struct UartRx<'d, T: Instance, M: Mode> {
 
 impl<'d, T: Instance, M: Mode> UartRx<'d, T, M> {
     fn new_inner(
-        _peri: impl Peripheral<P = T> + 'd,
-        rx: Option<PeripheralRef<'d, AnyPin>>,
-        rts: Option<PeripheralRef<'d, AnyPin>>,
+        _peri: Peri<'d, T>,
+        rx: Option<Peri<'d, AnyPin>>,
+        rts: Option<Peri<'d, AnyPin>>,
         rx_dma: Option<ChannelAndRequest<'d>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
@@ -427,39 +419,35 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
     ///
     /// Useful if you only want Uart Rx. It saves 1 pin and consumes a little less power.
     pub fn new<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
+        peri: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
-        rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, rx, rx_dma);
-
         rx.set_as_input(Pull::None);
         T::set_remap(REMAP);
 
-        Self::new_inner(peri, Some(rx.map_into()), None, new_dma!(rx_dma), config)
+        Self::new_inner(peri, Some(rx.into()), None, new_dma!(rx_dma), config)
     }
 
     /// Create a new rx-only UART with a request-to-send pin
     pub fn new_with_rts<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
+        peri: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
-        rts: impl Peripheral<P = impl RtsPin<T, REMAP>> + 'd,
-        rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        rts: Peri<'d, impl RtsPin<T, REMAP>>,
+        rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, rx, rts, rx_dma);
-
         rx.set_as_input(Pull::None);
         rts.set_as_af_output(AFType::OutputPushPull, Speed::High);
         T::set_remap(REMAP);
 
         Self::new_inner(
             peri,
-            Some(rx.map_into()),
-            Some(rts.map_into()),
+            Some(rx.into()),
+            Some(rts.into()),
             new_dma!(rx_dma),
             config,
         )
@@ -679,32 +667,28 @@ impl<'d, T: Instance> UartRx<'d, T, Blocking> {
     ///
     /// Useful if you only want Uart Rx. It saves 1 pin and consumes a little less power.
     pub fn new_blocking<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, rx);
-
         rx.set_as_input(Pull::None);
         T::set_remap(REMAP);
 
-        Self::new_inner(peri, Some(rx.map_into()), None, None, config)
+        Self::new_inner(peri, Some(rx.into()), None, None, config)
     }
 
     /// Create a new rx-only UART with a request-to-send pin
     pub fn new_blocking_with_rts<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
-        rts: impl Peripheral<P = impl RtsPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        rts: Peri<'d, impl RtsPin<T, REMAP>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, rx, rts);
-
         rx.set_as_input(Pull::None);
         rts.set_as_af_output(AFType::OutputPushPull, Speed::High);
         T::set_remap(REMAP);
 
-        Self::new_inner(peri, Some(rx.map_into()), Some(rts.map_into()), None, config)
+        Self::new_inner(peri, Some(rx.into()), Some(rts.into()), None, config)
     }
 }
 
@@ -749,11 +733,11 @@ impl<'d, T: Instance, M: Mode> Uart<'d, T, M> {
     }
 
     fn new_inner(
-        _peri: impl Peripheral<P = T> + 'd,
-        rx: Option<PeripheralRef<'d, AnyPin>>,
-        tx: Option<PeripheralRef<'d, AnyPin>>,
-        rts: Option<PeripheralRef<'d, AnyPin>>,
-        cts: Option<PeripheralRef<'d, AnyPin>>,
+        _peri: Peri<'d, T>,
+        rx: Option<Peri<'d, AnyPin>>,
+        tx: Option<Peri<'d, AnyPin>>,
+        rts: Option<Peri<'d, AnyPin>>,
+        cts: Option<Peri<'d, AnyPin>>,
         tx_dma: Option<ChannelAndRequest<'d>>,
         rx_dma: Option<ChannelAndRequest<'d>>,
         config: Config,
@@ -826,23 +810,21 @@ impl<'d, T: Instance, M: Mode> Uart<'d, T, M> {
 impl<'d, T: Instance> Uart<'d, T, Async> {
     /// Create a new bidirectional UARTUart
     pub fn new<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
-        rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
+        tx_dma: Peri<'d, impl TxDma<T>>,
+        rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, rx, tx, tx_dma, rx_dma);
-
         rx.set_as_input(Pull::None);
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
 
         Self::new_inner(
             peri,
-            Some(rx.map_into()),
-            Some(tx.map_into()),
+            Some(rx.into()),
+            Some(tx.into()),
             None,
             None,
             new_dma!(tx_dma),
@@ -853,18 +835,16 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
 
     /// Create a new bidirectional UART with request-to-send and clear-to-send pins
     pub fn new_with_rtscts<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        rts: impl Peripheral<P = impl RtsPin<T, REMAP>> + 'd,
-        cts: impl Peripheral<P = impl CtsPin<T, REMAP>> + 'd,
-        tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
-        rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
+        rts: Peri<'d, impl RtsPin<T, REMAP>>,
+        cts: Peri<'d, impl CtsPin<T, REMAP>>,
+        tx_dma: Peri<'d, impl TxDma<T>>,
+        rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, rx, tx, rts, cts, tx_dma, rx_dma);
-
         rx.set_as_input(Pull::None);
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         rts.set_as_af_output(AFType::OutputPushPull, Speed::High);
@@ -872,10 +852,10 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
 
         Self::new_inner(
             peri,
-            Some(rx.map_into()),
-            Some(tx.map_into()),
-            Some(rts.map_into()),
-            Some(cts.map_into()),
+            Some(rx.into()),
+            Some(tx.into()),
+            Some(rts.into()),
+            Some(cts.into()),
             new_dma!(tx_dma),
             new_dma!(rx_dma),
             config,
@@ -886,39 +866,35 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
     ///
     /// Note: Half duplex requires TX pin to have a pull-up resistor
     pub fn new_half_duplex<const REMAP: u8>(
-        _peri: impl Peripheral<P = T> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        _peri: Peri<'d, T>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         mut config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(_peri, tx);
-
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         T::set_remap(REMAP);
 
         config.half_duplex = true;
 
-        Self::new_inner(_peri, None, Some(tx.map_into()), None, None, None, None, config)
+        Self::new_inner(_peri, None, Some(tx.into()), None, None, None, None, config)
     }
 }
 
 impl<'d, T: Instance> Uart<'d, T, Blocking> {
     /// Create a new blocking bidirectional UART.
     pub fn new_blocking<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, rx, tx);
-
         rx.set_as_input(Pull::None);
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         T::set_remap(REMAP);
 
         Self::new_inner(
             peri,
-            Some(rx.map_into()),
-            Some(tx.map_into()),
+            Some(rx.into()),
+            Some(tx.into()),
             None,
             None,
             None,
@@ -929,15 +905,13 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
 
     /// Create a new bidirectional UART with request-to-send and clear-to-send pins
     pub fn new_blocking_with_rtscts<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
-        rts: impl Peripheral<P = impl RtsPin<T, REMAP>> + 'd,
-        cts: impl Peripheral<P = impl CtsPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
+        rts: Peri<'d, impl RtsPin<T, REMAP>>,
+        cts: Peri<'d, impl CtsPin<T, REMAP>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, rx, tx, rts, cts);
-
         rx.set_as_input(Pull::None);
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         rts.set_as_af_output(AFType::OutputPushPull, Speed::High);
@@ -946,10 +920,10 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
 
         Self::new_inner(
             peri,
-            Some(rx.map_into()),
-            Some(tx.map_into()),
-            Some(rts.map_into()),
-            Some(cts.map_into()),
+            Some(rx.into()),
+            Some(tx.into()),
+            Some(rts.into()),
+            Some(cts.into()),
             None,
             None,
             config,
@@ -957,18 +931,16 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
     }
 
     pub fn new_blocking_half_duplex<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         mut config: Config,
     ) -> Result<Self, ConfigError> {
-        into_ref!(peri, tx);
-
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         T::set_remap(REMAP);
 
         config.half_duplex = true;
 
-        Self::new_inner(peri, None, Some(tx.map_into()), None, None, None, None, config)
+        Self::new_inner(peri, None, Some(tx.into()), None, None, None, None, config)
     }
 }
 
@@ -1062,7 +1034,7 @@ trait SealedInstance: crate::peripheral::RccPeripheral + crate::peripheral::Rema
 }
 
 #[allow(private_bounds)]
-pub trait Instance: Peripheral<P = Self> + SealedInstance + 'static + Send {
+pub trait Instance: embassy_hal_internal::PeripheralType + SealedInstance + 'static + Send {
     /// Interrupt for this instance.
     type Interrupt: interrupt::typelevel::Interrupt;
 }

@@ -8,7 +8,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::pac::adc::vals;
 pub use crate::pac::adc::vals::SampleTime;
-use crate::{into_ref, peripherals, Peripheral};
+use crate::{peripherals, Peri};
 
 /// ADC bit resolution
 #[cfg(any(adc_v0, adc_ch641))]
@@ -53,13 +53,12 @@ impl State {
 /// Analog to Digital driver.
 pub struct Adc<'d, T: Instance> {
     #[allow(unused)]
-    adc: crate::PeripheralRef<'d, T>,
+    adc: Peri<'d, T>,
 }
 
 impl<'d, T: Instance> Adc<'d, T> {
     #[allow(unused)]
-    pub fn new(adc: impl Peripheral<P = T> + 'd, config: Config) -> Self {
-        into_ref!(adc);
+    pub fn new(adc: Peri<'d, T>, config: Config) -> Self {
         T::enable_and_reset();
 
         // TODO: ADCPRE
@@ -149,7 +148,7 @@ pub(crate) trait SealedAdcChannel<T: Instance> {
 }
 
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + crate::Peripheral<P = Self> + crate::peripheral::RccPeripheral {
+pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + crate::peripheral::RccPeripheral {
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 }
 

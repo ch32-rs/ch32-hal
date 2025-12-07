@@ -47,7 +47,7 @@ use endpoint::Endpoint;
 use crate::gpio::{AFType, Speed};
 use crate::interrupt::typelevel::Interrupt;
 use crate::usb::{Dir, EndpointBufferAllocator, EndpointData, EndpointDataBuffer, In, Out};
-use crate::{interrupt, Peripheral};
+use crate::{interrupt, Peri, PeripheralType};
 
 pub mod control;
 mod endpoint;
@@ -132,17 +132,15 @@ pub struct Driver<'d, T: Instance, const NR_EP: usize> {
 
 impl<'d, T: Instance, const NR_EP: usize> Driver<'d, T, NR_EP> {
     pub fn new(
-        _peri: impl Peripheral<P = T> + 'd,
+        _peri: Peri<'d, T>,
         _irqs: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>
             + interrupt::typelevel::Binding<T::WakeupInterrupt, WakeupInterruptHandler<T>>
             + 'd,
-        dp: impl Peripheral<P = impl DpPin<T, 0> + 'd>,
-        dm: impl Peripheral<P = impl DmPin<T, 0> + 'd>,
+        dp: Peri<'d, impl DpPin<T, 0>>,
+        dm: Peri<'d, impl DmPin<T, 0>>,
         ep_buffer: &'d mut [EndpointDataBuffer; NR_EP],
     ) -> Self {
         assert!(ep_buffer.len() > 0);
-        let dp = dp.into_ref();
-        let dm = dm.into_ref();
 
         dp.set_as_af_output(AFType::OutputPushPull, Speed::High);
         dm.set_as_af_output(AFType::OutputPushPull, Speed::High);
@@ -432,7 +430,7 @@ trait SealedInstance: crate::peripheral::RccPeripheral {
 
 /// UsbHs peripheral instance
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + 'static {
+pub trait Instance: SealedInstance + PeripheralType + 'static {
     /// Regular interrupt for this instance
     type Interrupt: interrupt::typelevel::Interrupt;
     /// Wakeup interrupt for this instance
