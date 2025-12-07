@@ -10,11 +10,11 @@ ch32-hal = { path = "../../", features = [
     "embassy",
     "rt",
 ] }
-embassy-executor = { version = "0.7.0", features = [
+embassy-executor = { version = "0.9.1", features = [
     "arch-riscv32",
     "executor-thread",
 ] }
-embassy-time = "0.4.0"
+embassy-time = "0.5.0"
 
 qingke-rt = "*"
 qingke = "*"

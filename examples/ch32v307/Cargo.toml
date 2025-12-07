@@ -12,14 +12,14 @@ ch32-hal = { path = "../../", features = [
     "highcode",
     "time-driver-tim1",
 ] }
-embassy-executor = { version = "0.7.0", features = [
+embassy-executor = { version = "0.9.1", features = [
     "arch-spin",
     "executor-thread",
 ] }
 
 critical-section = "1.2.0"
 
-embassy-time = "0.4.0"
+embassy-time = "0.5.0"
 embassy-usb = "0.5.1"
 embassy-futures = "0.1.2"
 nb = "1.1.0"
