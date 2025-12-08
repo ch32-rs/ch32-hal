@@ -25,8 +25,8 @@ embassy-futures = "0.1.2"
 nb = "1.1.0"
 
 # This is okay because we should automatically use whatever ch32-hal uses
-qingke = "*"
-qingke-rt = "*"
+qingke = "0.6.1"
+qingke-rt = "0.6.1"
 
 panic-halt = "1.0"
 

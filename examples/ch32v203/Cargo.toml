@@ -22,8 +22,8 @@ embassy-usb = { version = "0.5.1" }
 embassy-futures = { version = "0.1.0" }
 
 # This is okay because we should automatically use whatever ch32-hal uses
-qingke-rt = "*"
-qingke = "*"
+qingke-rt = "0.6.1"
+qingke = "0.6.1"
 
 panic-halt = "1.0"
 
