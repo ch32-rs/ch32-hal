@@ -13,7 +13,7 @@ ch32-hal = { path = "../../", features = [
 ], default-features = false }
 
 embassy-executor = { version = "0.9.1", features = [
-    "arch-riscv32",
+    "arch-spin",
     "executor-thread",
 ] }
 
