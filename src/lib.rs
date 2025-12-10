@@ -133,6 +133,9 @@ pub mod usbpd;
 #[cfg(can)]
 pub mod can;
 
+#[cfg(flash)]
+pub mod flash;
+
 #[cfg(feature = "embassy")]
 pub mod embassy;
 
