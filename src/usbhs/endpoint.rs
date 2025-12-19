@@ -172,7 +172,9 @@ impl<'d, T: Instance, const SIZE: usize> EndpointOut for Endpoint<'d, T, Out, SI
         let d = T::dregs();
         let index = self.info.addr.index();
 
-        if buf.len() > self.data.max_packet_size as usize {
+        // The buffer must be at least as large as the endpoint's max_packet_size
+        // to avoid potential buffer overflow when receiving data
+        if buf.len() < self.data.max_packet_size as usize {
             return Err(EndpointError::BufferOverflow);
         }
 
