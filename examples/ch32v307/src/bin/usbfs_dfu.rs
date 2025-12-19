@@ -2,7 +2,7 @@
 #![no_main]
 
 use panic_halt as _;
-use ch32_hal::usb::EndpointDataBuffer;
+use ch32_hal::usb::EndpointDataBuffer512;
 use ch32_hal::otg_fs::{self, Driver};
 use ch32_hal::{self as hal, bind_interrupts, peripherals, Config};
 use embassy_executor::Spawner;
@@ -47,7 +47,7 @@ async fn main(spawner: Spawner) -> ! {
     let p = hal::init(cfg);
 
     /* USB DRIVER SECION */
-    let mut buffer: [EndpointDataBuffer; 1] = core::array::from_fn(|_| EndpointDataBuffer::default());
+    let mut buffer: [EndpointDataBuffer512; 1] = core::array::from_fn(|_| EndpointDataBuffer512::default());
     let driver = Driver::new(p.OTG_FS, p.PA12, p.PA11, &mut buffer);
 
     // Create embassy-usb Config

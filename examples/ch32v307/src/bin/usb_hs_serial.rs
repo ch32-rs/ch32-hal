@@ -4,7 +4,7 @@
 use panic_halt as _;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use ch32_hal::usb::EndpointDataBuffer;
+use ch32_hal::usb::EndpointDataBuffer512;
 use ch32_hal::usbhs::{Driver};
 use ch32_hal::{self as hal, bind_interrupts, peripherals, Config};
 use ch32_hal::usbhs::{InterruptHandler, WakeupInterruptHandler, Instance};
@@ -27,7 +27,7 @@ async fn main(_spawner: Spawner) {
 
 
     // Create the driver, from the HAL.
-    let mut buffer: [EndpointDataBuffer; 4] = core::array::from_fn(|_| EndpointDataBuffer::default());
+    let mut buffer: [EndpointDataBuffer512; 4] = core::array::from_fn(|_| EndpointDataBuffer512::default());
     let driver = Driver::new(p.USBHS, Irq,  p.PB7, p.PB6, &mut buffer);
 
     // Create embassy-usb Config
@@ -55,7 +55,7 @@ async fn main(_spawner: Spawner) {
     );
 
     // Create classes on the builder.
-    let mut class = CdcAcmClass::new(&mut builder, &mut state, 64);
+    let mut class = CdcAcmClass::new(&mut builder, &mut state, 512);
 
     // Build the builder.
     let mut usb = builder.build();
@@ -87,8 +87,8 @@ impl From<EndpointError> for Disconnected {
     }
 }
 
-async fn echo<'d, T: Instance + 'd, const NR_EP: usize>(class: &mut CdcAcmClass<'d, Driver<'d, T, NR_EP>>) -> Result<(), Disconnected> {
-    let mut buf = [0; 64];
+async fn echo<'d, T: Instance + 'd, const NR_EP: usize, const SIZE: usize>(class: &mut CdcAcmClass<'d, Driver<'d, T, NR_EP, SIZE>>) -> Result<(), Disconnected> {
+    let mut buf = [0; 512];
     loop {
         let n = class.read_packet(&mut buf).await?;
         let data = &buf[..n];
