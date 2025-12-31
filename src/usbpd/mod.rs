@@ -14,12 +14,11 @@ use core::sync::atomic::AtomicBool;
 use core::task::Poll;
 
 use embassy_sync::waitqueue::AtomicWaker;
-use embedded_hal::delay::DelayNs;
 use pac::InterruptNumber;
 
 use crate::gpio::Pull;
 use crate::pac::usbpd::vals;
-use crate::{interrupt, into_ref, pac, println, Peripheral, RccPeripheral};
+use crate::{interrupt, pac, println, Peri, PeripheralType, RccPeripheral};
 
 #[derive(Debug)]
 pub enum Error {
@@ -82,15 +81,13 @@ pub struct UsbPdPhy<'d, T: Instance> {
     cc2: vals::CcSel,
 }
 
-impl<'d, T: Instance> UsbPdPhy<'d, T> {
+impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
     /// Create a new SPI driver.
     pub fn new(
-        _peri: impl Peripheral<P = T> + 'd,
-        cc1: impl Peripheral<P = impl CcPin<T>> + 'd,
-        cc2: impl Peripheral<P = impl CcPin<T>> + 'd,
+        _peri: Peri<'d, T>,
+        cc1: Peri<'d, impl CcPin<T>>,
+        cc2: Peri<'d, impl CcPin<T>>,
     ) -> Result<Self, Error> {
-        into_ref!(cc1, cc2);
-
         assert!(cc1.port_sel() != cc2.port_sel(), "CC1 and CC2 should be different");
 
         #[allow(unused)]

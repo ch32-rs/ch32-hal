@@ -14,7 +14,7 @@ use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode};
 // use crate::interrupt::Interrupt;
 use crate::time::Hertz;
-use crate::{interrupt, into_ref, peripherals, Peripheral, Timeout};
+use crate::{interrupt, peripherals, Peri, Timeout};
 
 /// Event interrupt handler.
 pub struct EventInterruptHandler<T: Instance> {
@@ -110,14 +110,14 @@ pub struct I2c<'d, T: Instance, M: Mode> {
 impl<'d, T: Instance> I2c<'d, T, Async> {
     /// Create a new I2C driver.
     pub fn new<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        scl: impl Peripheral<P = impl SclPin<T, REMAP>> + 'd,
-        sda: impl Peripheral<P = impl SdaPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        scl: Peri<'d, impl SclPin<T, REMAP>>,
+        sda: Peri<'d, impl SdaPin<T, REMAP>>,
         _irq: impl interrupt::typelevel::Binding<T::EventInterrupt, EventInterruptHandler<T>>
             + interrupt::typelevel::Binding<T::ErrorInterrupt, ErrorInterruptHandler<T>>
             + 'd,
-        tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
-        rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
+        tx_dma: Peri<'d, impl TxDma<T>>,
+        rx_dma: Peri<'d, impl RxDma<T>>,
         freq: Hertz,
         config: Config,
     ) -> Self {
@@ -128,9 +128,9 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
 impl<'d, T: Instance> I2c<'d, T, Blocking> {
     /// Create a new blocking I2C driver.
     pub fn new_blocking<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        scl: impl Peripheral<P = impl SclPin<T, REMAP>> + 'd,
-        sda: impl Peripheral<P = impl SdaPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        scl: Peri<'d, impl SclPin<T, REMAP>>,
+        sda: Peri<'d, impl SdaPin<T, REMAP>>,
         freq: Hertz,
         config: Config,
     ) -> Self {
@@ -141,17 +141,15 @@ impl<'d, T: Instance> I2c<'d, T, Blocking> {
 impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     /// Create a new I2C driver.
     fn new_inner<const REMAP: u8>(
-        _peri: impl Peripheral<P = T> + 'd,
-        scl: impl Peripheral<P = impl SclPin<T, REMAP>> + 'd,
-        sda: impl Peripheral<P = impl SdaPin<T, REMAP>> + 'd,
+        _peri: Peri<'d, T>,
+        scl: Peri<'d, impl SclPin<T, REMAP>>,
+        sda: Peri<'d, impl SdaPin<T, REMAP>>,
         tx_dma: Option<ChannelAndRequest<'d>>,
         rx_dma: Option<ChannelAndRequest<'d>>,
         freq: Hertz,
         config: Config,
     ) -> Self {
         use crate::interrupt::typelevel::Interrupt;
-
-        into_ref!(scl, sda);
 
         T::enable_and_reset();
 
@@ -860,7 +858,7 @@ trait SealedInstance: crate::peripheral::RccPeripheral + crate::peripheral::Rema
 
 /// I2C peripheral instance
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + 'static {
+pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + 'static {
     /// Event interrupt for this instance
     type EventInterrupt: interrupt::typelevel::Interrupt;
     /// Error interrupt for this instance

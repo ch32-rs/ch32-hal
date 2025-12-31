@@ -4,11 +4,11 @@
 #![feature(impl_trait_in_assoc_type)]
 
 use ch32_hal as hal;
-use hal::Peri;
 use embassy_executor::Spawner;
 use embassy_time::Timer;
-use hal::gpio::{AnyPin, Level, Output, Pin};
+use hal::gpio::{AnyPin, Level, Output};
 use hal::println;
+use hal::Peri;
 
 #[embassy_executor::task(pool_size = 2)]
 async fn blink(pin: Peri<'static, AnyPin>, interval_ms: u64) {
@@ -22,30 +22,29 @@ async fn blink(pin: Peri<'static, AnyPin>, interval_ms: u64) {
     }
 }
 
-#[embassy_executor::main(entry = "qingke_rt::entry")]
+#[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
-    let mut config = hal::Config::default();
-    config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
-    let p = hal::init(config);
+    let p = hal::init(Default::default());
 
-    println!("CHIP signature => {}", hal::signature::chip_id().name());
-    println!("Clocks {:?}", hal::rcc::clocks());
+    println!("Hello from ch32v208!");
+    println!("CHIP: {}", hal::signature::chip_id().name());
+    println!("Clocks: {:?}", hal::rcc::clocks());
 
-    // let mut led = Output::new(p.PC4, Level::Low, Default::default());
+    // Spawn blink tasks with different intervals
+    spawner.spawn(blink(p.PB8.into(), 500)).unwrap();
+    spawner.spawn(blink(p.PB9.into(), 200)).unwrap();
 
-    spawner.spawn(blink(p.PD6.into(), 110)).unwrap();
-    spawner.spawn(blink(p.PA2.into(), 270)).unwrap();
-
+    let mut tick = 0u32;
     loop {
         Timer::after_millis(1000).await;
-        println!("tick");
+        tick += 1;
+        println!("tick: {}", tick);
     }
 }
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     let _ = hal::println!("\n\n\n{}", info);
-
     loop {}
 }

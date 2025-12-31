@@ -1,19 +1,25 @@
 use embassy_usb_driver::EndpointAllocError;
 
-pub(crate) struct EndpointBufferAllocator<'d, const NR_EP: usize> {
-    ep_buffer: &'d mut [EndpointDataBuffer; NR_EP],
+pub(crate) struct EndpointBufferAllocator<'d, const NR_EP: usize, const SIZE: usize> {
+    ep_buffer: &'d mut [EndpointDataBuffer<SIZE>; NR_EP],
     ep_next: usize,
 }
 
-impl<'d, const NR_EP: usize> EndpointBufferAllocator<'d, NR_EP> {
-    pub fn new(ep_buffer: &'d mut [EndpointDataBuffer; NR_EP]) -> Self {
+/// Compile-time validation for buffer sizes
+const fn validate_buffer_size(size: usize) -> bool {
+    matches!(size, 8 | 16 | 32 | 64 | 512)
+}
+
+impl<'d, const NR_EP: usize, const SIZE: usize> EndpointBufferAllocator<'d, NR_EP, SIZE> {
+    pub fn new(ep_buffer: &'d mut [EndpointDataBuffer<SIZE>; NR_EP]) -> Self {
+        const { assert!(validate_buffer_size(SIZE), "Invalid buffer size") };
         Self { ep_buffer, ep_next: 0 }
     }
 
     pub fn alloc_endpoint(
         &mut self,
         max_packet_size: u16,
-    ) -> Result<EndpointData<'d>, embassy_usb_driver::EndpointAllocError> {
+    ) -> Result<EndpointData<'d, SIZE>, embassy_usb_driver::EndpointAllocError> {
         if self.ep_next >= NR_EP {
             error!("out of endpoint buffers");
             return Err(EndpointAllocError);
@@ -22,37 +28,39 @@ impl<'d, const NR_EP: usize> EndpointBufferAllocator<'d, NR_EP> {
         let ep_buf_idx = self.ep_next;
         self.ep_next += 1;
 
-        // TODO: Fix this, and allow variable buffer sizes
-        assert!(max_packet_size as usize <= ENDPOINT_DATA_BUFFER_SIZE);
+        assert!(
+            max_packet_size as usize <= SIZE,
+            "max_packet_size {} exceeds buffer size {}",
+            max_packet_size,
+            SIZE
+        );
 
         Ok(EndpointData {
             max_packet_size,
-            buffer: unsafe { core::mem::transmute(&self.ep_buffer[ep_buf_idx] as *const EndpointDataBuffer) },
+            buffer: unsafe { core::mem::transmute(&self.ep_buffer[ep_buf_idx] as *const EndpointDataBuffer<SIZE>) },
         })
     }
 }
 
-pub struct EndpointData<'d> {
+pub struct EndpointData<'d, const SIZE: usize> {
     pub max_packet_size: u16,
-    pub buffer: &'d mut EndpointDataBuffer,
+    pub buffer: &'d mut EndpointDataBuffer<SIZE>,
 }
 
-impl<'d> EndpointData<'d> {
+impl<'d, const SIZE: usize> EndpointData<'d, SIZE> {
     pub fn addr(&self) -> usize {
         self.buffer.addr()
     }
 }
 
-// todo generic
-const ENDPOINT_DATA_BUFFER_SIZE: usize = 64;
-
 #[repr(C, align(4))]
-pub struct EndpointDataBuffer {
-    data: [u8; ENDPOINT_DATA_BUFFER_SIZE as usize],
+pub struct EndpointDataBuffer<const SIZE: usize> {
+    data: [u8; SIZE],
 }
 
-impl Default for EndpointDataBuffer {
+impl<const SIZE: usize> Default for EndpointDataBuffer<SIZE> {
     fn default() -> Self {
+        const { assert!(validate_buffer_size(SIZE), "Invalid buffer size") };
         unsafe {
             EndpointDataBuffer {
                 data: core::mem::zeroed(),
@@ -61,7 +69,7 @@ impl Default for EndpointDataBuffer {
     }
 }
 
-impl EndpointDataBuffer {
+impl<const SIZE: usize> EndpointDataBuffer<SIZE> {
     pub(crate) fn read_volatile(&self, buf: &mut [u8]) {
         assert!(buf.len() <= self.data.len());
         let len = buf.len();
@@ -84,6 +92,25 @@ impl EndpointDataBuffer {
         self.data.as_ptr() as usize
     }
 }
+
+// Type aliases for common buffer sizes
+pub type EndpointDataBuffer8 = EndpointDataBuffer<8>;
+pub type EndpointDataBuffer16 = EndpointDataBuffer<16>;
+pub type EndpointDataBuffer32 = EndpointDataBuffer<32>;
+pub type EndpointDataBuffer64 = EndpointDataBuffer<64>;
+pub type EndpointDataBuffer512 = EndpointDataBuffer<512>;
+
+pub type EndpointData8<'d> = EndpointData<'d, 8>;
+pub type EndpointData16<'d> = EndpointData<'d, 16>;
+pub type EndpointData32<'d> = EndpointData<'d, 32>;
+pub type EndpointData64<'d> = EndpointData<'d, 64>;
+pub type EndpointData512<'d> = EndpointData<'d, 512>;
+
+pub type EndpointBufferAllocator8<'d, const NR_EP: usize> = EndpointBufferAllocator<'d, NR_EP, 8>;
+pub type EndpointBufferAllocator16<'d, const NR_EP: usize> = EndpointBufferAllocator<'d, NR_EP, 16>;
+pub type EndpointBufferAllocator32<'d, const NR_EP: usize> = EndpointBufferAllocator<'d, NR_EP, 32>;
+pub type EndpointBufferAllocator64<'d, const NR_EP: usize> = EndpointBufferAllocator<'d, NR_EP, 64>;
+pub type EndpointBufferAllocator512<'d, const NR_EP: usize> = EndpointBufferAllocator<'d, NR_EP, 512>;
 
 /// USB Direction Trait
 pub trait Dir {}

@@ -8,6 +8,7 @@
 #![feature(impl_trait_in_assoc_type)]
 
 use ch32_hal as hal;
+use hal::Peri;
 use embassy_executor::Spawner;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_graphics::framebuffer::Framebuffer;
@@ -25,7 +26,7 @@ use hal::{peripherals, println};
 use micromath::F32Ext;
 
 #[embassy_executor::task]
-async fn blink(pin: AnyPin) {
+async fn blink(pin: Peri<'static, AnyPin>) {
     let mut led = Output::new(pin, Level::Low, Default::default());
 
     loop {
@@ -300,7 +301,7 @@ async fn main(_spawner: Spawner) -> ! {
     let mut led = Output::new(p.PC9, Level::Low, Default::default());
 
     let mut cs = Output::new(cs, Level::High, Default::default());
-    let dc = Output::new(dc.degrade(), Level::High, Default::default());
+    let dc = Output::new(dc, Level::High, Default::default());
     let mut rst = Output::new(rst, Level::High, Default::default());
 
     cs.set_low();

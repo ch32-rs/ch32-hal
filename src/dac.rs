@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use crate::dma::NoDma;
 pub use crate::pac::dac::vals::TrigSel as TriggerSel;
 use crate::peripheral::RccPeripheral;
-use crate::{into_ref, peripherals, Peripheral, PeripheralRef};
+use crate::{peripherals, Peri, PeripheralType};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -52,10 +52,10 @@ pub enum ValueArray<'a> {
 ///
 /// If you want to use both channels, either together or independently,
 /// create a [`Dac`] first and use it to access each channel.
-pub struct DacChannel<'d, T: Instance, const N: u8, DMA = NoDma> {
+pub struct DacChannel<'d, T: Instance, const N: u8, DMA: PeripheralType = NoDma> {
     phantom: PhantomData<&'d mut T>,
     #[allow(unused)]
-    dma: PeripheralRef<'d, DMA>,
+    dma: Peri<'d, DMA>,
 }
 
 /// DAC channel 1 type alias.
@@ -63,7 +63,7 @@ pub type DacCh1<'d, T, DMA = NoDma> = DacChannel<'d, T, 1, DMA>;
 /// DAC channel 2 type alias.
 pub type DacCh2<'d, T, DMA = NoDma> = DacChannel<'d, T, 2, DMA>;
 
-impl<'d, T: Instance, const N: u8, DMA> DacChannel<'d, T, N, DMA> {
+impl<'d, T: Instance, const N: u8, DMA: PeripheralType> DacChannel<'d, T, N, DMA> {
     const IDX: usize = (N - 1) as usize;
 
     /// Create a new `DacChannel` instance, consuming the underlying DAC peripheral.
@@ -77,11 +77,10 @@ impl<'d, T: Instance, const N: u8, DMA> DacChannel<'d, T, N, DMA> {
     /// By default, triggering is disabled, but it can be enabled using
     /// [`DacChannel::set_trigger()`].
     pub fn new(
-        _peri: impl Peripheral<P = T> + 'd,
-        dma: impl Peripheral<P = DMA> + 'd,
-        pin: impl Peripheral<P = impl DacPin<T, N> + crate::gpio::Pin> + 'd,
+        _peri: Peri<'d, T>,
+        dma: Peri<'d, DMA>,
+        pin: Peri<'d, impl DacPin<T, N> + crate::gpio::Pin>,
     ) -> Self {
-        into_ref!(dma, pin);
         pin.set_as_analog();
         T::enable_and_reset();
         let mut dac = Self {
@@ -159,7 +158,7 @@ impl<'d, T: Instance, const N: u8, DMA> DacChannel<'d, T, N, DMA> {
 
 macro_rules! impl_dma_methods {
     ($n:literal, $trait:ident) => {
-        impl<'d, T: Instance, DMA> DacChannel<'d, T, $n, DMA>
+        impl<'d, T: Instance, DMA: PeripheralType> DacChannel<'d, T, $n, DMA>
         where
             DMA: $trait<T>,
         {
@@ -178,7 +177,6 @@ macro_rules! impl_dma_methods {
                 });
 
                 let tx_request = self.dma.request();
-                let dma_channel = &mut self.dma;
 
                 let tx_options = crate::dma::TransferOptions {
                     circular,
@@ -191,7 +189,7 @@ macro_rules! impl_dma_methods {
                 let tx_f = match data {
                     ValueArray::Bit8(buf) => unsafe {
                         crate::dma::Transfer::new_write(
-                            dma_channel,
+                            self.dma.clone_unchecked(),
                             tx_request,
                             buf,
                             T::regs().dhr8r(Self::IDX).as_ptr() as *mut u8,
@@ -200,7 +198,7 @@ macro_rules! impl_dma_methods {
                     },
                     ValueArray::Bit12Left(buf) => unsafe {
                         crate::dma::Transfer::new_write(
-                            dma_channel,
+                            self.dma.clone_unchecked(),
                             tx_request,
                             buf,
                             T::regs().dhr12l(Self::IDX).as_ptr() as *mut u16,
@@ -209,7 +207,7 @@ macro_rules! impl_dma_methods {
                     },
                     ValueArray::Bit12Right(buf) => unsafe {
                         crate::dma::Transfer::new_write(
-                            dma_channel,
+                            self.dma.clone_unchecked(),
                             tx_request,
                             buf,
                             T::regs().dhr12r(Self::IDX).as_ptr() as *mut u16,
@@ -232,7 +230,7 @@ macro_rules! impl_dma_methods {
 impl_dma_methods!(1, DacDma1);
 impl_dma_methods!(2, DacDma2);
 
-impl<'d, T: Instance, const N: u8, DMA> Drop for DacChannel<'d, T, N, DMA> {
+impl<'d, T: Instance, const N: u8, DMA: PeripheralType> Drop for DacChannel<'d, T, N, DMA> {
     fn drop(&mut self) {
         T::disable();
     }
@@ -248,12 +246,12 @@ impl<'d, T: Instance, const N: u8, DMA> Drop for DacChannel<'d, T, N, DMA> {
 /// // Pins may need to be changed for your specific device.
 /// let (dac_ch1, dac_ch2) = embassy_stm32::dac::Dac::new(p.DAC1, NoDma, NoDma, p.PA4, p.PA5).split();
 /// ```
-pub struct Dac<'d, T: Instance, DMACh1 = NoDma, DMACh2 = NoDma> {
+pub struct Dac<'d, T: Instance, DMACh1: PeripheralType = NoDma, DMACh2: PeripheralType = NoDma> {
     ch1: DacChannel<'d, T, 1, DMACh1>,
     ch2: DacChannel<'d, T, 2, DMACh2>,
 }
 
-impl<'d, T: Instance, DMACh1, DMACh2> Dac<'d, T, DMACh1, DMACh2> {
+impl<'d, T: Instance, DMACh1: PeripheralType, DMACh2: PeripheralType> Dac<'d, T, DMACh1, DMACh2> {
     /// Create a new `Dac` instance, consuming the underlying DAC peripheral.
     ///
     /// This struct allows you to access both channels of the DAC, where available. You can either
@@ -267,13 +265,12 @@ impl<'d, T: Instance, DMACh1, DMACh2> Dac<'d, T, DMACh1, DMACh2> {
     /// By default, triggering is disabled, but it can be enabled using the `set_trigger()`
     /// method on the underlying channels.
     pub fn new(
-        _peri: impl Peripheral<P = T> + 'd,
-        dma_ch1: impl Peripheral<P = DMACh1> + 'd,
-        dma_ch2: impl Peripheral<P = DMACh2> + 'd,
-        pin_ch1: impl Peripheral<P = impl DacPin<T, 1> + crate::gpio::Pin> + 'd,
-        pin_ch2: impl Peripheral<P = impl DacPin<T, 2> + crate::gpio::Pin> + 'd,
+        _peri: Peri<'d, T>,
+        dma_ch1: Peri<'d, DMACh1>,
+        dma_ch2: Peri<'d, DMACh2>,
+        pin_ch1: Peri<'d, impl DacPin<T, 1> + crate::gpio::Pin>,
+        pin_ch2: Peri<'d, impl DacPin<T, 2> + crate::gpio::Pin>,
     ) -> Self {
-        into_ref!(dma_ch1, dma_ch2, pin_ch1, pin_ch2);
         pin_ch1.set_as_analog();
         pin_ch2.set_as_analog();
 
@@ -345,7 +342,7 @@ trait SealedInstance {
 
 /// DAC instance.
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + RccPeripheral + 'static {}
+pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + RccPeripheral + 'static {}
 dma_trait!(DacDma1, Instance);
 dma_trait!(DacDma2, Instance);
 

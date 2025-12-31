@@ -4,13 +4,14 @@
 #![feature(impl_trait_in_assoc_type)]
 
 use ch32_hal as hal;
+use hal::Peri;
 use embassy_executor::Spawner;
 use embassy_time::Timer;
 use hal::gpio::{AnyPin, Level, Output, Pin};
 use hal::println;
 
 #[embassy_executor::task(pool_size = 2)]
-async fn blink(pin: AnyPin, interval_ms: u64) {
+async fn blink(pin: Peri<'static, AnyPin>, interval_ms: u64) {
     let mut led = Output::new(pin, Level::Low, Default::default());
 
     loop {
@@ -33,7 +34,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // let mut led = Output::new(p.PB1, Level::Low, Default::default());
 
-    spawner.spawn(blink(p.PB1.degrade(), 110)).unwrap();
+    spawner.spawn(blink(p.PB1.into(), 110)).unwrap();
 
     loop {
         Timer::after_millis(1000).await;

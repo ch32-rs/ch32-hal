@@ -4,6 +4,7 @@
 #![feature(impl_trait_in_assoc_type)]
 
 use ch32_hal as hal;
+use hal::Peri;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use hal::gpio::{AnyPin, Level, Output, Pin, Speed};
@@ -65,7 +66,7 @@ async fn main(spawner: Spawner) -> ! {
     println!("init i2c ok");
 
     // GPIO
-    spawner.spawn(blink(p.PA15.degrade())).unwrap();
+    spawner.spawn(blink(p.PA15.into())).unwrap();
 
     for addr in 0..16 {
         eeprom.write_byte(addr, b'x').unwrap();
@@ -92,7 +93,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 #[embassy_executor::task]
-async fn blink(pin: AnyPin) {
+async fn blink(pin: Peri<'static, AnyPin>) {
     let mut led = Output::new(pin, Level::Low, Speed::Low);
 
     loop {

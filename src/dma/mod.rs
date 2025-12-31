@@ -6,7 +6,9 @@
 
 use core::mem;
 
-use crate::{impl_peripheral, interrupt, Peripheral};
+use embassy_hal_internal::PeripheralType;
+
+use crate::{impl_peripheral, interrupt};
 
 mod dma_bdma;
 #[cfg(any(bdma, dma))]
@@ -50,7 +52,7 @@ pub(crate) trait ChannelInterrupt {
 
 /// DMA channel.
 #[allow(private_bounds)]
-pub trait Channel: SealedChannel + Peripheral<P = Self> + Into<AnyChannel> + 'static {
+pub trait Channel: SealedChannel + PeripheralType + Into<AnyChannel> + 'static {
     /// Type-erase (degrade) this pin into an `AnyChannel`.
     ///
     /// This converts DMA channel singletons (`DMA1_CH3`, `DMA2_CH1`, ...), which

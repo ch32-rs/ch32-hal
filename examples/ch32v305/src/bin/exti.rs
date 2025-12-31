@@ -4,6 +4,7 @@
 #![feature(impl_trait_in_assoc_type)]
 
 use ch32_hal as hal;
+use hal::Peri;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use hal::exti::ExtiInput;
@@ -11,7 +12,7 @@ use hal::gpio::{AnyPin, Level, Output, Pin, Pull, Speed};
 use hal::println;
 
 #[embassy_executor::task]
-async fn blink(pin: AnyPin) {
+async fn blink(pin: Peri<'static, AnyPin>) {
     let mut led = Output::new(pin, Level::Low, Speed::High);
 
     loop {
@@ -33,7 +34,7 @@ async fn main(spawner: Spawner) -> ! {
     ei.wait_for_falling_edge().await;
 
     // GPIO, PA8 and PC9 shares the same pin, use with caution
-    spawner.spawn(blink(p.PA8.degrade())).unwrap();
+    spawner.spawn(blink(p.PA8.into())).unwrap();
 
     loop {
         Timer::after(Duration::from_millis(1000)).await;

@@ -3,7 +3,7 @@
 use super::*;
 use crate::pac::timer::vals;
 use crate::time::Hertz;
-use crate::{into_ref, Peripheral, PeripheralRef};
+use crate::Peri;
 
 /// Input capture mode.
 #[derive(Clone, Copy)]
@@ -169,7 +169,7 @@ impl From<OutputPolarity> for bool {
 
 /// Low-level timer driver.
 pub struct Timer<'d, T: CoreInstance> {
-    tim: PeripheralRef<'d, T>,
+    tim: Peri<'d, T>,
 }
 
 impl<'d, T: CoreInstance> Drop for Timer<'d, T> {
@@ -180,9 +180,7 @@ impl<'d, T: CoreInstance> Drop for Timer<'d, T> {
 
 impl<'d, T: CoreInstance> Timer<'d, T> {
     /// Create a new timer driver.
-    pub fn new(tim: impl Peripheral<P = T> + 'd) -> Self {
-        into_ref!(tim);
-
+    pub fn new(tim: Peri<'d, T>) -> Self {
         T::enable_and_reset();
 
         Self { tim }

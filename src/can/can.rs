@@ -11,9 +11,7 @@ use crate::can::registers::Registers;
 use crate::can::util;
 use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode, NonBlocking};
-use crate::{
-    interrupt, into_ref, pac, peripherals, Peripheral, PeripheralRef, RccPeripheral, RemapPeripheral, Timeout,
-};
+use crate::{interrupt, pac, peripherals, Peri, RccPeripheral, RemapPeripheral, Timeout};
 
 /// Receive interrupt handler.
 pub struct ReceiveInterruptHandler<T: Instance> {
@@ -51,7 +49,7 @@ impl Default for Config {
 }
 
 pub struct Can<'d, T: Instance, M: Mode> {
-    _peri: PeripheralRef<'d, T>,
+    _peri: Peri<'d, T>,
     fifo: CanFifo,
     last_mailbox_used: usize,
     #[cfg(feature = "embassy")]
@@ -66,9 +64,9 @@ pub enum CanInitError {
 
 impl<'d, T: Instance> Can<'d, T, Async> {
     pub fn new_async<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         _irq: impl interrupt::typelevel::Binding<T::ReceiveInterrupt, ReceiveInterruptHandler<T>> + 'd,
         fifo: CanFifo,
         mode: CanMode,
@@ -109,9 +107,9 @@ impl<'d, T: Instance> Can<'d, T, Async> {
 
 impl<'d, T: Instance> Can<'d, T, Blocking> {
     pub fn new_blocking<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
@@ -153,9 +151,9 @@ impl<'d, T: Instance> Can<'d, T, Blocking> {
 
 impl<'d, T: Instance> Can<'d, T, NonBlocking> {
     pub fn new_nb<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
@@ -203,16 +201,14 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
     ///
     /// CAN_RX is mapped to PB8, and CAN_TX is mapped to PB9.
     fn new_inner<const REMAP: u8>(
-        peri: impl Peripheral<P = T> + 'd,
-        rx: impl Peripheral<P = impl RxPin<T, REMAP>> + 'd,
-        tx: impl Peripheral<P = impl TxPin<T, REMAP>> + 'd,
+        peri: Peri<'d, T>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
         config: Config,
     ) -> Result<Self, CanInitError> {
-        into_ref!(peri, rx, tx);
-
         let this = Self {
             _peri: peri,
             fifo,
@@ -396,7 +392,7 @@ pub trait SealedInstance: RccPeripheral + RemapPeripheral {
     fn state() -> &'static State;
 }
 
-pub trait Instance: SealedInstance + 'static {
+pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + 'static {
     type ReceiveInterrupt: crate::interrupt::typelevel::Interrupt;
 }
 

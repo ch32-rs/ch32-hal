@@ -17,8 +17,8 @@ ch32-metapac = { features = [
     "rt",
 ], git = "https://github.com/ch32-rs/ch32-metapac", rev = "b1cbc7a98e43af3fd3170821654784e2c01cb26b" }
 
-qingke = { version = "0.5.0", features = ["critical-section-impl"] }
-qingke-rt = { version = "0.5.0", optional = true }
+qingke = { version = "0.6.1", features = ["critical-section-impl"] }
+qingke-rt = { version = "0.6.1", optional = true }
 
 # TODO: remove this
 embedded-hal-02 = { package = "embedded-hal", version = "0.2.6", features = [
@@ -31,12 +31,13 @@ embedded-can = "0.4.1"
 critical-section = { version = "1.2.0" }
 defmt = { version = "0.3.8", optional = true }
 
-embassy-sync = { version = "0.6.0" }
+embassy-sync = { version = "0.7.2" }
 embassy-futures = { version = "0.1.1" }
-embassy-time-queue-utils = { version = "0.1", optional = true }
+embassy-time-queue-utils = { version = "0.3.0", optional = true }
 embassy-time-driver = { version = "0.2.0", optional = true }
-embassy-time = { version = "0.4.0", optional = true }
+embassy-time = { version = "0.5.0", optional = true }
 embassy-usb-driver = "0.2.0"
+embassy-hal-internal = "0.3.0"
 
 nb = "1.1.0"
 embedded-hal-nb = "1.0.0"
@@ -47,7 +48,6 @@ futures = { version = "0.3.31", default-features = false, features = [
 bitmaps = { version = "3", default-features = false }
 rand_core = "0.6.3"
 sdio-host = "0.5.0"
-embassy-hal-internal = "0.2.0"
 
 [build-dependencies]
 ch32-metapac = { features = [
@@ -106,6 +106,10 @@ ch32v003a4m6 = ["ch32-metapac/ch32v003a4m6", "qingke-rt/v2"]
 ch32v003f4p6 = ["ch32-metapac/ch32v003f4p6", "qingke-rt/v2"]
 ch32v003f4u6 = ["ch32-metapac/ch32v003f4u6", "qingke-rt/v2"]
 ch32v003j4m6 = ["ch32-metapac/ch32v003j4m6", "qingke-rt/v2"]
+ch32v006e8r6 = ["ch32-metapac/ch32v006x8x6", "qingke-rt/v2"]
+ch32v006f8u6 = ["ch32-metapac/ch32v006x8x6", "qingke-rt/v2"]
+ch32v006f8p6 = ["ch32-metapac/ch32v006x8x6", "qingke-rt/v2"]
+ch32v006k8u6 = ["ch32-metapac/ch32v006x8x6", "qingke-rt/v2"]
 ch32v103c6t6 = ["ch32-metapac/ch32v103c6t6", "qingke-rt/v3"]
 ch32v103c8t6 = ["ch32-metapac/ch32v103c8t6", "qingke-rt/v3"]
 ch32v103c8u6 = ["ch32-metapac/ch32v103c8u6", "qingke-rt/v3"]
