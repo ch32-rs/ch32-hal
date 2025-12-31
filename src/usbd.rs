@@ -31,13 +31,10 @@ pub struct InterruptHandler<T: Instance> {
 impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
     unsafe fn on_interrupt() {
         let regs = T::regs();
-        // let x = regs.istr().read().0;
-        // crate::println!("USB IRQ: {:08x}", x);
 
         let istr = regs.istr().read();
 
         if istr.susp() {
-            //crate::println!("USB IRQ: susp");
             IRQ_SUSPEND.store(true, Ordering::Relaxed);
             regs.cntr().modify(|w| {
                 w.set_fsusp(true);
@@ -54,7 +51,6 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
         }
 
         if istr.wkup() {
-            // crate::println!("USB IRQ: wkup");
             IRQ_RESUME.store(true, Ordering::Relaxed);
             regs.cntr().modify(|w| {
                 w.set_fsusp(false);
@@ -71,7 +67,6 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
         }
 
         if istr.reset() {
-            // crate::println!("USB IRQ: reset");
             IRQ_RESET.store(true, Ordering::Relaxed);
 
             // Write 0 to clear.
@@ -90,11 +85,9 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 if index == 0 && epr.setup() {
                     EP0_SETUP.store(true, Ordering::Relaxed);
                 }
-                // crate::println!("EP {} RX, setup={}", index, epr.setup());
                 EP_OUT_WAKERS[index].wake();
             }
             if epr.ctr_tx() {
-                //crate::println!("EP {} TX", index);
                 EP_IN_WAKERS[index].wake();
             }
             epr.set_dtog_rx(false);
@@ -231,7 +224,6 @@ impl<'d, T: Instance> Driver<'d, T> {
         dp: Peri<'d, impl DpPin<T, 0>>,
         dm: Peri<'d, impl DmPin<T, 0>>,
     ) -> Self {
-
         {
             //dp.set_as_af_output(crate::gpio::AFType::OutputPushPull, Speed::High);
             //dm.set_as_af_output(crate::gpio::AFType::OutputPushPull, Speed::High);
@@ -324,14 +316,6 @@ impl<'d, T: Instance> Driver<'d, T> {
         max_packet_size: u16,
         interval_ms: u8,
     ) -> Result<Endpoint<'d, T, D>, driver::EndpointAllocError> {
-        // crate::println!(
-        //     "allocating type={:?} mps={:?} interval_ms={}, dir={:?}",
-        //     ep_type,
-        //     max_packet_size,
-        //     interval_ms,
-        //     D::dir()
-        // );
-
         let index = if let Some(addr) = ep_addr {
             // Use the specified endpoint address
             self.is_endpoint_available::<D>(addr.index(), ep_type)
@@ -356,7 +340,6 @@ impl<'d, T: Instance> Driver<'d, T> {
                 let (len, len_bits) = calc_out_len(max_packet_size);
                 let addr = self.alloc_ep_mem(len);
 
-                // crate::println!("  len_bits = {:04x}", len_bits);
                 btable::write_out::<T>(index, addr, len_bits);
 
                 EndpointBuffer {
@@ -382,8 +365,6 @@ impl<'d, T: Instance> Driver<'d, T> {
                 }
             }
         };
-
-        // crate::println!("  index={} addr={} len={}", index, buf.addr, buf.len);
 
         Ok(Endpoint {
             _phantom: PhantomData,
@@ -445,7 +426,6 @@ impl<'d, T: Instance> driver::Driver<'d> for Driver<'d, T> {
             w.set_ctrm(true);
         });
 
-        // crate::println!("enabled");
         unsafe {
             T::Interrupt::unpend();
             T::Interrupt::enable();
@@ -500,7 +480,6 @@ impl<'d, T: Instance> driver::Bus for Bus<'d, T> {
             if IRQ_RESET.load(Ordering::Acquire) {
                 IRQ_RESET.store(false, Ordering::Relaxed);
 
-                // crate::println!("RESET");
                 regs.daddr().write(|w| {
                     w.set_ef(true);
                     w.set_add(0);
@@ -594,10 +573,8 @@ impl<'d, T: Instance> driver::Bus for Bus<'d, T> {
     }
 
     fn endpoint_set_enabled(&mut self, ep_addr: EndpointAddress, enabled: bool) {
-        // crate::println!("set_enabled {:x?} {}", ep_addr, enabled);
         // This can race, so do a retry loop.
         let reg = T::regs().epr(ep_addr.index() as _);
-        // crate::println!("EPR before: {:04x}", reg.read().0);
         match ep_addr.direction() {
             Direction::In => {
                 loop {
@@ -632,7 +609,6 @@ impl<'d, T: Instance> driver::Bus for Bus<'d, T> {
                 EP_OUT_WAKERS[ep_addr.index()].wake();
             }
         }
-        // crate::println!("EPR after: {:04x}", reg.read().0);
     }
 
     async fn enable(&mut self) {}
@@ -680,7 +656,6 @@ impl<'d, T: Instance, D> Endpoint<'d, T, D> {
     fn read_data(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
         let index = self.info.addr.index();
         let rx_len = btable::read_out_len::<T>(index) as usize & 0x3FF;
-        // crate::println!("READ DONE, rx_len = {}", rx_len);
         if rx_len > buf.len() {
             return Err(EndpointError::BufferOverflow);
         }
@@ -695,7 +670,6 @@ impl<'d, T: Instance> driver::Endpoint for Endpoint<'d, T, In> {
     }
 
     async fn wait_enabled(&mut self) {
-        // crate::println!("wait_enabled IN WAITING");
         let index = self.info.addr.index();
         poll_fn(|cx| {
             EP_IN_WAKERS[index].register(cx.waker());
@@ -707,7 +681,6 @@ impl<'d, T: Instance> driver::Endpoint for Endpoint<'d, T, In> {
             }
         })
         .await;
-        // crate::println!("wait_enabled IN OK");
     }
 }
 
@@ -717,7 +690,6 @@ impl<'d, T: Instance> driver::Endpoint for Endpoint<'d, T, Out> {
     }
 
     async fn wait_enabled(&mut self) {
-        // crate::println!("wait_enabled OUT WAITING");
         let index = self.info.addr.index();
         poll_fn(|cx| {
             EP_OUT_WAKERS[index].register(cx.waker());
@@ -729,13 +701,11 @@ impl<'d, T: Instance> driver::Endpoint for Endpoint<'d, T, Out> {
             }
         })
         .await;
-        // crate::println!("wait_enabled OUT OK");
     }
 }
 
 impl<'d, T: Instance> driver::EndpointOut for Endpoint<'d, T, Out> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
-        // crate::println!("READ WAITING, buf.len() = {}", buf.len());
         let index = self.info.addr.index();
         let stat = poll_fn(|cx| {
             EP_OUT_WAKERS[index].register(cx.waker());
@@ -764,7 +734,6 @@ impl<'d, T: Instance> driver::EndpointOut for Endpoint<'d, T, Out> {
             w.set_ctr_rx(true); // don't clear
             w.set_ctr_tx(true); // don't clear
         });
-        // crate::println!("READ OK, rx_len = {}", rx_len);
 
         Ok(rx_len)
     }
@@ -778,7 +747,6 @@ impl<'d, T: Instance> driver::EndpointIn for Endpoint<'d, T, In> {
 
         let index = self.info.addr.index();
 
-        // crate::println!("WRITE WAITING");
         let stat = poll_fn(|cx| {
             EP_IN_WAKERS[index].register(cx.waker());
             let regs = T::regs();
@@ -807,8 +775,6 @@ impl<'d, T: Instance> driver::EndpointIn for Endpoint<'d, T, In> {
             w.set_ctr_tx(true); // don't clear
         });
 
-        // crate::println!("WRITE OK");
-
         Ok(())
     }
 }
@@ -828,7 +794,6 @@ impl<'d, T: Instance> driver::ControlPipe for ControlPipe<'d, T> {
 
     async fn setup(&mut self) -> [u8; 8] {
         loop {
-            // crate::println!("SETUP read waiting");
             poll_fn(|cx| {
                 EP_OUT_WAKERS[0].register(cx.waker());
                 if EP0_SETUP.load(Ordering::Relaxed) {
@@ -842,13 +807,11 @@ impl<'d, T: Instance> driver::ControlPipe for ControlPipe<'d, T> {
             let mut buf = [0; 8];
             let rx_len = self.ep_out.read_data(&mut buf);
             if rx_len != Ok(8) {
-                // crate::println!("SETUP read failed: {:?}", rx_len);
                 continue;
             }
 
             EP0_SETUP.store(false, Ordering::Relaxed);
 
-            // crate::println!("SETUP read ok");
             return buf;
         }
     }
@@ -884,7 +847,6 @@ impl<'d, T: Instance> driver::ControlPipe for ControlPipe<'d, T> {
             });
         }
 
-        // crate::println!("data_out WAITING, buf.len() = {}", buf.len());
         poll_fn(|cx| {
             EP_OUT_WAKERS[0].register(cx.waker());
             let regs = T::regs();
@@ -897,7 +859,6 @@ impl<'d, T: Instance> driver::ControlPipe for ControlPipe<'d, T> {
         .await;
 
         if EP0_SETUP.load(Ordering::Relaxed) {
-            // crate::println!("received another SETUP, aborting data_out.");
             return Err(EndpointError::Disabled);
         }
 
@@ -919,8 +880,6 @@ impl<'d, T: Instance> driver::ControlPipe for ControlPipe<'d, T> {
     }
 
     async fn data_in(&mut self, data: &[u8], first: bool, last: bool) -> Result<(), EndpointError> {
-        // crate::println!("control: data_in");
-
         if data.len() > self.ep_in.info.max_packet_size as usize {
             return Err(EndpointError::BufferOverflow);
         }
@@ -951,7 +910,6 @@ impl<'d, T: Instance> driver::ControlPipe for ControlPipe<'d, T> {
             });
         }
 
-        // crate::println!("WRITE WAITING");
         poll_fn(|cx| {
             EP_IN_WAKERS[0].register(cx.waker());
             EP_OUT_WAKERS[0].register(cx.waker());
@@ -965,7 +923,6 @@ impl<'d, T: Instance> driver::ControlPipe for ControlPipe<'d, T> {
         .await;
 
         if EP0_SETUP.load(Ordering::Relaxed) {
-            // crate::println!("received another SETUP, aborting data_in.");
             return Err(EndpointError::Disabled);
         }
 
@@ -980,14 +937,11 @@ impl<'d, T: Instance> driver::ControlPipe for ControlPipe<'d, T> {
             w.set_ctr_tx(true); // don't clear
         });
 
-        // crate::println!("WRITE OK");
-
         Ok(())
     }
 
     async fn accept(&mut self) {
         let regs = T::regs();
-        // crate::println!("control: accept");
 
         self.ep_in.write_data(&[]);
 
@@ -1000,7 +954,6 @@ impl<'d, T: Instance> driver::ControlPipe for ControlPipe<'d, T> {
             w.set_ctr_rx(true); // don't clear
             w.set_ctr_tx(true); // don't clear
         });
-        // crate::println!("control: accept WAITING");
 
         // Wait is needed, so that we don't set the address too soon, breaking the status stage.
         // (embassy-usb sets the address after accept() returns)
@@ -1014,13 +967,10 @@ impl<'d, T: Instance> driver::ControlPipe for ControlPipe<'d, T> {
             }
         })
         .await;
-
-        // crate::println!("control: accept OK");
     }
 
     async fn reject(&mut self) {
         let regs = T::regs();
-        // crate::println!("control: reject");
 
         // Set IN+OUT to stall
         let epr = regs.epr(0).read();
@@ -1037,7 +987,6 @@ impl<'d, T: Instance> driver::ControlPipe for ControlPipe<'d, T> {
         self.accept().await;
 
         let regs = T::regs();
-        // crate::println!("setting addr: {}", addr);
         regs.daddr().write(|w| {
             w.set_ef(true);
             w.set_add(addr);
