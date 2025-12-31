@@ -15,7 +15,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 ch32-metapac = { features = [
     "rt",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "b1cbc7a98e43af3fd3170821654784e2c01cb26b" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "7cd6fb70d07de3a987c63d0d8f5547bb8261e403" }
 
 qingke = { version = "0.6.1", features = ["critical-section-impl"] }
 qingke-rt = { version = "0.6.1", optional = true }
@@ -52,7 +52,7 @@ sdio-host = "0.5.0"
 [build-dependencies]
 ch32-metapac = { features = [
     "metadata",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "b1cbc7a98e43af3fd3170821654784e2c01cb26b" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "7cd6fb70d07de3a987c63d0d8f5547bb8261e403" }
 
 proc-macro2 = "1.0"
 quote = "1.0"
