@@ -17,7 +17,7 @@ ch32-hal = { path = "../../", features = [
     "time-driver-tim2",
 ], default-features = false }
 
-embassy-executor = { version = "0.7.0", features = [
+embassy-executor = { version = "0.9.1", features = [
     "arch-spin", 
     "executor-thread",
 ] }
