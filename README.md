@@ -34,9 +34,9 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 
 | Family      | V2/V3  | V1  | V0  | X0  | L1  | CH641  | CH643  |
 |-------------|--------|-----|-----|-----|-----|--------|--------|
-| Embassy     | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| Embassy     | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅   |
 | RCC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅   |
-| GPIO        | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| GPIO        | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅    |
 | UART*       | ✅     | ✅  | ✅ | ✅  | ✅   | ❓      |        |
 | SPI*        | ✅     | ✅  | ✅ | ✅  | ✅   | N/A    |        |
 | I2C         | ✅     | ✅  | ✅ | ❓  | ❓   | ❓      |        |
