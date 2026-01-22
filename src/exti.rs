@@ -48,7 +48,7 @@ mod _exti_8lines {
     impl_exti!(EXTI7, 7);
 }
 
-#[cfg(not(any(ch32v0, ch32m0, ch643)))]
+#[cfg(not(any(ch32v0, ch32m0)))]
 mod _exti_16lines {
     use super::*;
 
