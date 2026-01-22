@@ -44,7 +44,7 @@ mod rcc_impl;
 #[path = "v3.rs"]
 mod rcc_impl;
 
-#[cfg(ch32x0)]
+#[cfg(any(ch32x0, ch643))]
 #[path = "x0.rs"]
 mod rcc_impl;
 
