@@ -45,6 +45,7 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 | USBD        | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
 | USB/OTG FS  | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
 | USB HS      | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
+| CAN*        | ✅     |     |   |     | ✅ |          |        |
 
 
 - ✅ : Expected to work
