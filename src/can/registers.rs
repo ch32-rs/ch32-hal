@@ -9,6 +9,10 @@ impl Registers {
         Self(T::regs())
     }
 
+    pub fn enable_transmit_empty_interrupt(&self, enable: bool) {
+        self.0.intenr().modify(|w| w.set_tmeie(enable));
+    }
+
     pub fn enter_init_mode(&self) {
         self.0.ctlr().modify(|w| {
             w.set_sleep(false); // Wake up
