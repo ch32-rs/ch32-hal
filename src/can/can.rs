@@ -76,7 +76,7 @@ impl<'d, T: Instance> Can<'d, T, Async> {
         Self::new_inner(peri, rx, tx, fifo, mode, bitrate, config)
     }
 
-    pub async fn recv(&self) -> Result<CanFrame, CanError> {
+    pub async fn receive(&self) -> Result<CanFrame, CanError> {
         let on_drop = OnDrop::new(|| {
             // Disable interrupt if the future is canceled
             T::regs().intenr().modify(|w| {
