@@ -149,6 +149,4 @@ ch32x035g8r6 = ["ch32-metapac/ch32x035g8r6", "qingke-rt/v4"]
 ch32x035g8u6 = ["ch32-metapac/ch32x035g8u6", "qingke-rt/v4"]
 ch32x035r8t6 = ["ch32-metapac/ch32x035r8t6", "qingke-rt/v4"]
 ch641 = ["ch32-metapac/ch641", "qingke-rt/v2"]
-
-# TODO
-# ch643 = []
+ch643 = ["ch32-metapac/ch643", "qingke-rt/v4"]
