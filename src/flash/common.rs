@@ -2,13 +2,11 @@
 use core::marker::PhantomData;
 use core::sync::atomic::{fence, Ordering};
 
+use crate::Peri;
 use embassy_hal_internal::drop::OnDrop;
-use embassy_hal_internal::{into_ref, PeripheralRef};
-use embedded_storage::nor_flash::ReadNorFlash;
 
 use super::{family, Async, Blocking, Error, FlashSector, FLASH_SIZE, READ_SIZE, WRITE_SIZE};
 use crate::peripherals::FLASH;
-use crate::Peripheral;
 
 // FIXME! the pac incorrectly defines it to 0 (wich is the mapped execute address).
 pub const FLASH_BASE: usize = 0x0800_0000;
@@ -17,17 +15,16 @@ pub const FLASH_BASE: usize = 0x0800_0000;
 
 /// Internal flash memory driver.
 pub struct Flash<'d, MODE = Async> {
-    pub(crate) inner: PeripheralRef<'d, FLASH>,
+    pub(crate) _inner: Peri<'d, FLASH>,
     pub(crate) _mode: PhantomData<MODE>,
 }
 
 impl<'d> Flash<'d, Blocking> {
     /// Create a new flash driver, usable in blocking mode.
-    pub fn new_blocking(p: impl Peripheral<P = FLASH> + 'd) -> Self {
-        into_ref!(p);
+    pub fn new_blocking(p: Peri<'d, FLASH>) -> Self {
 
         Self {
-            inner: p,
+            _inner: p,
             _mode: PhantomData,
         }
     }
