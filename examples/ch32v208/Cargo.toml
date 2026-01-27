@@ -21,6 +21,7 @@ qingke-rt = "0.6.1"
 qingke = "0.6.1"
 
 panic-halt = "1.0"
+embedded-storage = "0.3.1"
 
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
