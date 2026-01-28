@@ -28,7 +28,7 @@ impl Bit16MaskReg<'_> {
 }
 
 impl CanFilter<Bit16Mode, ListMode> {
-    pub fn get(&mut self, index: usize) -> Option<Bit16IdReg> {
+    pub fn get(&mut self, index: usize) -> Option<Bit16IdReg<'_>> {
         use core::mem;
 
         match index {
@@ -71,7 +71,7 @@ impl From<[(StandardId, FilterOptions); 4]> for CanFilter<Bit16Mode, ListMode> {
 }
 
 impl CanFilter<Bit16Mode, MaskMode> {
-    pub fn get(&mut self, index: usize) -> Option<Bit16MaskReg> {
+    pub fn get(&mut self, index: usize) -> Option<Bit16MaskReg<'_>> {
         use core::mem;
 
         match index {
