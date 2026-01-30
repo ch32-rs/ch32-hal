@@ -296,7 +296,9 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
             qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
         }
 
-        Ok(10)
+        let byte_cnt = T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize;
+
+        Ok(byte_cnt)
     }
 
     fn transmit(&mut self, sop: u8, buf: &[u8]) -> Result<(), Error> {
