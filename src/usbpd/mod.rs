@@ -103,6 +103,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         });
         #[cfg(ch32l1)]
         afio.cr().modify(|w| {
+            // PD pin PB6/PD7 High threshold input mode.
             w.set_usbpd_in_hvt(true);
         });
 
@@ -111,7 +112,14 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
             //    w.set_pd_filt_en(true);
             //  w.set_pd_rst_en(true);
         });
-        T::REGS.status().write(|w| w.0 = 0b111111_00); // write 1 to clear
+        T::REGS.status().write(|w| {
+            w.set_if_tx_end(true);
+            w.set_if_rx_reset(true);
+            w.set_if_rx_act(true);
+            w.set_if_rx_byte(true);
+            w.set_if_rx_bit(true);
+            w.set_buf_err(true);
+        });
 
         // pd_phy_reset
 
@@ -135,7 +143,14 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
             w.set_pd_dma_en(true);
             //    w.set_pd_filt_en(true);
         });
-        T::REGS.status().write(|w| w.0 = 0b111111_00); // write 1 to clear
+        T::REGS.status().write(|w| {
+            w.set_if_tx_end(true);
+            w.set_if_rx_reset(true);
+            w.set_if_rx_act(true);
+            w.set_if_rx_byte(true);
+            w.set_if_rx_bit(true);
+            w.set_buf_err(true);
+        });
 
         T::port_cc_reg(self.cc1).modify(|w| w.set_cc_lve(false));
         T::port_cc_reg(self.cc2).modify(|w| w.set_cc_lve(false));
@@ -181,17 +196,17 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
 
     fn enable_rx_interrupt(&mut self) {
         T::REGS.config().modify(|w| {
-            w.set_ie_rx_act(true);
-            w.set_ie_rx_reset(true);
-            w.set_ie_tx_end(false);
+            w.set_ie_rx_act(true); // Receive completion interrupt enable
+            w.set_ie_rx_reset(true); // Receive reset interrupt enable
+            w.set_ie_tx_end(false); // End-of-transmit interrupt disable
         });
     }
 
     fn enable_tx_interrupt(&mut self) {
         T::REGS.config().modify(|w| {
-            w.set_ie_rx_act(false);
-            w.set_ie_rx_reset(true);
-            w.set_ie_tx_end(true);
+            w.set_ie_rx_act(false); // Receive completion interrupt disable
+            w.set_ie_rx_reset(true); // Receive reset interrupt enable
+            w.set_ie_tx_end(true); // End-of-transmit interrupt enable
         });
     }
 
@@ -297,7 +312,14 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         T::REGS.bmc_tx_sz().write(|w| w.set_bmc_tx_sz(buf.len() as _));
         T::REGS.control().modify(|w| w.set_pd_tx_en(true)); // TX
 
-        T::REGS.status().write(|w| w.0 = 0b11111100);
+        T::REGS.status().write(|w| {
+            w.set_if_tx_end(true);
+            w.set_if_rx_reset(true);
+            w.set_if_rx_act(true);
+            w.set_if_rx_byte(true);
+            w.set_if_rx_bit(true);
+            w.set_buf_err(true);
+        });
 
         T::REGS.control().modify(|w| w.set_bmc_start(true));
 
