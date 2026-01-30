@@ -215,16 +215,11 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         });
     }
 
-    /// Receives a PD message into the provided buffer.
-    ///
-    /// Returns the number of received bytes or an error.
-    pub async fn receive(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+    /// Prepares the PHY for receiving a PD message into a buffer.
+    fn prepare_receive(&mut self, buf: &mut [u8]) {
         // set rx mode
-        // println!("before clear {}", T::REGS.status().read().0);
         T::REGS.config().modify(|w| w.set_pd_all_clr(true));
-        // println!("after clear0 {}", T::REGS.status().read().0);
         T::REGS.config().modify(|w| w.set_pd_all_clr(false));
-        //        println!("after clear1 {}", T::REGS.status().read().0);
 
         T::REGS.dma().write_value((buf.as_mut_ptr() as u32 & 0xFFFF) as u16);
 
@@ -233,60 +228,52 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
             .bmc_clk_cnt()
             .modify(|w| w.set_bmc_clk_cnt(calc_bmc_clk_for_rx()));
 
-        self.enable_rx_interrupt();
         T::REGS.control().modify(|w| w.set_bmc_start(true));
+    }
+
+    /// Decodes the received PD message and returns its length or an error.
+    fn post_receive(&mut self) -> Result<usize, Error> {
+        if T::REGS.status().read().if_rx_reset() {
+            return Err(Error::HardReset);
+        }
+        match T::REGS.status().read().bmc_aux() {
+            vals::BmcAux::SOP0 => Ok(T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize),
+            vals::BmcAux::SOP1 => Err(Error::HardReset),
+            _ => Err(Error::Rejected),
+        }
+    }
+
+    /// Receives a PD message into the provided buffer.
+    ///
+    /// Returns the number of received bytes or an error.
+    pub async fn receive(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        self.enable_rx_interrupt();
+        self.prepare_receive(buf);
 
         poll_fn(|cx| {
             T::state().waker.register(cx.waker());
 
             if !T::REGS.config().read().ie_rx_reset() {
-                return Poll::Ready(Err(Error::HardReset));
+                return Poll::Ready(());
             }
 
             if !T::REGS.config().read().ie_rx_act() {
-                match T::REGS.status().read().bmc_aux() {
-                    vals::BmcAux::SOP0 => {
-                        // println!("ctrl {}", T::REGS.control().read().0);
-                        // println!("=> {}", T::REGS.bmc_byte_cnt().read().bmc_byte_cnt());
-                        return Poll::Ready(Ok(T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize));
-                    }
-                    vals::BmcAux::SOP1 => {
-                        // hard reset
-                        return Poll::Ready(Err(Error::HardReset));
-                    }
-                    _ => {
-                        self.enable_rx_interrupt();
-                        return Poll::Pending;
-                    }
-                }
+                Poll::Ready(())
+            } else {
+                Poll::Pending
             }
-            Poll::Pending
         })
-        .await
+        .await;
+        self.post_receive()
     }
 
     pub fn blocking_receive(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        // set rx mode
-        // println!("before clear {}", T::REGS.status().read().0);
-        T::REGS.config().modify(|w| w.set_pd_all_clr(true));
-        // println!("after clear0 {}", T::REGS.status().read().0);
-        T::REGS.config().modify(|w| w.set_pd_all_clr(false));
-        //        println!("after clear1 {}", T::REGS.status().read().0);
-
-        T::REGS.dma().write_value((buf.as_mut_ptr() as u32 & 0xFFFF) as u16);
-
-        T::REGS.control().modify(|w| w.set_pd_tx_en(false)); // RX
-        T::REGS
-            .bmc_clk_cnt()
-            .modify(|w| w.set_bmc_clk_cnt(calc_bmc_clk_for_rx()));
-
-        self.enable_rx_interrupt();
         unsafe {
             qingke::pfic::disable_interrupt(interrupt::USBPD.number() as _);
         }
-        println!("begin blocking recv");
+        self.prepare_receive(buf);
 
-        T::REGS.control().modify(|w| w.set_bmc_start(true));
+        println!("begin blocking recv");
 
         while !T::REGS.status().read().if_rx_act() {
             // println!("wait");
@@ -295,10 +282,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         unsafe {
             qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
         }
-
-        let byte_cnt = T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize;
-
-        Ok(byte_cnt)
+        self.post_receive()
     }
 
     fn transmit(&mut self, sop: u8, buf: &[u8]) -> Result<(), Error> {
