@@ -337,29 +337,18 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
     pub async fn transmit_hardreset(&mut self) {
         const TX_SEL_HARD_RESET: u8 = 0b10_10_10_01;
 
-        // self.enable_tx_interrupt();
-        // self.transmit(TX_SEL_HARD_RESET, &[])?;
-        // send_phy_empty_playload
-
-        T::port_cc_reg(T::REGS.config().read().cc_sel()).modify(|w| w.set_cc_lve(true));
-
-        T::REGS
-            .bmc_clk_cnt()
-            .write(|w| w.set_bmc_clk_cnt(calc_bmc_clk_for_tx()));
-
-        T::REGS.dma().write_value(0);
-        T::REGS.tx_sel().write(|w| w.0 = TX_SEL_HARD_RESET);
-        T::REGS.bmc_tx_sz().write(|w| w.set_bmc_tx_sz(0));
-
-        T::REGS.control().modify(|w| w.set_pd_tx_en(true)); // TX
-
-        T::REGS.status().write(|w| w.0 = 0b11111100);
-
         self.enable_tx_interrupt();
+        self.transmit(TX_SEL_HARD_RESET, &[]).unwrap();
+        self.wait_for_tx_complete().await;
 
-        // Start transmission
-        T::REGS.control().modify(|w| w.set_bmc_start(true));
+        T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
+        T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
 
+        //        T::REGS.port_cc1().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
+        //      T::REGS.port_cc2().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
+    }
+
+    async fn wait_for_tx_complete(&mut self) {
         poll_fn(|cx| {
             T::state().waker.register(cx.waker());
             let config = T::REGS.config().read();
@@ -369,14 +358,6 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
             Poll::Pending
         })
         .await;
-
-        T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
-        T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
-
-        //        T::REGS.port_cc1().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
-        //      T::REGS.port_cc2().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
-
-        // Ok(())
     }
 }
 
