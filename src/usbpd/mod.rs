@@ -91,6 +91,11 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
 
         T::enable_and_reset();
 
+        unsafe {
+            use crate::interrupt::typelevel::Interrupt;
+            T::Interrupt::enable();
+        };
+
         cc1.set_as_input(Pull::None);
         cc2.set_as_input(Pull::None);
 
@@ -348,9 +353,10 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
 
         T::REGS.status().write(|w| w.0 = 0b11111100);
 
-        T::REGS.control().modify(|w| w.set_bmc_start(true));
+        self.enable_tx_interrupt();
 
-        /*
+        // Start transmission
+        T::REGS.control().modify(|w| w.set_bmc_start(true));
 
         poll_fn(|cx| {
             T::state().waker.register(cx.waker());
@@ -362,14 +368,13 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         })
         .await;
 
-        // T::REGS.port_cc1().modify(|w| w.set_cc_lve(false));
-        // T::REGS.port_cc2().modify(|w| w.set_cc_lve(false));
+        T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
+        T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
 
         //        T::REGS.port_cc1().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
         //      T::REGS.port_cc2().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
 
-        Ok(())
-        */
+        // Ok(())
     }
 }
 
