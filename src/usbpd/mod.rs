@@ -210,7 +210,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
     fn enable_tx_interrupt(&mut self) {
         T::REGS.config().modify(|w| {
             w.set_ie_rx_act(false); // Receive completion interrupt disable
-            w.set_ie_rx_reset(true); // Receive reset interrupt enable
+            w.set_ie_rx_reset(false); // Receive reset interrupt disable
             w.set_ie_tx_end(true); // End-of-transmit interrupt enable
         });
     }
