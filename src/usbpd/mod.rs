@@ -349,7 +349,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
 
         T::REGS.dma().write_value(0);
         T::REGS.tx_sel().write(|w| w.0 = TX_SEL_HARD_RESET);
-        T::REGS.bmc_byte_cnt().write(|w| w.set_bmc_byte_cnt(0));
+        T::REGS.bmc_tx_sz().write(|w| w.set_bmc_tx_sz(0));
 
         T::REGS.control().modify(|w| w.set_pd_tx_en(true)); // TX
 
