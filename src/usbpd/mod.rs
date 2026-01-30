@@ -83,11 +83,7 @@ pub struct UsbPdPhy<'d, T: Instance> {
 
 impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
     /// Create a new SPI driver.
-    pub fn new(
-        _peri: Peri<'d, T>,
-        cc1: Peri<'d, impl CcPin<T>>,
-        cc2: Peri<'d, impl CcPin<T>>,
-    ) -> Result<Self, Error> {
+    pub fn new(_peri: Peri<'d, T>, cc1: Peri<'d, impl CcPin<T>>, cc2: Peri<'d, impl CcPin<T>>) -> Result<Self, Error> {
         assert!(cc1.port_sel() != cc2.port_sel(), "CC1 and CC2 should be different");
 
         #[allow(unused)]
