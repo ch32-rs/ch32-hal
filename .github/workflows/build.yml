@@ -30,6 +30,7 @@ jobs:
           - ch32v307vct6
           - ch32x035f7p6
           - ch641
+          - ch643
         include:
           - chip: ch32l103f8u6
             target: riscv32imc-unknown-none-elf
@@ -51,6 +52,8 @@ jobs:
             target: riscv32imc-unknown-none-elf
           - chip: ch641
             target: riscv32i-unknown-none-elf
+          - chip: ch643
+            target: riscv32imc-unknown-none-elf
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +86,7 @@ jobs:
           - ch32v307
           - ch32x035
           - ch641
+          - ch643
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
