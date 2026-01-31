@@ -79,7 +79,7 @@ impl Bit32IdReg<'_> {
 }
 
 impl CanFilter<Bit32Mode, ListMode> {
-    pub fn get(&mut self, index: usize) -> Option<Bit32IdReg> {
+    pub fn get(&mut self, index: usize) -> Option<Bit32IdReg<'_>> {
         match index {
             0 => Some(Bit32IdReg(&mut self.id_value)),
             1 => Some(Bit32IdReg(&mut self.id_mask)),

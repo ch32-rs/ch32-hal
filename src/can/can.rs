@@ -21,11 +21,26 @@ pub struct ReceiveInterruptHandler<T: Instance> {
 impl<T: Instance> interrupt::typelevel::Handler<T::ReceiveInterrupt> for ReceiveInterruptHandler<T> {
     unsafe fn on_interrupt() {
         let regs = &T::regs();
-        T::state().waker.wake();
+        T::state().rx_waker.wake();
         critical_section::with(|_| {
             regs.intenr().modify(|w| {
                 w.set_fmpie0(false); // Disable FIFO 0 message pending interrupt
             });
+        });
+    }
+}
+
+/// Transmit interrupt handler.
+pub struct TransmitInterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> interrupt::typelevel::Handler<T::TransmitInterrupt> for TransmitInterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        let regs = Registers::new::<T>();
+        T::state().tx_waker.wake();
+        critical_section::with(|_| {
+            regs.enable_transmit_empty_interrupt(false);
         });
     }
 }
@@ -67,7 +82,9 @@ impl<'d, T: Instance> Can<'d, T, Async> {
         peri: Peri<'d, T>,
         rx: Peri<'d, impl RxPin<T, REMAP>>,
         tx: Peri<'d, impl TxPin<T, REMAP>>,
-        _irq: impl interrupt::typelevel::Binding<T::ReceiveInterrupt, ReceiveInterruptHandler<T>> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::ReceiveInterrupt, ReceiveInterruptHandler<T>>
+            + interrupt::typelevel::Binding<T::TransmitInterrupt, TransmitInterruptHandler<T>>
+            + 'd,
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
@@ -76,7 +93,7 @@ impl<'d, T: Instance> Can<'d, T, Async> {
         Self::new_inner(peri, rx, tx, fifo, mode, bitrate, config)
     }
 
-    pub async fn recv(&self) -> Result<CanFrame, CanError> {
+    pub async fn receive(&self) -> Result<CanFrame, CanError> {
         let on_drop = OnDrop::new(|| {
             // Disable interrupt if the future is canceled
             T::regs().intenr().modify(|w| {
@@ -84,7 +101,7 @@ impl<'d, T: Instance> Can<'d, T, Async> {
             })
         });
         poll_fn(|cx| {
-            T::state().waker.register(cx.waker());
+            T::state().rx_waker.register(cx.waker());
 
             let regs = Registers::new::<T>();
 
@@ -102,6 +119,33 @@ impl<'d, T: Instance> Can<'d, T, Async> {
         drop(on_drop);
 
         self.receive_inner()
+    }
+
+    pub async fn transmit(&mut self, frame: &CanFrame) -> Result<(), CanError> {
+        let on_drop = OnDrop::new(|| {
+            // Disable interrupt if the future is canceled
+            Registers::new::<T>().enable_transmit_empty_interrupt(false);
+        });
+        poll_fn(|cx| {
+            T::state().tx_waker.register(cx.waker());
+
+            let regs = Registers::new::<T>();
+
+            if let Some(mailbox_num) = regs.find_free_mailbox() {
+                // Mailbox available
+                self.last_mailbox_used = mailbox_num;
+                Poll::Ready(Ok(()))
+            } else {
+                // No mailbox available, wait for one to become free
+                regs.enable_transmit_empty_interrupt(true);
+                Poll::Pending
+            }
+        })
+        .await?;
+        drop(on_drop);
+
+        Registers::new::<T>().write_frame_mailbox(self.last_mailbox_used, frame);
+        Ok(())
     }
 }
 
@@ -168,7 +212,7 @@ impl<'d, T: Instance> Can<'d, T, NonBlocking> {
     /// lower priority frame and return the frame that was replaced.
     /// Returns `Err(WouldBlock)` if the transmit buffer is full and no frame can be
     /// replaced.
-    pub fn transmit(&mut self, frame: &CanFrame) -> nb::Result<Option<CanFrame>, CanError> {
+    fn nb_transmit(&mut self, frame: &CanFrame) -> nb::Result<Option<CanFrame>, CanError> {
         let mailbox_num = match Registers::new::<T>().find_free_mailbox() {
             Some(n) => n,
             None => return Err(nb::Error::WouldBlock),
@@ -236,6 +280,7 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
         unsafe {
             use crate::interrupt::typelevel::Interrupt;
             T::ReceiveInterrupt::enable();
+            T::TransmitInterrupt::enable();
         };
 
         Registers::new::<T>().enter_init_mode(); // CAN enter initialization mode
@@ -343,7 +388,7 @@ where
     /// Returns `Err(WouldBlock)` if the transmit buffer is full and no frame can be
     /// replaced.
     fn transmit(&mut self, frame: &Self::Frame) -> nb::Result<Option<Self::Frame>, Self::Error> {
-        Can::transmit(self, frame)
+        Can::nb_transmit(self, frame)
     }
 
     /// Returns a received frame if available.
@@ -373,13 +418,15 @@ where
 
 struct State {
     #[allow(unused)]
-    waker: AtomicWaker,
+    rx_waker: AtomicWaker,
+    tx_waker: AtomicWaker,
 }
 
 impl State {
     const fn new() -> Self {
         Self {
-            waker: AtomicWaker::new(),
+            rx_waker: AtomicWaker::new(),
+            tx_waker: AtomicWaker::new(),
         }
     }
 }
@@ -394,6 +441,7 @@ pub trait SealedInstance: RccPeripheral + RemapPeripheral {
 
 pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + 'static {
     type ReceiveInterrupt: crate::interrupt::typelevel::Interrupt;
+    type TransmitInterrupt: crate::interrupt::typelevel::Interrupt;
 }
 
 pin_trait!(RxPin, Instance);
@@ -418,6 +466,7 @@ foreach_peripheral!(
 
         impl Instance for peripherals::$inst {
            type ReceiveInterrupt = crate::_generated::peripheral_interrupts::$inst::RX0;
+           type TransmitInterrupt = crate::_generated::peripheral_interrupts::$inst::TX;
         }
     };
 );
