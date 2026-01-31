@@ -1,0 +1,11 @@
+[build]
+target = "riscv32imc-unknown-none-elf"
+
+[target.riscv32imc-unknown-none-elf]
+runner = "wlink flash --enable-sdi-print --watch-serial"
+# runner = "wlink -v flash"
+
+# Use the following or build.rs
+#rustflags = [
+#  "-C", "link-arg=-Tlink.x",
+#]
