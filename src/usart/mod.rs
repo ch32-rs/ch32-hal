@@ -868,14 +868,25 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
     pub fn new_half_duplex<const REMAP: u8>(
         _peri: Peri<'d, T>,
         tx: Peri<'d, impl TxPin<T, REMAP>>,
+        tx_dma: Peri<'d, impl TxDma<T>>,
+        rx_dma: Peri<'d, impl RxDma<T>>,
         mut config: Config,
     ) -> Result<Self, ConfigError> {
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        tx.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
         T::set_remap(REMAP);
 
         config.half_duplex = true;
 
-        Self::new_inner(_peri, None, Some(tx.into()), None, None, None, None, config)
+        Self::new_inner(
+            _peri,
+            None,
+            Some(tx.into()),
+            None,
+            None,
+            new_dma!(tx_dma),
+            new_dma!(rx_dma),
+            config
+        )
     }
 }
 
@@ -935,7 +946,7 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
         tx: Peri<'d, impl TxPin<T, REMAP>>,
         mut config: Config,
     ) -> Result<Self, ConfigError> {
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        tx.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
         T::set_remap(REMAP);
 
         config.half_duplex = true;
