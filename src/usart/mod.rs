@@ -820,6 +820,7 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
     ) -> Result<Self, ConfigError> {
         rx.set_as_input(Pull::None);
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        T::set_remap(REMAP);
 
         Self::new_inner(
             peri,
@@ -849,6 +850,7 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
         tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         rts.set_as_af_output(AFType::OutputPushPull, Speed::High);
         cts.set_as_input(Pull::None);
+        T::set_remap(REMAP);
 
         Self::new_inner(
             peri,
