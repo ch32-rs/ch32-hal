@@ -33,6 +33,14 @@ pub enum Error {
     MaxRetry,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum Sop {
+    Sop = 0b00_00_00_00,
+    SopPrime = 0b00_00_01_01,
+    SopDoublePrime = 0b00_01_00_01,
+    HardReset = 0b10_10_10_01,
+}
+
 /// Interrupt handler.
 pub struct InterruptHandler<T: Instance> {
     _phantom: PhantomData<T>,
@@ -138,10 +146,8 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
 
     /// Transmit a hard reset.
     pub async fn transmit_hardreset(&mut self) {
-        const TX_SEL_HARD_RESET: u8 = 0b10_10_10_01;
-
         self.enable_tx_interrupt();
-        self.transmit_inner(TX_SEL_HARD_RESET, &[]);
+        self.transmit_inner(Sop::HardReset, &[]);
         self.wait_for_tx_complete().await;
 
         T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
@@ -334,7 +340,7 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
         }
     }
 
-    fn transmit_inner(&mut self, sop: u8, buf: &[u8]) {
+    fn transmit_inner(&mut self, sop: Sop, buf: &[u8]) {
         T::port_cc_reg(T::REGS.config().read().cc_sel()).modify(|w| w.set_cc_lve(true));
 
         T::REGS
@@ -347,7 +353,7 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
             T::REGS.dma().write_value(buf.as_ptr() as u16);
         }
 
-        T::REGS.tx_sel().write(|w| w.0 = sop);
+        T::REGS.tx_sel().write(|w| w.0 = sop as u8);
 
         T::REGS.bmc_tx_sz().write(|w| w.set_bmc_tx_sz(buf.len() as _));
         T::REGS.control().modify(|w| w.set_pd_tx_en(true)); // TX
