@@ -17,6 +17,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use pac::InterruptNumber;
 
 use crate::gpio::Pull;
+use crate::mode::{Async, Blocking, Mode};
 use crate::pac::usbpd::vals;
 use crate::{interrupt, pac, println, Peri, PeripheralType, RccPeripheral};
 
@@ -75,26 +76,132 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
     }
 }
 
-pub struct UsbPdPhy<'d, T: Instance> {
-    _marker: PhantomData<&'d mut T>,
+pub struct UsbPdPhy<'d, T: Instance, M: Mode> {
+    _marker: PhantomData<(&'d mut T, M)>,
     cc1: vals::CcSel,
     cc2: vals::CcSel,
 }
 
-impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
-    /// Create a new SPI driver.
-    pub fn new(_peri: Peri<'d, T>, cc1: Peri<'d, impl CcPin<T>>, cc2: Peri<'d, impl CcPin<T>>) -> Result<Self, Error> {
+impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
+    pub fn new_async(
+        peri: Peri<'d, T>,
+        cc1: Peri<'d, impl CcPin<T>>,
+        cc2: Peri<'d, impl CcPin<T>>,
+    ) -> Result<UsbPdPhy<'d, T, Async>, Error> {
+        unsafe {
+            use crate::interrupt::typelevel::Interrupt;
+            T::Interrupt::enable();
+        };
+
+        Self::new_inner(peri, cc1, cc2)
+    }
+
+    fn enable_rx_interrupt(&mut self) {
+        T::REGS.config().modify(|w| {
+            w.set_ie_rx_act(true); // Receive completion interrupt enable
+            w.set_ie_rx_reset(true); // Receive reset interrupt enable
+            w.set_ie_tx_end(false); // End-of-transmit interrupt disable
+        });
+    }
+
+    fn enable_tx_interrupt(&mut self) {
+        T::REGS.config().modify(|w| {
+            w.set_ie_rx_act(false); // Receive completion interrupt disable
+            w.set_ie_rx_reset(false); // Receive reset interrupt disable
+            w.set_ie_tx_end(true); // End-of-transmit interrupt enable
+        });
+    }
+
+    /// Receives a PD message into the provided buffer.
+    ///
+    /// Returns the number of received bytes or an error.
+    pub async fn receive(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        self.enable_rx_interrupt();
+        self.prepare_receive(buf);
+
+        poll_fn(|cx| {
+            T::state().waker.register(cx.waker());
+
+            if !T::REGS.config().read().ie_rx_reset() {
+                return Poll::Ready(());
+            }
+
+            if !T::REGS.config().read().ie_rx_act() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
+        self.post_receive()
+    }
+
+    /// Transmit a hard reset.
+    pub async fn transmit_hardreset(&mut self) {
+        const TX_SEL_HARD_RESET: u8 = 0b10_10_10_01;
+
+        self.enable_tx_interrupt();
+        self.transmit_inner(TX_SEL_HARD_RESET, &[]);
+        self.wait_for_tx_complete().await;
+
+        T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
+        T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
+    }
+
+    async fn wait_for_tx_complete(&mut self) {
+        poll_fn(|cx| {
+            T::state().waker.register(cx.waker());
+            let config = T::REGS.config().read();
+            if !config.ie_tx_end() {
+                return Poll::Ready(());
+            }
+            Poll::Pending
+        })
+        .await;
+    }
+}
+
+impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
+    pub fn new_blocking(
+        peri: Peri<'d, T>,
+        cc1: Peri<'d, impl CcPin<T>>,
+        cc2: Peri<'d, impl CcPin<T>>,
+    ) -> Result<UsbPdPhy<'d, T, Blocking>, Error> {
+        Self::new_inner(peri, cc1, cc2)
+    }
+
+    pub fn receive(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        unsafe {
+            qingke::pfic::disable_interrupt(interrupt::USBPD.number() as _);
+        }
+        self.prepare_receive(buf);
+
+        println!("begin blocking recv");
+
+        while !T::REGS.status().read().if_rx_act() {
+            // println!("wait");
+        }
+
+        unsafe {
+            qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
+        }
+        self.post_receive()
+    }
+}
+
+impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
+    /// Create a new USB-PD driver.
+    fn new_inner(
+        _peri: Peri<'d, T>,
+        cc1: Peri<'d, impl CcPin<T>>,
+        cc2: Peri<'d, impl CcPin<T>>,
+    ) -> Result<Self, Error> {
         assert!(cc1.port_sel() != cc2.port_sel(), "CC1 and CC2 should be different");
 
         #[allow(unused)]
         let afio = crate::pac::AFIO;
 
         T::enable_and_reset();
-
-        unsafe {
-            use crate::interrupt::typelevel::Interrupt;
-            T::Interrupt::enable();
-        };
 
         cc1.set_as_input(Pull::None);
         cc2.set_as_input(Pull::None);
@@ -199,22 +306,6 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         }
     }
 
-    fn enable_rx_interrupt(&mut self) {
-        T::REGS.config().modify(|w| {
-            w.set_ie_rx_act(true); // Receive completion interrupt enable
-            w.set_ie_rx_reset(true); // Receive reset interrupt enable
-            w.set_ie_tx_end(false); // End-of-transmit interrupt disable
-        });
-    }
-
-    fn enable_tx_interrupt(&mut self) {
-        T::REGS.config().modify(|w| {
-            w.set_ie_rx_act(false); // Receive completion interrupt disable
-            w.set_ie_rx_reset(false); // Receive reset interrupt disable
-            w.set_ie_tx_end(true); // End-of-transmit interrupt enable
-        });
-    }
-
     /// Prepares the PHY for receiving a PD message into a buffer.
     fn prepare_receive(&mut self, buf: &mut [u8]) {
         // set rx mode
@@ -243,49 +334,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         }
     }
 
-    /// Receives a PD message into the provided buffer.
-    ///
-    /// Returns the number of received bytes or an error.
-    pub async fn receive(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        self.enable_rx_interrupt();
-        self.prepare_receive(buf);
-
-        poll_fn(|cx| {
-            T::state().waker.register(cx.waker());
-
-            if !T::REGS.config().read().ie_rx_reset() {
-                return Poll::Ready(());
-            }
-
-            if !T::REGS.config().read().ie_rx_act() {
-                Poll::Ready(())
-            } else {
-                Poll::Pending
-            }
-        })
-        .await;
-        self.post_receive()
-    }
-
-    pub fn blocking_receive(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        unsafe {
-            qingke::pfic::disable_interrupt(interrupt::USBPD.number() as _);
-        }
-        self.prepare_receive(buf);
-
-        println!("begin blocking recv");
-
-        while !T::REGS.status().read().if_rx_act() {
-            // println!("wait");
-        }
-
-        unsafe {
-            qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
-        }
-        self.post_receive()
-    }
-
-    fn transmit(&mut self, sop: u8, buf: &[u8]) -> Result<(), Error> {
+    fn transmit_inner(&mut self, sop: u8, buf: &[u8]) {
         T::port_cc_reg(T::REGS.config().read().cc_sel()).modify(|w| w.set_cc_lve(true));
 
         T::REGS
@@ -313,35 +362,6 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         });
 
         T::REGS.control().modify(|w| w.set_bmc_start(true));
-
-        Ok(())
-    }
-
-    /// Transmit a hard reset.
-    pub async fn transmit_hardreset(&mut self) {
-        const TX_SEL_HARD_RESET: u8 = 0b10_10_10_01;
-
-        self.enable_tx_interrupt();
-        self.transmit(TX_SEL_HARD_RESET, &[]).unwrap();
-        self.wait_for_tx_complete().await;
-
-        T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
-        T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
-
-        //        T::REGS.port_cc1().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
-        //      T::REGS.port_cc2().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
-    }
-
-    async fn wait_for_tx_complete(&mut self) {
-        poll_fn(|cx| {
-            T::state().waker.register(cx.waker());
-            let config = T::REGS.config().read();
-            if !config.ie_tx_end() {
-                return Poll::Ready(());
-            }
-            Poll::Pending
-        })
-        .await;
     }
 }
 
