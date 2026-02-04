@@ -329,7 +329,7 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
         }
         match T::REGS.status().read().bmc_aux() {
             vals::BmcAux::SOP0 => Ok(T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize),
-            vals::BmcAux::SOP1 => Err(Error::HardReset),
+            vals::BmcAux::SOP1 => Err(Error::NotSupported),
             _ => Err(Error::Rejected),
         }
     }
