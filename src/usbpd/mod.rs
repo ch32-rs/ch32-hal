@@ -123,7 +123,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
     /// Receives a PD message into the provided buffer.
     ///
     /// Returns the number of received bytes or an error.
-    pub async fn receive(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+    pub async fn receive(&mut self, buf: &mut [u8]) -> Result<(Sop, usize), Error> {
         self.enable_rx_interrupt();
         self.prepare_receive(buf);
 
@@ -176,7 +176,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
         Self::new_inner(peri, cc1, cc2)
     }
 
-    pub fn receive(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+    pub fn receive(&mut self, buf: &mut [u8]) -> Result<(Sop, usize), Error> {
         unsafe {
             qingke::pfic::disable_interrupt(interrupt::USBPD.number() as _);
         }
@@ -328,14 +328,16 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
         T::REGS.control().modify(|w| w.set_bmc_start(true));
     }
 
-    /// Decodes the received PD message and returns its length or an error.
-    fn post_receive(&mut self) -> Result<usize, Error> {
+    /// Decodes the received PD message and returns a tuple (Sop, length) or an error.
+    fn post_receive(&self) -> Result<(Sop, usize), Error> {
         if T::REGS.status().read().if_rx_reset() {
             return Err(Error::HardReset);
         }
+        let byte_count = T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize;
         match T::REGS.status().read().bmc_aux() {
-            vals::BmcAux::SOP0 => Ok(T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize),
-            vals::BmcAux::SOP1 => Err(Error::NotSupported),
+            vals::BmcAux::SOP0 => Ok((Sop::Sop, byte_count)),
+            vals::BmcAux::SOP1 => Ok((Sop::SopPrime, byte_count)),
+            vals::BmcAux::SOP2 => Ok((Sop::SopDoublePrime, byte_count)),
             _ => Err(Error::Rejected),
         }
     }
