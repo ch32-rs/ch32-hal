@@ -84,10 +84,33 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
     }
 }
 
+#[repr(align(4))]
+struct UsbPdMsg {
+    pub data: [u8; 30],
+}
+impl UsbPdMsg {
+    fn new() -> Self {
+        Self { data: [0u8; 30] }
+    }
+
+    fn to_slice(&self) -> &[u8] {
+        &self.data
+    }
+
+    fn address(&self) -> u16 {
+        self.data.as_ptr() as u16
+    }
+
+    fn mut_address(&mut self) -> u16 {
+        self.data.as_mut_ptr() as u16
+    }
+}
+
 pub struct UsbPdPhy<'d, T: Instance, M: Mode> {
     _marker: PhantomData<(&'d mut T, M)>,
     cc1: vals::CcSel,
     cc2: vals::CcSel,
+    buffer: UsbPdMsg,
 }
 
 impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
@@ -125,7 +148,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
     /// Returns the number of received bytes or an error.
     pub async fn receive(&mut self, buf: &mut [u8]) -> Result<(Sop, usize), Error> {
         self.enable_rx_interrupt();
-        self.prepare_receive(buf);
+        self.prepare_receive();
 
         poll_fn(|cx| {
             T::state().waker.register(cx.waker());
@@ -141,7 +164,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
             }
         })
         .await;
-        self.post_receive()
+        self.post_receive(buf)
     }
 
     /// Transmit a hard reset.
@@ -180,7 +203,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
         unsafe {
             qingke::pfic::disable_interrupt(interrupt::USBPD.number() as _);
         }
-        self.prepare_receive(buf);
+        self.prepare_receive();
 
         println!("begin blocking recv");
 
@@ -191,7 +214,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
         unsafe {
             qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
         }
-        self.post_receive()
+        self.post_receive(buf)
     }
 }
 
@@ -248,6 +271,7 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
             _marker: PhantomData,
             cc1: cc1.port_sel(),
             cc2: cc2.port_sel(),
+            buffer: UsbPdMsg::new(),
         };
         this.detect_cc()?;
 
@@ -313,12 +337,12 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
     }
 
     /// Prepares the PHY for receiving a PD message into a buffer.
-    fn prepare_receive(&mut self, buf: &mut [u8]) {
+    fn prepare_receive(&mut self) {
         // set rx mode
         T::REGS.config().modify(|w| w.set_pd_all_clr(true));
         T::REGS.config().modify(|w| w.set_pd_all_clr(false));
 
-        T::REGS.dma().write_value((buf.as_mut_ptr() as u32 & 0xFFFF) as u16);
+        T::REGS.dma().write_value(self.buffer.mut_address());
 
         T::REGS.control().modify(|w| w.set_pd_tx_en(false)); // RX
         T::REGS
@@ -329,11 +353,12 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
     }
 
     /// Decodes the received PD message and returns a tuple (Sop, length) or an error.
-    fn post_receive(&self) -> Result<(Sop, usize), Error> {
+    fn post_receive(&self, buf: &mut [u8]) -> Result<(Sop, usize), Error> {
         if T::REGS.status().read().if_rx_reset() {
             return Err(Error::HardReset);
         }
         let byte_count = T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize;
+        buf[..byte_count].copy_from_slice(&self.buffer.to_slice()[..byte_count]);
         match T::REGS.status().read().bmc_aux() {
             vals::BmcAux::SOP0 => Ok((Sop::Sop, byte_count)),
             vals::BmcAux::SOP1 => Ok((Sop::SopPrime, byte_count)),
@@ -352,7 +377,9 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
         if buf.is_empty() {
             T::REGS.dma().write_value(0);
         } else {
-            T::REGS.dma().write_value(buf.as_ptr() as u16);
+            // We use our own buffer to ensure it is 4-byte aligned, as required by the hardware.
+            self.buffer.data[..buf.len()].copy_from_slice(buf);
+            T::REGS.dma().write_value(self.buffer.address());
         }
 
         T::REGS.tx_sel().write(|w| w.0 = sop as u8);
