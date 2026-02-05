@@ -225,6 +225,24 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
         }
         self.post_receive(buf)
     }
+
+    pub fn transmit(&mut self, buf: &[u8]) {
+        unsafe {
+            qingke::pfic::disable_interrupt(interrupt::USBPD.number() as _);
+        }
+        self.transmit_inner(Sop::Sop, buf);
+
+        while !T::REGS.status().read().if_tx_end() {
+            // println!("wait");
+        }
+
+        T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
+        T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
+
+        unsafe {
+            qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
+        }
+    }
 }
 
 impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
