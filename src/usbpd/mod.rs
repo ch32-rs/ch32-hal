@@ -167,6 +167,15 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
         self.post_receive(buf)
     }
 
+    pub async fn transmit(&mut self, buf: &[u8]) {
+        self.enable_tx_interrupt();
+        self.transmit_inner(Sop::Sop, buf);
+        self.wait_for_tx_complete().await;
+
+        T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
+        T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
+    }
+
     /// Transmit a hard reset.
     pub async fn transmit_hardreset(&mut self) {
         self.enable_tx_interrupt();
