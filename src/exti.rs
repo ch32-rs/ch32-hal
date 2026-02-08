@@ -110,6 +110,43 @@ impl<'d> ExtiInput<'d> {
     }
 }
 
+
+impl<'d> embedded_hal::digital::ErrorType for ExtiInput<'d> {
+    type Error = core::convert::Infallible;
+}
+
+impl<'d> embedded_hal_async::digital::Wait for ExtiInput<'d> {
+
+
+    async fn wait_for_high(&mut self) -> Result<(),Self::Error> {
+        self.wait_for_high().await;
+        Ok(())
+    }
+
+    async fn wait_for_low(&mut self) -> Result<(), Self::Error> {
+        self.wait_for_low().await;
+        Ok(())
+    }
+
+    async fn wait_for_rising_edge(&mut self) -> Result<(),Self::Error> {
+        self.wait_for_rising_edge().await;
+        Ok(())
+    }
+
+    async fn wait_for_falling_edge(&mut self) -> Result<(), Self::Error> {
+        self.wait_for_falling_edge().await;
+        Ok(())
+    }
+
+    async fn wait_for_any_edge(&mut self) -> Result<(), Self::Error> {
+        self.wait_for_any_edge().await;
+        Ok(())
+    }
+}
+
+
+
+
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 struct ExtiInputFuture<'a> {
     pin: u8,
