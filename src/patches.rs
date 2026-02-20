@@ -45,6 +45,16 @@ mod usart1 {
     impl crate::peripheral::RemapPeripheral for crate::peripherals::USART1 {}
 }
 
+#[cfg(all(ch32v0, not(ch32v003), peri_usart2))]
+mod usart2 {
+    impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::USART2 {
+        fn set_remap(remap: u8) {
+            let _ = &crate::pac::AFIO.pcfr1().modify(|w| w.set_usart2_rm(remap));
+        }
+    }
+    impl crate::peripheral::RemapPeripheral for crate::peripherals::USART2 {}
+}
+
 #[cfg(all(peri_i2c1, ch32v0))]
 mod i2c1 {
     impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::I2C1 {
