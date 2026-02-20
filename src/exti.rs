@@ -126,7 +126,7 @@ impl<'a> ExtiInputFuture<'a> {
             let port = port as u8;
             let pin = pin as usize;
 
-            #[cfg(afio_v0)]
+            #[cfg(any(afio_v003, afio_v00x))]
             {
                 // AFIO_EXTICR
                 // stride: 2, len: 15, 8 lines

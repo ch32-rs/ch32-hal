@@ -86,7 +86,7 @@ pub(crate) unsafe fn init(config: Config) {
     if config.sys == Sysclk::HSE || (config.sys == Sysclk::PLL && config.pll_src == PllSource::HSE) {
         // enable HSE pins
         RCC.pb2pcenr().modify(|w| w.set_afioen(true));
-        AFIO.pcfr1().modify(|w| w.set_pa12_rm(true));
+        AFIO.pcfr1().modify(|w| w.set_pa1pa2_rm(true));
 
         // enable HSE
         RCC.ctlr().modify(|w| {
