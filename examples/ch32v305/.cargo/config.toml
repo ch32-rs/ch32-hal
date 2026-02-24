@@ -3,6 +3,7 @@ target = "riscv32imfc-unknown-none-elf.json"
 
 [unstable]
 build-std = ["core"]
+json-target-spec = true
 
 [target.riscv32imfc-unknown-none-elf]
 # runner = "wlink flash --enable-sdi-print --watch-serial"
