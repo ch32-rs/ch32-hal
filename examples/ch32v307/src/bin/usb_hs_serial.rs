@@ -20,7 +20,7 @@ bind_interrupts!(struct Irq {
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
     let cfg = Config {
-        rcc: ch32_hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSI,
+        rcc: ch32_hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE,
         ..Default::default()
     };
     let p = hal::init(cfg);
