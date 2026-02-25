@@ -44,9 +44,9 @@ impl core::fmt::Display for ChipID {
 }
 
 pub fn chip_id() -> ChipID {
-    #[cfg(not(any(ch32v0, ch32v1, ch641)))]
+    #[cfg(not(any(ch32v003, ch32v1, ch641)))]
     const CHIP_ID: *const u32 = 0x1FFFF704 as *const u32;
-    #[cfg(any(ch32v0, ch641))]
+    #[cfg(any(ch32v003, ch641))]
     const CHIP_ID: *const u32 = 0x1FFFF7C4 as *const u32;
     #[cfg(ch32v1)]
     const CHIP_ID: *const u32 = 0x1FFFF884 as *const u32;
@@ -94,10 +94,36 @@ fn chip_id_to_name(id: u32) -> &'static str {
     // CH32X035F7P6-0x035706x1
     // CH32X033F8P6-0x035A06x1
 
+    // CH32V002F4P6-0x002006x0
+    // CH32V002F4U6-0x002106x0
+    // CH32V002A4M6-0x002206x0
+    // CH32V002D4U6-0x002306x0
+    // CH32V002J4M6-0x002406x0
+
     // CH32V003F4P6-0x003005x0
     // CH32V003F4U6-0x003105x0
     // CH32V003A4M6-0x003205x0
     // CH32V003J4M6-0x003305x0
+
+    // CH32V004F6P1-0x004006x0
+    // CH32V004F6U1-0x00410600
+
+    // CH32V005E6R6-0x005006x0
+    // CH32V005F6U6-0x005106x0
+    // CH32V005F6P6-0x005206x0
+    // CH32V005D6U6-0x005306x0
+
+    // CH32V006K8U6-0x006006x0
+    // CH32V006E8R6-0x006106x0
+    // CH32V006F8U6-0x006206x0
+    // CH32V006F8P6-0x006306x0
+    // CH32V006F4U6-0x006406x0
+
+    // CH32M007G8R6-0x007008x0
+    // CH32M007E8R6-0x007308x0
+    // CH32M007E8U6-0x007408x0
+    // CH32V007E8R6-0x007106x0
+    // CH32V007K8U6-0x007206x0
 
     // CH32L103C8U6-0x103007x0
     // CH32L103C8T6-0x103107x0
@@ -156,10 +182,36 @@ fn chip_id_to_name(id: u32) -> &'static str {
         0x0357 => "CH32X035F7P6",
         0x035A => "CH32X033F8P6",
 
+        0x0020 => "CH32V002F4P6",
+        0x0021 => "CH32V002F4U6",
+        0x0022 => "CH32V002A4M6",
+        0x0023 => "CH32V002D4U6",
+        0x0024 => "CH32V002J4M6",
+
         0x0030 => "CH32V003F4P6",
         0x0031 => "CH32V003F4U6",
         0x0032 => "CH32V003A4M6",
         0x0033 => "CH32V003J4M6",
+
+        0x0040 => "CH32V004F6P1",
+        0x0041 => "CH32V004F6U1",
+
+        0x0050 => "CH32V005E6R6",
+        0x0051 => "CH32V005F6U6",
+        0x0052 => "CH32V005F6P6",
+        0x0053 => "CH32V005D6U6",
+
+        0x0060 => "CH32V006K8U6",
+        0x0061 => "CH32V006E8R6",
+        0x0062 => "CH32V006F8U6",
+        0x0063 => "CH32V006F8P6",
+        0x0064 => "CH32V006F4U6",
+
+        0x0070 => "CH32M007G8R6",
+        0x0073 => "CH32M007E8R6",
+        0x0074 => "CH32M007E8U6",
+        0x0071 => "CH32V007E8R6",
+        0x0072 => "CH32V007K8U6",
 
         0x1030 => "CH32L103C8U6",
         0x1031 => "CH32L103C8T6",
