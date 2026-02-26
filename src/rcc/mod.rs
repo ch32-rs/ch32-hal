@@ -32,8 +32,12 @@ pub fn clocks() -> &'static Clocks {
     unsafe { &CLOCKS }
 }
 
-#[cfg(ch32v0)]
-#[path = "v0.rs"]
+#[cfg(ch32v003)]
+#[path = "v003.rs"]
+mod rcc_impl;
+
+#[cfg(all(ch32v0, not(ch32v003)))]
+#[path = "v00x.rs"]
 mod rcc_impl;
 
 #[cfg(any(ch32v1, ch32l1))]
