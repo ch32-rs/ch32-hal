@@ -1,0 +1,30 @@
+[package]
+name = "ch643-examples"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ch32-hal = { path = "../../", features = [
+    "ch643",
+    "memory-x",
+    "embassy",
+    "rt",
+] }
+embassy-executor = { version = "0.9.1", features = [
+    "arch-spin",
+    "executor-thread",
+] }
+embassy-time = "0.5.0"
+
+qingke-rt = "0.6.1"
+qingke = "0.6.1"
+
+panic-halt = "1.0"
+
+embedded-hal = "1.0.0"
+heapless = "0.8.0"
+
+[profile.release]
+strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
+lto = true
+opt-level = "z" # Optimize for size.

@@ -34,14 +34,14 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 
 | Family      | V2/V3  | V1  | V0  | X0  | L1  | CH641  | CH643  |
 |-------------|--------|-----|-----|-----|-----|--------|--------|
-| Embassy     | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
-| RCC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
-| GPIO        | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| Embassy     | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅   |
+| RCC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅   |
+| GPIO        | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅    |
 | UART*       | ✅     | ✅  | ✅ | ✅  | ✅   | ❓      |        |
 | SPI*        | ✅     | ✅  | ✅ | ✅  | ✅   | N/A    |        |
 | I2C         | ✅     | ✅  | ✅ | ❓  | ❓   | ❓      |        |
-| ADC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
-| Timer(PWM)  | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |        |
+| ADC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅   |
+| Timer(PWM)  | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅   |
 | USBD        | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
 | USB/OTG FS  | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
 | USB HS      | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
