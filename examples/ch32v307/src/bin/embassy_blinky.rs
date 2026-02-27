@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
-#![feature(impl_trait_in_assoc_type)]
+
+
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
