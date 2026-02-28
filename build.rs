@@ -471,6 +471,8 @@ fn main() {
         (("timer", "CH3"), quote!(crate::timer::Ch3Dma)),
         (("timer", "CH4"), quote!(crate::timer::Ch4Dma)),
         (("sdio", "SDIO"), quote!(crate::sdio::SdioDma)),
+        (("dac", "CH1"), quote!(crate::dac::DacDma1)),
+        (("dac", "CH2"), quote!(crate::dac::DacDma2)),
     ]
     .into();
 
