@@ -156,7 +156,6 @@ impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
         rx_dma: Option<ChannelAndRequest<'d>>,
         config: Config,
     ) -> Self {
-
         let regs = T::REGS;
 
         let div = calculate_baud_rate(T::frequency().0, config.frequency.0);
@@ -332,15 +331,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
         miso.set_as_input(Pull::None);
 
-        Self::new_inner(
-            peri,
-            Some(sck.into()),
-            None,
-            Some(miso.into()),
-            None,
-            None,
-            config,
-        )
+        Self::new_inner(peri, Some(sck.into()), None, Some(miso.into()), None, None, config)
     }
 
     /// Create a new SPI driver, in TX-only mode (only MOSI pin, no MISO).
@@ -355,15 +346,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
         mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
 
-        Self::new_inner(
-            peri,
-            Some(sck.into()),
-            Some(mosi.into()),
-            None,
-            None,
-            None,
-            config,
-        )
+        Self::new_inner(peri, Some(sck.into()), Some(mosi.into()), None, None, None, config)
     }
 
     /// Create a new SPI driver, in TX-only mode, without SCK pin.
@@ -606,6 +589,28 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
     }
 }
 
+impl<'d, T: Instance, W: Word> embedded_hal_async::spi::SpiBus<W> for Spi<'d, T, Async> {
+    async fn write(&mut self, data: &[W]) -> Result<(), Self::Error> {
+        self.write(data).await
+    }
+
+    async fn read(&mut self, data: &mut [W]) -> Result<(), Self::Error> {
+        self.read(data).await
+    }
+
+    async fn transfer(&mut self, read: &mut [W], write: &[W]) -> Result<(), Self::Error> {
+        self.transfer(read, write).await
+    }
+
+    async fn transfer_in_place(&mut self, data: &mut [W]) -> Result<(), Self::Error> {
+        self.transfer_in_place(data).await
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
 impl<'d, T: Instance, M: PeriMode> Drop for Spi<'d, T, M> {
     fn drop(&mut self) {
         use crate::gpio::SealedPin;
@@ -782,7 +787,10 @@ trait SealedInstance {
 /// SPI instance trait.
 #[allow(private_bounds)]
 pub trait Instance:
-    embassy_hal_internal::PeripheralType + crate::peripheral::RccPeripheral + crate::peripheral::RemapPeripheral + SealedInstance
+    embassy_hal_internal::PeripheralType
+    + crate::peripheral::RccPeripheral
+    + crate::peripheral::RemapPeripheral
+    + SealedInstance
 {
 }
 
