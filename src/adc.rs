@@ -11,9 +11,9 @@ pub use crate::pac::adc::vals::SampleTime;
 use crate::{peripherals, Peri};
 
 /// ADC bit resolution
-#[cfg(any(adc_v0, adc_ch641))]
+#[cfg(any(adc_v003, adc_ch641))]
 pub const ADC_MAX: u32 = (1 << 10) - 1;
-#[cfg(not(any(adc_v0, adc_ch641)))]
+#[cfg(not(any(adc_v003, adc_ch641)))]
 pub const ADC_MAX: u32 = (1 << 12) - 1;
 
 // No calibration data, voltage should be 1.2V (1.16 to 1.24)
@@ -99,6 +99,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         if channel < 10 {
             T::regs().samptr2().modify(|w| w.set_smp(channel as usize, sample_time));
         } else {
+            #[cfg(not(adc_v00x))]
             T::regs()
                 .samptr1()
                 .modify(|w| w.set_smp((channel - 10) as usize, sample_time));
@@ -301,7 +302,7 @@ mod ch_internal {
     }
 }
 
-#[cfg(adc_v0)]
+#[cfg(any(adc_v003, adc_v00x))]
 mod ch_internal {
     use super::*;
 
@@ -317,7 +318,14 @@ mod ch_internal {
     impl<T: Instance> AdcChannel<T> for Vcal {}
     impl<T: Instance> SealedAdcChannel<T> for Vcal {
         fn channel(&self) -> u8 {
-            9
+            #[cfg(adc_v003)]
+            {
+                9
+            }
+            #[cfg(adc_v00x)]
+            {
+                10
+            }
         }
     }
 }

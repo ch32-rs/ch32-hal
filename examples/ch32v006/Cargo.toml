@@ -1,0 +1,31 @@
+[package]
+name = "ch32v006-examples"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ch32-hal = { path = "../../", features = [
+    "ch32v006k8u6",
+    "memory-x",
+    "embassy",
+    "time-driver-tim2",
+    "rt",
+] }
+embassy-executor = { version = "0.9.1", features = [
+    "arch-spin",
+    "executor-thread",
+] }
+embassy-time = "0.5.0"
+
+# This is okay because we should automatically use whatever ch32-hal uses
+qingke = "0.6.1"
+qingke-rt = { version = "0.6.1", features=["highcode"] }
+
+panic-halt = "1.0"
+
+embedded-hal = "1.0.0"
+
+[profile.release]
+strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
+lto = true
+opt-level = "z" # Optimize for size.
