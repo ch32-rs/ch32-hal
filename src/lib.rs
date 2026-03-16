@@ -130,7 +130,7 @@ pub mod usbhs;
 #[cfg(usbpd)]
 pub mod usbpd;
 
-#[cfg(eth)]
+#[cfg(any(eth, emac))]
 pub mod eth;
 #[cfg(can)]
 pub mod can;
