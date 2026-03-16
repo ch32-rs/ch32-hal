@@ -41,6 +41,13 @@ embedded-hal = "1.0.0"
 # for usbfs_dfu
 usb-dfu-target = "0.1.0"
 
+# for eth
+embassy-net = { version = "0.8.0", features = ["tcp", "dhcpv4", "medium-ethernet", "proto-ipv4"] }
+embassy-net-driver = "0.2.0"
+static_cell = "2.1"
+embedded-io-async = "0.7"
+portable-atomic = { version = "1", features = ["critical-section"] }
+
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
 lto = true
