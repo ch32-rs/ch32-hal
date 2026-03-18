@@ -118,6 +118,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
         peri: Peri<'d, T>,
         cc1: Peri<'d, impl CcPin<T>>,
         cc2: Peri<'d, impl CcPin<T>>,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
     ) -> Result<UsbPdPhy<'d, T, Async>, Error> {
         unsafe {
             use crate::interrupt::typelevel::Interrupt;
