@@ -28,7 +28,7 @@ pub enum Error {
     CCNotConnected,
     NotSupported,
     HardReset,
-    /// Unexpeted message type
+    /// Unexpected message type
     Protocol(u8),
     MaxRetry,
 }
