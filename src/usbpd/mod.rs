@@ -52,10 +52,10 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         let status = usbpd.status().read();
 
-        println!("irq 0x{:02x}", status.0);
+        // println!("irq 0x{:02x}", status.0);
 
         if status.if_tx_end() {
-            println!(">");
+            // println!(">");
             //         T::REGS.port_cc1().modify(|w| w.set_cc_lve(false));
             // T::REGS.port_cc2().modify(|w| w.set_cc_lve(false));
 
