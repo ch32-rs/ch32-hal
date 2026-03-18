@@ -108,6 +108,42 @@ impl Config {
         apb1_pre: APBPrescaler::DIV2,
         apb2_pre: APBPrescaler::DIV2,
     };
+    pub const SYSCLK_FREQ_48MHZ_HSI: Config = Self {
+        hse: None,
+        sys: Sysclk::PLL,
+        pll_src: PllSource::HSI,
+        pll: Some(Pll {
+            prediv: PllPreDiv::DIV1,
+            mul: PllMul::MUL6,
+        }),
+        ahb_pre: AHBPrescaler::DIV1,
+        apb1_pre: APBPrescaler::DIV1,
+        apb2_pre: APBPrescaler::DIV1,
+    };
+    pub const SYSCLK_FREQ_72MHZ_HSI: Config = Self {
+        hse: None,
+        sys: Sysclk::PLL,
+        pll_src: PllSource::HSI,
+        pll: Some(Pll {
+            prediv: PllPreDiv::DIV1,
+            mul: PllMul::MUL9,
+        }),
+        ahb_pre: AHBPrescaler::DIV1,
+        apb1_pre: APBPrescaler::DIV2,
+        apb2_pre: APBPrescaler::DIV2,
+    };
+    pub const SYSCLK_FREQ_96MHZ_HSI: Config = Self {
+        hse: None,
+        sys: Sysclk::PLL,
+        pll_src: PllSource::HSI,
+        pll: Some(Pll {
+            prediv: PllPreDiv::DIV1,
+            mul: PllMul::MUL12,
+        }),
+        ahb_pre: AHBPrescaler::DIV1,
+        apb1_pre: APBPrescaler::DIV2,
+        apb2_pre: APBPrescaler::DIV2,
+    };
 }
 
 impl Default for Config {
