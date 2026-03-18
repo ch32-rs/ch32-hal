@@ -425,7 +425,7 @@ pub enum OutputType {
     /// Drive the pin both high or low.
     PushPull,
     /// Drive the pin low, or don't drive it at all if the output level is high.
-    #[cfg(not(gpio_x0))]
+    #[cfg(not(gpio_x0))] // CH32X0 do not support OpenDrain on gpios (except for i2c pins when i2c is enabled)
     OpenDrain,
 }
 

@@ -155,8 +155,15 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
         T::set_remap(REMAP);
 
+        #[cfg(not(gpio_x0))]
         scl.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
+        #[cfg(not(gpio_x0))]
         sda.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
+        // CH32X0 does not have open-drain mode, except for I2C pins when i2c is enabled.
+        #[cfg(gpio_x0)]
+        scl.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        #[cfg(gpio_x0)]
+        sda.set_as_af_output(AFType::OutputPushPull, Speed::High);
 
         unsafe { T::EventInterrupt::enable() };
         unsafe { T::ErrorInterrupt::enable() };
