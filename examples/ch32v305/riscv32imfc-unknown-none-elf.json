@@ -1,4 +1,5 @@
 {
+  "abi": "ilp32f",
   "arch": "riscv32",
   "atomic-cas": false,
   "cpu": "generic-rv32",
