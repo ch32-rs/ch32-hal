@@ -26,7 +26,7 @@ mod usart1 {
     impl crate::peripheral::RemapPeripheral for crate::peripherals::USART1 {}
 }
 
-#[cfg(all(ch32v0, peri_usart1))]
+#[cfg(all(any(ch32v0, ch32m0), peri_usart1))]
 mod usart1 {
     impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::USART1 {
         fn set_remap(remap: u8) {
@@ -45,7 +45,7 @@ mod usart1 {
     impl crate::peripheral::RemapPeripheral for crate::peripherals::USART1 {}
 }
 
-#[cfg(all(ch32v0, not(ch32v003), peri_usart2))]
+#[cfg(all(any(ch32v0, ch32m0), not(ch32v003), peri_usart2))]
 mod usart2 {
     impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::USART2 {
         fn set_remap(remap: u8) {
@@ -55,7 +55,7 @@ mod usart2 {
     impl crate::peripheral::RemapPeripheral for crate::peripherals::USART2 {}
 }
 
-#[cfg(all(peri_i2c1, ch32v0))]
+#[cfg(all(peri_i2c1, any(ch32v0, ch32m0)))]
 mod i2c1 {
     impl crate::peripheral::SealedRemapPeripheral for crate::peripherals::I2C1 {
         fn set_remap(remap: u8) {

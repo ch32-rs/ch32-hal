@@ -32,12 +32,12 @@ fn main() {
         (chip_name[..5].to_string(), chip_name[..5].to_string())
     };
     println!("cargo:rustc-cfg={}", chip_base_name); // ch32v103, ch32v003, ch32x035, ch643, ch641, etc.
-    println!("cargo:rustc-cfg={}", chip_family); // On of ch32x0, ch32v0, ch32v1, ch32v2, ch32v3, ch32l1, ch643, ch641
+    println!("cargo:rustc-cfg={}", chip_family); // On of ch32x0, ch32v0, ch32m0, ch32v1, ch32v2, ch32v3, ch32l1, ch643, ch641
 
     // Add Qingke IP core version cfg flags on the fly
     // qingke_v2, qingke_v3, qingke_v4
     let qingke_ver = match &*chip_family {
-        "ch32v0" | "ch641" => "qingke_v2",
+        "ch32v0" | "ch32m0" | "ch641" => "qingke_v2",
         "ch32v1" => "qingke_v3",
         "ch32v2" | "ch32v3" | "ch32l1" | "ch643" => "qingke_v4", // v4b, v4c, v4f
         _ => "qingke_v4",
@@ -83,7 +83,7 @@ fn main() {
 
     let mut gpio_lines = 16;
     match &*chip_family {
-        "ch32v0" => {
+        "ch32v0" | "ch32m0" => {
             gpio_lines = 8;
         }
         "ch32x0" => {
