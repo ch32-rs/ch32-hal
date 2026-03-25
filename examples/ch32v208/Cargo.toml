@@ -23,6 +23,15 @@ qingke = "0.7"
 panic-halt = "1.0"
 embedded-storage = "0.3.1"
 
+embassy-net = { version = "0.8.0", features = ["tcp", "udp", "dhcpv4", "medium-ethernet", "proto-ipv4"] }
+embassy-net-driver = "0.2.0"
+static_cell = "2.1"
+embedded-io-async = "0.7"
+portable-atomic = { version = "1", features = ["critical-section"] }
+
+embassy-futures = "0.1.1"
+heapless = "0.8.0"
+
 [profile.release]
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
 lto = true
