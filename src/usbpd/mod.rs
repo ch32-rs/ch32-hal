@@ -386,6 +386,7 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
             return Err(Error::HardReset);
         }
         let byte_count = T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize;
+        let byte_count = byte_count.saturating_sub(4); // Strip the 4-byte CRC
         buf[..byte_count].copy_from_slice(&self.buffer.to_slice()[..byte_count]);
         match T::REGS.status().read().bmc_aux() {
             vals::BmcAux::SOP0 => Ok((Sop::Sop, byte_count)),
