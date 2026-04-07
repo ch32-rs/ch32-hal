@@ -70,7 +70,6 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         if status.if_rx_reset() {
             T::REGS.config().modify(|w| w.set_ie_rx_reset(false));
-            crate::println!("TODO: reset");
         }
 
         if status.buf_err() {
@@ -155,16 +154,16 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
             T::state().waker.register(cx.waker());
 
             if !T::REGS.config().read().ie_rx_reset() {
-                return Poll::Ready(());
+                return Poll::Ready(Err(Error::HardReset));
             }
 
             if !T::REGS.config().read().ie_rx_act() {
-                Poll::Ready(())
+                Poll::Ready(Ok(()))
             } else {
                 Poll::Pending
             }
         })
-        .await;
+        .await?;
         self.post_receive(buf)
     }
 
@@ -217,8 +216,17 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
 
         println!("begin blocking recv");
 
-        while !T::REGS.status().read().if_rx_act() {
-            // println!("wait");
+        loop {
+            let status = T::REGS.status().read();
+            if status.if_rx_act() {
+                break;
+            }
+            if status.if_rx_reset() {
+                unsafe {
+                    qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
+                }
+                return Err(Error::HardReset);
+            }
         }
 
         unsafe {
