@@ -395,6 +395,7 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
         }
         let byte_count = T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize;
         let byte_count = byte_count.saturating_sub(4); // Strip the 4-byte CRC
+        let byte_count = byte_count.min(buf.len()).min(30); // Cap to buffer size and our internal buffer size
         buf[..byte_count].copy_from_slice(&self.buffer.to_slice()[..byte_count]);
         match T::REGS.status().read().bmc_aux() {
             vals::BmcAux::SOP0 => Ok((Sop::Sop, byte_count)),
@@ -415,7 +416,8 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
             T::REGS.dma().write_value(0);
         } else {
             // We use our own buffer to ensure it is 4-byte aligned, as required by the hardware.
-            self.buffer.data[..buf.len()].copy_from_slice(buf);
+            let len = buf.len().min(30);
+            self.buffer.data[..len].copy_from_slice(&buf[..len]);
             T::REGS.dma().write_value(self.buffer.address());
         }
 
