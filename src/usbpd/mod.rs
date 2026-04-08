@@ -118,7 +118,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
         cc1: Peri<'d, impl CcPin<T>>,
         cc2: Peri<'d, impl CcPin<T>>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-    ) -> Result<UsbPdPhy<'d, T, Async>, Error> {
+    ) -> UsbPdPhy<'d, T, Async> {
         unsafe {
             use crate::interrupt::typelevel::Interrupt;
             T::Interrupt::enable();
@@ -204,7 +204,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
         peri: Peri<'d, T>,
         cc1: Peri<'d, impl CcPin<T>>,
         cc2: Peri<'d, impl CcPin<T>>,
-    ) -> Result<UsbPdPhy<'d, T, Blocking>, Error> {
+    ) -> UsbPdPhy<'d, T, Blocking> {
         Self::new_inner(peri, cc1, cc2)
     }
 
@@ -256,11 +256,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
 
 impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
     /// Create a new USB-PD driver.
-    fn new_inner(
-        _peri: Peri<'d, T>,
-        cc1: Peri<'d, impl CcPin<T>>,
-        cc2: Peri<'d, impl CcPin<T>>,
-    ) -> Result<Self, Error> {
+    fn new_inner(_peri: Peri<'d, T>, cc1: Peri<'d, impl CcPin<T>>, cc2: Peri<'d, impl CcPin<T>>) -> Self {
         assert!(cc1.port_sel() != cc2.port_sel(), "CC1 and CC2 should be different");
 
         #[allow(unused)]
@@ -309,9 +305,8 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
             cc2: cc2.port_sel(),
             buffer: UsbPdMsg::new(),
         };
-        this.detect_cc()?;
 
-        Ok(this)
+        this
     }
 
     pub fn reset(&mut self) -> Result<(), Error> {
@@ -342,7 +337,7 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
         Ok(())
     }
 
-    fn detect_cc(&mut self) -> Result<(), Error> {
+    pub fn detect_cc(&self) -> Result<(), Error> {
         // CH32X035 has no internal CC pull down support
         // The detection voltage is 0.22V, sufficient to detect the default power(500mA/900mA)
 

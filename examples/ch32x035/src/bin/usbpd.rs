@@ -132,7 +132,8 @@ async fn main(_spawner: Spawner) {
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
     let p = hal::init(config);
 
-    let mut phy = UsbPdPhy::new_async(p.USBPD, p.PC14, p.PC15, Irq).unwrap();
+    let mut phy = UsbPdPhy::new_async(p.USBPD, p.PC14, p.PC15, Irq);
+    phy.detect_cc().unwrap();
 
     let device = Device {};
     let driver = UsbpdSinkDriver::new(phy);
