@@ -227,6 +227,8 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
                 }
                 return Err(Error::HardReset);
             }
+            #[cfg(feature = "embassy")]
+            embassy_futures::yield_now();
         }
 
         unsafe {
@@ -242,7 +244,8 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
         self.transmit_inner(Sop::Sop, buf);
 
         while !T::REGS.status().read().if_tx_end() {
-            // println!("wait");
+            #[cfg(feature = "embassy")]
+            embassy_futures::yield_now();
         }
 
         T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
