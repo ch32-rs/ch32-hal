@@ -15,6 +15,8 @@ embassy-executor = { version = "0.9.1", features = [
     "executor-thread",
 ] }
 embassy-time = "0.5.0"
+embassy-usb = "0.5.1"
+embassy-futures = "0.1.1"
 
 # This is okay because we should automatically use whatever ch32-hal uses
 qingke-rt = "0.6.1"

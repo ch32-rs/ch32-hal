@@ -388,6 +388,9 @@ fn main() {
         // otg_fs
         (("otg", "DP"), quote!(crate::otg_fs::DpPin)),
         (("otg", "DM"), quote!(crate::otg_fs::DmPin)),
+        // usbfs (CH32V208, etc.)
+        (("usb", "DP"), quote!(crate::usbfs::DpPin)),
+        (("usb", "DM"), quote!(crate::usbfs::DmPin)),
         // USB is splitted into multiple impls
         (("usbd", "DP"), quote!(crate::usbd::DpPin)),
         (("usbd", "DM"), quote!(crate::usbd::DmPin)),

@@ -121,6 +121,9 @@ pub mod usb;
 #[cfg(otg)]
 pub mod otg_fs;
 
+#[cfg(usb)]
+pub mod usbfs;
+
 #[cfg(usbd)]
 pub mod usbd;
 
