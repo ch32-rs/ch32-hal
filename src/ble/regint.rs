@@ -188,14 +188,19 @@ unsafe fn rfend_tx_ctune() {
             }
             v &= !(0xF << 16); // nibble4 = 0 (separator)
             for n in 0..3usize {
-                let nib = ((delta_ga2 * (n as i32 + 1) / delta_low) & 0xF) as u32;
+                let raw = delta_ga2 * (n as i32 + 1) / delta_low;
+                // dtm.elf has no clamping here; hardware expects GA2 nibbles in [0..7].
+                debug_assert!((0..=7).contains(&raw), "GA2 nibble out of range: {}", raw);
+                let nib = (raw & 0xF) as u32;
                 v = (v & !(0xF << ((n + 5) * 4))) | (nib << ((n + 5) * 4));
             }
             w(0xCC, v);
 
             let mut v = r(0xD0);
             for n in 0..7usize {
-                let nib = ((delta_ga2 * (n as i32 + 4) / delta_low) & 0xF) as u32;
+                let raw = delta_ga2 * (n as i32 + 4) / delta_low;
+                debug_assert!((0..=7).contains(&raw), "GA2 nibble out of range: {}", raw);
+                let nib = (raw & 0xF) as u32;
                 v = (v & !(0xF << (n * 4))) | (nib << (n * 4));
             }
             v &= !(0xF << 28); // nibble7 = 0
