@@ -9,6 +9,7 @@
 //   4. lle_dev_init()    — Link layer engine timing + IRQ setup
 //   5. Enable CRC peripheral clock (RCC AHB)
 //   6. Enable NVIC interrupts: BB (IRQn 63), LLE (IRQn 64)
+//   7. ble_reg_init()    — RF calibration (CO/GA tables; tail-called from BLE_IPCoreInit)
 //
 // Verification (Phase 1 milestone): DTM single-tone TX at 2402/2426/2480 MHz
 // visible on spectrum analyzer or SDR confirms RF path is operational.
@@ -65,4 +66,7 @@ pub unsafe fn ble_phy_init() {
     // Enabling IRQs without registered handlers causes unhandled exception faults.
     // Applications that use interrupt-driven BLE (TMOS/BLE stack) must enable
     // them separately after installing BB_IRQHandler / LLE_IRQHandler.
+
+    // RF calibration: CO/GA lookup tables (mirrors BLE_RegInit tail-call in BLE_IPCoreInit).
+    ble_reg_init();
 }
