@@ -136,6 +136,15 @@ pub mod can;
 #[cfg(flash)]
 pub mod flash;
 
+// BLE PHY initialization — CH32V208 only (has BLE hardware at 0x40024100-0x40025000)
+#[cfg(any(
+    feature = "ch32v208cbu6",
+    feature = "ch32v208gbu6",
+    feature = "ch32v208rbt6",
+    feature = "ch32v208wbu6",
+))]
+pub mod ble;
+
 #[cfg(feature = "embassy")]
 pub mod embassy;
 
