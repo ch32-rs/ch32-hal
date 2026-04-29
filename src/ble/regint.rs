@@ -142,14 +142,49 @@ unsafe fn rfend_tx_ctune() {
     let prev_c8 = r(0xC8);
     w(0xC8, (prev_c8 & !0xFF) | co2_ch40 | (co2_ch41 << 4));
 
-    // TODO: GA calibration table at RFEND+0xC8 nibbles 2..7 and RFEND+0xCC..0xD0.
-    // GA nibbles use delta_ga = nga2440 - nga2480 divided by delta_co_high,
-    // with a minimum bias of |8 per nibble (keeps encoded GA values ≥ 8).
-    // Multipliers per nibble (from assembly): 10, 9, 8, sll×3, ...
-    // Formula confirmed for nibble2: (delta_ga * 10 / delta_high | 8) & 0xF.
-    // Full multiplier sequence and second GA table (using nga2401-nga2440) need
-    // further analysis. TX operates without GA calibration (affects gain flatness only).
-    let _ = (nga2401, nga2480); // suppress unused warnings until GA is implemented
+    // GA table segment 1 (0xC8 nibbles 2-7, 0xCC nibbles 0-3):
+    // Multipliers 10→1 descending, divisor=delta_high, |8 minimum bias.
+    // GA1[n] = (delta_ga * (10-n) / delta_high | 8) & 0xF, n=0..9
+    let delta_ga = nga2440 as i32 - nga2480 as i32;
+    {
+        // 0xC8 nibbles 2-7 (n=0..5, mult=10..5): preserve CO2 overflow in nibbles 0-1.
+        let mut v = r(0xC8);
+        for n in 0..6usize {
+            let mult = (10 - n) as i32;
+            let nib = ((delta_ga * mult / delta_high | 8) & 0xF) as u32;
+            let pos = (n + 2) * 4;
+            v = (v & !(0xF << pos)) | (nib << pos);
+        }
+        w(0xC8, v);
+    }
+    {
+        // 0xCC: nibbles 0-3 (GA1 n=6..9, mult=4..1), nibble4=0, nibbles 5-7 (GA2 n=0..2, mult=1..3).
+        // GA segment 2: delta_ga2 = nGA2401-nGA2440, divisor=delta_low (=nCO2401-nCO2440).
+        // GA2[n] = (delta_ga2 * (n+1) / delta_low) & 0xF  — no |8 bias.
+        let delta_ga2 = nga2401 as i32 - nga2440 as i32;
+        let mut v = r(0xCC);
+        for n in 0..4usize {
+            let mult = (4 - n) as i32;
+            let nib = ((delta_ga * mult / delta_high | 8) & 0xF) as u32;
+            v = (v & !(0xF << (n * 4))) | (nib << (n * 4));
+        }
+        v &= !(0xF << 16); // nibble 4 = 0 (separator between the two GA segments)
+        for n in 0..3usize {
+            let mult = (n + 1) as i32;
+            let nib = ((delta_ga2 * mult / delta_low) & 0xF) as u32;
+            v = (v & !(0xF << ((n + 5) * 4))) | (nib << ((n + 5) * 4));
+        }
+        w(0xCC, v);
+        // 0xD0 nibbles 0-6 (GA2 n=3..9, mult=4..10); nibble7 cleared to 0.
+        let mut v = r(0xD0);
+        for n in 0..7usize {
+            let mult = (n + 4) as i32;
+            let nib = ((delta_ga2 * mult / delta_low) & 0xF) as u32;
+            v = (v & !(0xF << (n * 4))) | (nib << (n * 4));
+        }
+        v &= !(0xF << 28);
+        w(0xD0, v);
+    }
 
     // Teardown: clear calibration mode, switch to operational state.
     rmw(0x04, (1 << 4) | 1, 0); // clear bit4 (TX_cal_mode) and bit0 (trigger)
