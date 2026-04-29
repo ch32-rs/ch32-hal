@@ -16,6 +16,9 @@
 pub mod bb;
 pub mod lle;
 pub mod rfend;
+pub mod regint;
+
+pub use regint::ble_reg_init;
 
 use bb::bb_dev_init;
 use lle::lle_dev_init;
