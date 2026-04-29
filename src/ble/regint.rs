@@ -146,49 +146,61 @@ unsafe fn rfend_tx_ctune() {
     let prev_c8 = r(0xC8);
     w(0xC8, (prev_c8 & !0xFF) | co2_ch40 | (co2_ch41 << 4));
 
-    // GA table segment 1 (0xC8 nibbles 2-7, 0xCC nibbles 0-3):
-    //   GA1[n] = (delta_ga * (10-n) / delta_high | 8) & 0xF  for n=0..9
-    //   Divisor = delta_high; multipliers 10→1 descending; |8 minimum bias.
-    // GA table separator: 0xCC nibble4 = 0 (explicitly confirmed from assembly).
-    // GA table segment 2 (0xCC nibbles 5-7, 0xD0 nibbles 0-6):
-    //   GA2[n] = (delta_ga2 * (n+1) / delta_low) & 0xF  for n=0..9
-    //   Divisor = delta_low; multipliers 1→10 ascending; no |8 bias.
-    //   0xD0 nibble7 = 0 (confirmed from assembly).
+    // GA calibration tables (skipped if either CO delta is zero — degenerate hardware).
+    // GA1 (0xC8 nibbles 2-7, 0xCC nibbles 0-3): GA1[n] = (delta_ga*(10-n)/delta_high|8)&0xF
+    //   Divisor = delta_high; mults 10→1 descending; |8 minimum bias.
+    // GA2 (0xCC nibbles 5-7, 0xD0 nibbles 0-6):  GA2[n] = (delta_ga2*(n+1)/delta_low)&0xF
+    //   Divisor = delta_low; mults 1→10 ascending; no |8 bias.
+    //   Negative delta_ga2 is valid: RISC-V idiv truncates toward zero, & 0xF gives
+    //   4-bit two's-complement, which hardware interprets as a signed gain offset.
+    //   This matches dtm.elf exactly — `lbu` loads nGA as [0..127], `sub` may go negative,
+    //   then `and s1, s1, 15` is applied with no sign correction (confirmed from asm f73e-f748).
+    // 0xCC nibble4 = 0 (separator, confirmed from asm).  0xD0 nibble7 = 0 (confirmed).
     let delta_ga = nga2440 as i32 - nga2480 as i32;
     let delta_ga2 = nga2401 as i32 - nga2440 as i32;
 
-    // 0xC8 nibbles 2-7: GA1[0..5], preserving CO2 overflow in nibbles 0-1.
-    {
-        let mut v = r(0xC8);
-        for n in 0..6usize {
-            let nib = ((delta_ga * (10 - n as i32) / delta_high | 8) & 0xF) as u32;
-            let pos = (n + 2) * 4;
-            v = (v & !(0xF << pos)) | (nib << pos);
+    if delta_high == 0 || delta_low == 0 {
+        // Degenerate measurement (cold start, hardware anomaly): CO tables already written.
+        // GA tables require a non-zero CO delta for normalization; skip to avoid divide-by-zero.
+        #[cfg(feature = "defmt")]
+        defmt::warn!(
+            "rfend_tx_ctune: skipping GA cal (delta_high={} delta_low={})",
+            delta_high, delta_low
+        );
+    } else {
+        // 0xC8 nibbles 2-7: GA1[0..5], preserving CO2 overflow in nibbles 0-1.
+        {
+            let mut v = r(0xC8);
+            for n in 0..6usize {
+                let nib = ((delta_ga * (10 - n as i32) / delta_high | 8) & 0xF) as u32;
+                let pos = (n + 2) * 4;
+                v = (v & !(0xF << pos)) | (nib << pos);
+            }
+            w(0xC8, v);
         }
-        w(0xC8, v);
-    }
-    // 0xCC: GA1[6..9] at nibbles 0-3, separator at nibble4, GA2[0..2] at nibbles 5-7.
-    // 0xD0: GA2[3..9] at nibbles 0-6, nibble7 cleared.
-    {
-        let mut v = r(0xCC);
-        for n in 0..4usize {
-            let nib = ((delta_ga * (4 - n as i32) / delta_high | 8) & 0xF) as u32;
-            v = (v & !(0xF << (n * 4))) | (nib << (n * 4));
-        }
-        v &= !(0xF << 16); // nibble4 = 0 (separator)
-        for n in 0..3usize {
-            let nib = ((delta_ga2 * (n as i32 + 1) / delta_low) & 0xF) as u32;
-            v = (v & !(0xF << ((n + 5) * 4))) | (nib << ((n + 5) * 4));
-        }
-        w(0xCC, v);
+        // 0xCC: GA1[6..9] at nibbles 0-3, separator at nibble4, GA2[0..2] at nibbles 5-7.
+        // 0xD0: GA2[3..9] at nibbles 0-6, nibble7 cleared.
+        {
+            let mut v = r(0xCC);
+            for n in 0..4usize {
+                let nib = ((delta_ga * (4 - n as i32) / delta_high | 8) & 0xF) as u32;
+                v = (v & !(0xF << (n * 4))) | (nib << (n * 4));
+            }
+            v &= !(0xF << 16); // nibble4 = 0 (separator)
+            for n in 0..3usize {
+                let nib = ((delta_ga2 * (n as i32 + 1) / delta_low) & 0xF) as u32;
+                v = (v & !(0xF << ((n + 5) * 4))) | (nib << ((n + 5) * 4));
+            }
+            w(0xCC, v);
 
-        let mut v = r(0xD0);
-        for n in 0..7usize {
-            let nib = ((delta_ga2 * (n as i32 + 4) / delta_low) & 0xF) as u32;
-            v = (v & !(0xF << (n * 4))) | (nib << (n * 4));
+            let mut v = r(0xD0);
+            for n in 0..7usize {
+                let nib = ((delta_ga2 * (n as i32 + 4) / delta_low) & 0xF) as u32;
+                v = (v & !(0xF << (n * 4))) | (nib << (n * 4));
+            }
+            v &= !(0xF << 28); // nibble7 = 0
+            w(0xD0, v);
         }
-        v &= !(0xF << 28); // nibble7 = 0
-        w(0xD0, v);
     }
 
     // Teardown: clear calibration mode, switch to operational state.
