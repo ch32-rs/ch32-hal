@@ -47,26 +47,19 @@ pub unsafe fn ble_phy_init() {
     let osc = osc | (3 << 24);
     core::ptr::write_volatile(OSC_HSE_CAL_CTRL, osc);
 
-    // RF frontend: reset then configure analog front end.
-    rfend_dev_init();
-
-    // Baseband processor: configure mode and timing.
-    bb_dev_init(bb::BB_RF_FLAG_1M);
-
-    // Link layer engine: configure timing params and IRQ mask.
+    // Init order from BLE_IPCoreInit in dtm.elf: LLE first, then RFEND, then BB.
+    // LLE must be initialized before BB_DevInit fires the GO strobe.
     lle_dev_init();
+    rfend_dev_init();
+    bb_dev_init(bb::BB_RF_FLAG_1M);
 
     // Enable CRC peripheral clock (required by BLE stack).
     let ahb = core::ptr::read_volatile(RCC_AHBPCENR);
     core::ptr::write_volatile(RCC_AHBPCENR, ahb | RCC_AHBPCENR_CRC_EN);
 
-    // Enable BB and LLE interrupts at the NVIC level.
-    // CH32V208: BB=IRQn 63, LLE=IRQn 64.
-    // PFIC IENR registers: IENR1 covers IRQ32-63, IENR2 covers IRQ64-95.
-    const PFIC_IENR1: *mut u32 = 0xE000_E100 as *mut u32; // IRQ 32-63
-    const PFIC_IENR2: *mut u32 = 0xE000_E104 as *mut u32; // IRQ 64-95
-    // BB IRQn 63 → bit 31 of IENR1
-    core::ptr::write_volatile(PFIC_IENR1, 1 << 31);
-    // LLE IRQn 64 → bit 0 of IENR2
-    core::ptr::write_volatile(PFIC_IENR2, 1 << 0);
+    // NOTE: BB (IRQn 63) and LLE (IRQn 64) interrupts are NOT enabled here.
+    // The DTM polling TX path reads IRQ status directly via register polling.
+    // Enabling IRQs without registered handlers causes unhandled exception faults.
+    // Applications that use interrupt-driven BLE (TMOS/BLE stack) must enable
+    // them separately after installing BB_IRQHandler / LLE_IRQHandler.
 }

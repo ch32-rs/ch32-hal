@@ -1,12 +1,13 @@
 // LLE (Link Layer Engine) initialization for CH32V208 BLE.
 //
-// Register base: 0x40024100
+// Register base: 0x40024200 (gptrLLEReg — timing, IRQ, timer, TX buf ptr)
 // Source: elec-docs/ble-reverse-docs/05-lle-engine.md and hardware dump
 // Hardware-confirmed timing values from live CH32V208WBU6 board dump.
 
 use core::ptr::{read_volatile, write_volatile};
 
-const LLE_BASE: usize = 0x40024100;
+// gptrLLEReg in WCH naming: timing, scheduling, IRQ status, timer, TX buffer.
+const LLE_BASE: usize = 0x40024200;
 
 #[inline(always)]
 unsafe fn lle_read(offset: usize) -> u32 {
