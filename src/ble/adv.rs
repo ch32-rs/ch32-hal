@@ -177,16 +177,15 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     write_volatile((RFEND_CAL_BASE + 0x2C) as *mut u32, v & !(1 << 1));
 
     // 8. Channel index + whitening enable: LLE+0x00 bits[6:0].
-    // bits[5:0] = PHYSICAL frequency-offset index for PLL LUT (same formula as DTM):
-    //   phys_idx = (freq_MHz - 2402) / 2
-    //   ch37=2402 → 0,  ch38=2426 → 12,  ch39=2480 → 39
-    // This is NOT the logical BLE channel number (37/38/39)!  Writing ch_idx=37 here would
-    // select physical index 37 → 2402+74=2476 MHz instead of 2402 MHz.
+    // bits[5:0] = LOGICAL BLE channel number (37/38/39 for ADV).
+    //   confirmed by Lucy's RE of ll_advertise_process (asm line 40091):
+    //     li a1, 37   ; hardcoded logical ch37, not phys_idx=0
+    //   and LL_ReceiverTest / LL_TransmitterTest: map phys_idx → logical, then write logical.
     // bit6=1 enables BB hardware whitener (BLE spec Vol 6 §3.2, seed={1, ch[5:0]}).
-    // Whitening LFSR seed uses LLE+0x2C bits[30:25] (= ch_idx, set in step 1), not this field.
-    let phys_idx = (freq_khz / 1_000 - 2_402) / 2;
+    // NOTE: DTM (ble_dtm_tx) writes phys_idx with bit6=0 (no whitening); the hardware
+    // uses a different LUT path when bit6=0 vs bit6=1.
     let ctrl = lle_read(0x00);
-    lle_write(0x00, (ctrl & !0x7F) | ((phys_idx & 0x3F) | 0x40));
+    lle_write(0x00, (ctrl & !0x7F) | ((ch_idx as u32 & 0x3F) | 0x40));
 
     // 9. Access address: LLE+0x08 = ADV AA.
     lle_write(0x08, ADV_ACCESS_ADDR);

@@ -88,17 +88,47 @@ const OSC_HSE_CAL_CTRL: *mut u32 = 0x4002_202C as *mut u32;
 const RCC_AHBPCENR: *mut u32 = 0x4002_1014 as *mut u32;
 const RCC_AHBPCENR_CRC_EN: u32 = 1 << 6;
 
+/// RCC CTLR register address.
+/// bit16=HSEON, bit17=HSERDY (32 MHz external crystal).
+const RCC_CTLR: *mut u32 = 0x4002_1000 as *mut u32;
+
 /// Initialize the BLE PHY hardware layer.
 ///
-/// Must be called after the system clock (HSE 32 MHz) is running and stable.
-/// Enables CRC clock and NVIC interrupts BB/LLE.
+/// Enables the HSE 32 MHz external crystal (required by the BLE RF frontend as its
+/// reference oscillator), then runs rfend/bb/lle init and RF calibration.
+///
+/// **Clock note**: the CH32V208WBU6 BLE RF frontend requires HSE (the 32 MHz external
+/// crystal) to be oscillating regardless of the system clock source. If `hal::init` was
+/// called with `Default::default()` (which leaves HSEON=0), this function enables HSE
+/// before proceeding.  The system CPU clock is left unchanged — only HSE is enabled.
 ///
 /// # Safety
 ///
 /// Must be called exactly once at startup, before any BLE operation.
 /// Interrupts BB (63) and LLE (64) must have handlers registered before calling.
 pub unsafe fn ble_phy_init() {
-    // Configure 32 MHz crystal oscillator calibration.
+    // ── Step 0: ensure HSE (32 MHz external crystal) is running ──────────────
+    // The BLE RF frontend uses HSE as its reference oscillator.
+    // WCH official SDK relies on SystemInit() to enable HSE before BLE init;
+    // our Rust hal::init(Default::default()) leaves HSEON=0 (HSI only).
+    // We enable HSE here if not already running.
+    let ctlr = core::ptr::read_volatile(RCC_CTLR);
+    if ctlr & (1 << 17) == 0 {
+        // HSERDY=0: enable HSE and wait up to ~50k iterations for HSERDY.
+        core::ptr::write_volatile(RCC_CTLR, ctlr | (1 << 16)); // set HSEON
+        let mut i = 0u32;
+        while core::ptr::read_volatile(RCC_CTLR) & (1 << 17) == 0 {
+            i += 1;
+            if i > 50_000 {
+                // Crystal did not start — proceed anyway; RF will not function.
+                break;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
+    // ── Step 1: 32 MHz crystal oscillator calibration ────────────────────────
+    // Configure 32 MHz crystal load capacitance and drive current.
     // From WCHBLE_Init (MCU.c): clear bits[30:28], set to 0x3 << 28, set 3 << 24.
     let osc = core::ptr::read_volatile(OSC_HSE_CAL_CTRL);
     let osc = (osc & !(0x07 << 28)) | (0x03 << 28);
