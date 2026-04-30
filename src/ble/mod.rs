@@ -14,6 +14,7 @@
 // Verification (Phase 1 milestone): DTM single-tone TX at 2402/2426/2480 MHz
 // visible on spectrum analyzer or SDR confirms RF path is operational.
 
+pub mod adv;
 pub mod bb;
 pub mod lle;
 pub mod rfend;

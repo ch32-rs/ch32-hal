@@ -1,0 +1,62 @@
+//! BLE ADV_NONCONN_IND advertising example for CH32V208.
+//!
+//! Broadcasts a non-connectable undirected advertising packet on all three
+//! BLE advertising channels (ch37=2402 / ch38=2426 / ch39=2480 MHz) in a loop.
+//! Verifiable with nRF Connect (phone), Wireshark + BLE sniffer, or SDR.
+//!
+//! # How to verify
+//!
+//! 1. Flash: `cargo run --bin ble_adv --release`
+//! 2. Open nRF Connect on a phone → Scanner → look for "ch32-hal"
+//! 3. Optional: HackRF/RTL-SDR at 2402/2426/2480 MHz, observe GFSK bursts
+//! 4. Optional: Wireshark + nRF Sniffer → confirm ADV_NONCONN_IND PDU + correct AdvA
+
+#![no_std]
+#![no_main]
+
+use {ch32_hal as hal, panic_halt as _};
+
+use hal::ble::adv::{ADV_DATA_MAX, ad_complete_name, ad_flags, adv_event};
+
+// 6-byte device address (random static — bit[1] of last byte must be 1 for random static).
+// Using a fixed address for easy identification during testing.
+const ADDR: [u8; 6] = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xC2]; // C2 = 0b11000010: bits[7:6]=11 (random static)
+
+#[qingke_rt::entry]
+fn main() -> ! {
+    hal::debug::SDIPrint::enable();
+    let _p = hal::init(Default::default());
+
+    hal::println!("BLE ADV — CH32V208");
+    hal::println!("addr: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        ADDR[5], ADDR[4], ADDR[3], ADDR[2], ADDR[1], ADDR[0]);
+
+    // Build AdvData: Flags + Complete Local Name "ch32-hal"
+    let mut adv_data = [0u8; ADV_DATA_MAX];
+    let mut pos = 0;
+    pos += ad_flags(&mut adv_data[pos..], 0x06); // LE General Discoverable | BR/EDR Not Supported
+    pos += ad_complete_name(&mut adv_data[pos..], b"ch32-hal");
+    let adv_data = &adv_data[..pos];
+
+    unsafe {
+        hal::ble::ble_phy_init();
+        hal::println!("PHY init done, advertising...");
+
+        let mut total = 0u32;
+        let mut ok_total = 0u32;
+
+        loop {
+            let ok = adv_event(&ADDR, true, adv_data);
+            ok_total += ok as u32;
+            total += 1;
+
+            if total <= 5 || total % 500 == 0 {
+                hal::println!("adv #{}: {}/3 channels ok (cumulative {}/{})",
+                    total, ok, ok_total, total * 3);
+            }
+
+            // ~31 ms gap between advertising events (spec minimum is 20 ms).
+            qingke::riscv::asm::delay(20_000 * 50);
+        }
+    }
+}
