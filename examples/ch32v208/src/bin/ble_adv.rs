@@ -18,9 +18,9 @@ use {ch32_hal as hal, panic_halt as _};
 
 use hal::ble::adv::{ADV_DATA_MAX, ad_complete_name, ad_flags, adv_event};
 
-// 6-byte device address (random static — bit[1] of last byte must be 1 for random static).
-// Using a fixed address for easy identification during testing.
-const ADDR: [u8; 6] = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xC2]; // C2 = 0b11000010: bits[7:6]=11 (random static)
+// 6-byte device address LE order. Random static requires bits[47:46] = 11
+// (= last byte bits[7:6] = 11, BLE Core Spec Vol 6 Part B §1.3.2.1).
+const ADDR: [u8; 6] = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xC2]; // 0xC2 = 0b11000010 → bits[7:6]=11 ✓
 
 #[qingke_rt::entry]
 fn main() -> ! {
