@@ -39,7 +39,25 @@ fn main() -> ! {
     let adv_data = &adv_data[..pos];
 
     unsafe {
+        // ── RCC / clock diagnostic (before BLE init) ─────────────────────────
+        // RCC base = 0x40021000
+        //   CTLR (+0x00): bit1=HSIRDY, bit16=HSEON, bit17=HSERDY, bit24=PLLON, bit25=PLLRDY
+        //   CFGR0(+0x04): bits[3:2]=SWS (00=HSI, 01=HSE, 10=PLL)
+        let rcc_ctlr  = core::ptr::read_volatile(0x4002_1000 as *const u32);
+        let rcc_cfgr0 = core::ptr::read_volatile(0x4002_1004 as *const u32);
+        let hsirdy  = (rcc_ctlr >> 1)  & 1;
+        let hserdy  = (rcc_ctlr >> 17) & 1;
+        let pllrdy  = (rcc_ctlr >> 25) & 1;
+        let sws     = (rcc_cfgr0 >> 2) & 0x3; // active clock source
+        hal::println!("RCC pre-init: ctlr=0x{rcc_ctlr:08x} cfgr0=0x{rcc_cfgr0:08x}");
+        hal::println!("  hsirdy={hsirdy} hserdy={hserdy} pllrdy={pllrdy} sws={sws} (2=PLL expected)");
+
         hal::ble::ble_phy_init();
+
+        // ── BLE register diagnostic (after init) ─────────────────────────────
+        let rcc_ctlr2 = core::ptr::read_volatile(0x4002_1000 as *const u32);
+        let hserdy2   = (rcc_ctlr2 >> 17) & 1;
+        hal::println!("RCC post-init: hserdy={hserdy2} (must be 1 for RF)");
 
         // Dump LLE+0x2C after init — ch_2c should be 37/38/39 after first adv_event.
         let (lle_2c, _bb04, ctrl) = diag_read();

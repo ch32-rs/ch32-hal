@@ -221,6 +221,17 @@ fn main() -> ! {
     hal::println!("channels: 2406 / 2440 / 2472 MHz (DTM ch2/19/35)");
 
     unsafe {
+        // ── RCC / clock sanity check (before BLE init) ───────────────────────
+        // CTLR(+0x00): bit1=HSIRDY, bit17=HSERDY, bit25=PLLRDY
+        // CFGR0(+0x04): bits[3:2]=SWS (00=HSI, 01=HSE, 10=PLL)
+        let rcc_ctlr  = core::ptr::read_volatile(0x4002_1000 as *const u32);
+        let rcc_cfgr0 = core::ptr::read_volatile(0x4002_1004 as *const u32);
+        hal::println!("RCC: ctlr={:#010x} cfgr0={:#010x} hsirdy={} hserdy={} pllrdy={} sws={}",
+            rcc_ctlr, rcc_cfgr0,
+            (rcc_ctlr >> 1) & 1, (rcc_ctlr >> 17) & 1,
+            (rcc_ctlr >> 25) & 1, (rcc_cfgr0 >> 2) & 3);
+        hal::println!("  (hserdy must=1, pllrdy must=1, sws must=2 for 144MHz PLL)");
+
         hal::ble::ble_phy_init();
 
         build_dtm_pdu(2, 37);
