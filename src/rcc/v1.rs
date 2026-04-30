@@ -140,7 +140,16 @@ pub(crate) unsafe fn init(config: Config) {
         Some(hse) => {
             RCC.ctlr().modify(|w| w.set_hsebyp(hse.mode != HseMode::Oscillator));
             RCC.ctlr().modify(|w| w.set_hseon(true));
-            while !RCC.ctlr().read().hserdy() {}
+            // Wait for HSE ready with a bounded timeout (~50 ms at 8 MHz HSI).
+            let mut timeout = 400_000u32;
+            while !RCC.ctlr().read().hserdy() {
+                timeout = timeout.wrapping_sub(1);
+                if timeout == 0 {
+                    panic!("HSE oscillator failed to start (HSERDY never set). \
+                            Check that a crystal is populated and properly \
+                            connected to OSC_IN/OSC_OUT.");
+                }
+            }
             Some(hse.freq)
         }
     };
