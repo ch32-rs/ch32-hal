@@ -26,6 +26,50 @@ use bb::bb_dev_init;
 use lle::lle_dev_init;
 use rfend::rfend_dev_init;
 
+// ── Shared BLE TX completion primitive ──────────────────────────────────────
+
+/// gptrLLEReg base address — IRQ status at offset +0x08.
+const GPTRLLE_BASE: usize = 0x40024200;
+
+/// Wait for a BLE TX burst to fire and settle, using the DTM-style completion signal.
+///
+/// **Completion signal**: `BB+0x08` bits 29+25 (`0x2200_0000`) are set by the GO
+/// strobe when a TX burst fires. These bits are not W1C-clearable (sticky), so
+/// they only transition 0 → non-zero once per power cycle (at the first TX after
+/// reset). After the first TX they are permanently set; callers that need per-burst
+/// fire detection must clear `BB+0x08` with a full 32-bit W1C write before each GO.
+///
+/// **BB+0x64 is NOT the indicator**: `gptrLLEReg+0x64` is event-driven and only
+/// decrements during active hardware connection events (`RF_Tx` path, asm line 72938).
+/// It never decrements for standalone DTM/ADV TX bursts — use this function instead.
+///
+/// # Parameters
+///
+/// * `timeout_loops` — number of spin_loop iterations to wait for the fire signal
+///   before declaring timeout. Use `10_000` for typical ADV/DTM use.
+/// * `settle_loops` — number of spin_loop iterations to wait after the fire signal
+///   is detected, to allow the over-the-air packet to complete. At 144 MHz,
+///   ~50_000 ≈ 350 µs (sufficient for a 19-byte ADV_NONCONN_IND @ 1 Mbps).
+///
+/// # Safety
+///
+/// Must be called after `ble_phy_init()` and after issuing a GO strobe to the
+/// BLE link-layer engine. Caller is responsible for TX mode setup.
+pub unsafe fn ble_tx_wait_done(timeout_loops: u32, settle_loops: u32) -> bool {
+    let irq_reg = (GPTRLLE_BASE + 0x08) as *const u32;
+    for _ in 0..timeout_loops {
+        if core::ptr::read_volatile(irq_reg) & 0x2200_0000 != 0 {
+            // TX fired. Spin for packet-on-air completion before returning.
+            for _ in 0..settle_loops {
+                core::hint::spin_loop();
+            }
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
+}
+
 /// OSC base address: AHBPERIPH_BASE (0x40020000) + 0x202C = 0x4002202C
 /// Contains HSE_CAL_CTRL at offset +0x00.
 const OSC_HSE_CAL_CTRL: *mut u32 = 0x4002_202C as *mut u32;

@@ -199,19 +199,15 @@ unsafe fn dtm_tx_burst(freq_khz: u32) {
     lle_write(0x2C, lle_cfg & !0x3);
 }
 
-/// Poll for TX done at gptrLLEReg+0x08 (0x40024208, W1C IRQ status).
-/// Hardware fires IRQ bits 29+25 (0x22000000) on TX completion — docs showed bit2
-/// but live observation shows upper bits. Write all-ones to clear (W1C).
+/// Poll for TX done — delegates to the shared `ble_tx_wait_done` primitive.
+///
+/// DTM packets are shorter than ADV (37-byte payload @ 1 Mbps ≈ 380µs + pre-delay).
+/// settle_loops = 60_000 ≈ 420µs at 144 MHz is conservative enough for any DTM PDU.
+///
+/// Note: BB+0x08 bits 29+25 are sticky (non-W1C) — the `bb_write(0x08, 0xFFFF_FFFF)`
+/// call in the old implementation was effectively a no-op for those bits.
 unsafe fn wait_tx_done() -> bool {
-    for _ in 0..10_000u32 {
-        if bb_read(0x08) != 0 {
-            bb_write(0x08, 0xFFFF_FFFF);
-            return true;
-        }
-        riscv::asm::nop();
-    }
-    bb_write(0x08, 0xFFFF_FFFF);
-    false
+    hal::ble::ble_tx_wait_done(10_000, 60_000)
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
