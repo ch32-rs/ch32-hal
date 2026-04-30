@@ -135,8 +135,12 @@ pub fn ad_complete_name<'a>(buf: &'a mut [u8], name: &[u8]) -> usize {
 ///   (bits 29+25 = 0x22000000 are always-set hardware constants, masked out here).
 unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     // 1. TX arm: LLE+0x2C bits[1:0] = 01.
+    //    Also update LLE+0x2C bits[30:25] = ch_idx (channel field used by HW for whitening/CRC LUT).
+    //    bb_dev_init leaves this at 9; without this write all ADV channels would use channel-9
+    //    whitening instead of the actual channel (37/38/39), causing CRC failure on receivers.
     let cfg = lle_read(0x2C);
-    lle_write(0x2C, (cfg & !0x3) | 0x1);
+    let cfg = (cfg & 0x81FF_FFFF) | ((ch_idx as u32 & 0x3F) << 25) | 0x1;
+    lle_write(0x2C, cfg);
 
     // 2. Event timeout counter: BB+0x64 = 160.
     bb_write(0x64, 160);
@@ -173,11 +177,16 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     write_volatile((RFEND_CAL_BASE + 0x2C) as *mut u32, v & !(1 << 1));
 
     // 8. Channel index + whitening enable: LLE+0x00 bits[6:0].
+    // bits[5:0] = PHYSICAL frequency-offset index for PLL LUT (same formula as DTM):
+    //   phys_idx = (freq_MHz - 2402) / 2
+    //   ch37=2402 → 0,  ch38=2426 → 12,  ch39=2480 → 39
+    // This is NOT the logical BLE channel number (37/38/39)!  Writing ch_idx=37 here would
+    // select physical index 37 → 2402+74=2476 MHz instead of 2402 MHz.
     // bit6=1 enables BB hardware whitener (BLE spec Vol 6 §3.2, seed={1, ch[5:0]}).
-    // HW uses a LUT from this field for PLL freq select (confirmed Phase 1 SDR: HW output
-    // matched LLE+0x00 channel despite 14-bit PLL formula producing garbage RFEND values).
+    // Whitening LFSR seed uses LLE+0x2C bits[30:25] (= ch_idx, set in step 1), not this field.
+    let phys_idx = (freq_khz / 1_000 - 2_402) / 2;
     let ctrl = lle_read(0x00);
-    lle_write(0x00, (ctrl & !0x7F) | ((ch_idx as u32 & 0x3F) | 0x40));
+    lle_write(0x00, (ctrl & !0x7F) | ((phys_idx & 0x3F) | 0x40));
 
     // 9. Access address: LLE+0x08 = ADV AA.
     lle_write(0x08, ADV_ACCESS_ADDR);
@@ -217,32 +226,19 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     (state_pre, state_post, irq_post)
 }
 
-/// Poll for TX completion — DTM-style.
+/// Poll for ADV TX completion.
 ///
-/// BB+0x64 is event-driven and does not decrement in our TX mode (stays at 160).
-/// BB+0x08 bits 29+25 (0x22000000) are SET by the GO strobe when TX fires, matching
-/// the DTM TX behavior (confirmed: DTM INIT irq=0x00000000, after first GO irq=0x22000000).
-/// These bits are not clearable via W1C, so they remain set permanently.
+/// Delegates to `ble_tx_wait_done` — the shared BLE TX completion primitive.
+/// See `crate::ble::ble_tx_wait_done` for the full signal description.
 ///
-/// After detecting TX fire via BB+0x08 != 0, we spin for ~350µs to allow the over-the-air
-/// packet to fully transmit before moving to the next advertising channel.
+/// settle_loops ≈ 350µs at 144 MHz (50_000 spin_loop iterations):
+///   ADV_NONCONN_IND @ 1 Mbps ≈ 240µs + BB+0x50 pre-delay 90µs = 330µs.
 ///
 /// Returns (completed: bool, bb64_initial: u32, bb64_final: u32, bb08_final: u32).
 unsafe fn wait_adv_tx_done() -> (bool, u32, u32, u32) {
     let initial = bb_read(0x64);
-    // Wait for TX fire indicator: BB+0x08 != 0 (bits 29+25 set by GO strobe).
-    for _ in 0..10_000u32 {
-        if bb_read(0x08) != 0 {
-            // TX fired. Spin ~350µs at 144 MHz for over-the-air packet completion.
-            // ADV_NONCONN_IND packet @ 1 Mbps ≈ 240µs + pre-delay 90µs = 330µs.
-            for _ in 0..50_000u32 {
-                core::hint::spin_loop();
-            }
-            return (true, initial, bb_read(0x64), bb_read(0x08));
-        }
-        core::hint::spin_loop();
-    }
-    (false, initial, bb_read(0x64), bb_read(0x08))
+    let done = super::ble_tx_wait_done(10_000, 50_000);
+    (done, initial, bb_read(0x64), bb_read(0x08))
 }
 
 // ── Diagnostic helpers ────────────────────────────────────────────────────────────────────────

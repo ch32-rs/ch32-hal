@@ -16,7 +16,7 @@
 
 use {ch32_hal as hal, panic_halt as _};
 
-use hal::ble::adv::{ADV_DATA_MAX, ad_complete_name, ad_flags, adv_event, adv_event_verbose, diag_read};
+use hal::ble::adv::{ADV_DATA_MAX, ad_complete_name, ad_flags, adv_event, diag_read};
 
 // 6-byte device address LE order. Random static requires bits[47:46] = 11
 // (= last byte bits[7:6] = 11, BLE Core Spec Vol 6 Part B §1.3.2.1).
@@ -40,34 +40,26 @@ fn main() -> ! {
 
     unsafe {
         hal::ble::ble_phy_init();
-        hal::println!("PHY init done, advertising...");
-        hal::println!("[DIAG] state_machine + IRQ diagnostic mode");
+
+        // Dump LLE+0x2C after init — ch_2c should be 37/38/39 after first adv_event.
+        let (lle_2c, _bb04, ctrl) = diag_read();
+        hal::println!("PHY init: lle_2c=0x{lle_2c:08x} ch_2c={} wh={} ctrl=0x{ctrl:08x}",
+            (lle_2c >> 25) & 0x3F, (ctrl >> 6) & 1);
 
         let mut total = 0u32;
         let mut ok_total = 0u32;
 
         loop {
-            let ok;
-            if total < 5 {
-                // Verbose diagnostic for first 5 events.
-                let (n, stats) = adv_event_verbose(&ADDR, true, adv_data);
-                ok = n;
-                for (i, (init, fin, irq_final, state_pre, state_post, irq_post)) in stats.iter().enumerate() {
-                    let ch = [37u8, 38, 39][i];
-                    // state_pre/post: 108=Sleep; non-108 means HW accepted GO.
-                    // irq_post bits[15:0]: non-zero means TX-completion IRQ fired right after GO.
-                    hal::println!("[DIAG#{total}:ch{ch}] bb64={init}->{fin} irq_final=0x{irq_final:08x} | state={state_pre}->{state_post} irq_post=0x{irq_post:08x}");
-                }
-                let (lle_2c, bb04, ctrl) = diag_read();
-                hal::println!("[DIAG#{total}] lle_2c=0x{lle_2c:08x} bb04=0x{bb04:02x} ctrl=0x{ctrl:08x} ch_2c={} wh={}",
-                    (lle_2c >> 25) & 0x3F, (ctrl >> 6) & 1);
-            } else {
-                ok = adv_event(&ADDR, true, adv_data);
-            }
+            let ok = adv_event(&ADDR, true, adv_data);
             ok_total += ok as u32;
             total += 1;
 
-            if total <= 5 || total % 500 == 0 {
+            // Log ch_2c for first 5 events to confirm LLE+0x2C bits[30:25] are updated.
+            if total <= 5 {
+                let (lle_2c, _bb04, ctrl) = diag_read();
+                hal::println!("adv #{total}: {ok}/3 ok | lle_2c=0x{lle_2c:08x} ch_2c={} wh={}",
+                    (lle_2c >> 25) & 0x3F, (ctrl >> 6) & 1);
+            } else if total % 500 == 0 {
                 hal::println!("adv #{}: {}/3 channels ok (cumulative {}/{})",
                     total, ok, ok_total, total * 3);
             }
