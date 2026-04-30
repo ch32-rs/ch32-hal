@@ -53,12 +53,8 @@ const ADV_CRC_INIT: u32 = 0x55_5555;
 /// PDU type: ADV_NONCONN_IND (non-connectable undirected, type=0b0010).
 const PDU_TYPE_ADV_NONCONN_IND: u8 = 0b0010;
 
-/// Advertising channels: ch37=2402 MHz, ch38=2426 MHz, ch39=2480 MHz.
-const ADV_CHANNELS: [(u8, u32); 3] = [
-    (37, 2_402_000),
-    (38, 2_426_000),
-    (39, 2_480_000),
-];
+/// Advertising channels: (index, freq_kHz). BLE spec Vol 6 §4.4.2.
+const ADV_CHANNELS: [(u8, u32); 3] = [(37, 2_402_000), (38, 2_426_000), (39, 2_480_000)];
 
 // ── TX buffer ─────────────────────────────────────────────────────────────────────────────────
 
@@ -130,85 +126,135 @@ pub fn ad_complete_name<'a>(buf: &'a mut [u8], name: &[u8]) -> usize {
 
 /// Trigger one ADV_NONCONN_IND burst on the given advertising channel.
 ///
-/// `ch_idx`: BLE channel index (37/38/39).
-/// `freq_khz`: corresponding frequency in kHz (2402000/2426000/2480000).
-unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) {
-    // 1. Arm TX mode: LLE+0x2C bits[1:0] = 01.
+/// Returns (state_pre_go, state_post_go, irq_post_go) — snapshot from immediately
+/// around the GO strobe for state-machine diagnostics.
+///
+/// state_pre/post_go: BB+0x1C (gptrLLEReg+0x1C) LLE state machine value.
+///   108 = Sleep (default), non-108 = hardware accepted GO and is processing.
+/// irq_post_go: BB+0x08 bits[15:0] immediately after GO; non-zero = TX IRQ fired
+///   (bits 29+25 = 0x22000000 are always-set hardware constants, masked out here).
+unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
+    // 1. TX arm: LLE+0x2C bits[1:0] = 01.
     let cfg = lle_read(0x2C);
     lle_write(0x2C, (cfg & !0x3) | 0x1);
 
-    // 2. Event timeout: BB+0x64 = 160.
+    // 2. Event timeout counter: BB+0x64 = 160.
     bb_write(0x64, 160);
 
-    // 3. PLL program + channel lock.
-    // From RF_DevSetChannel in libwchble.a V1.40 (confirmed by DTM TX at 2406/2440/2472 MHz).
+    // 3. PLL program for ADV channel (DTM-style: RFEND_CAL+0x44).
+    // Lucy confirmed ll_advertise_tx doesn't call this, but the calling context might expect
+    // PLL to be pre-programmed. We use the ADV non-DTM formula: freq_offset = freq-1000.
     {
-        let int_div = (freq_khz / 64_000) & 0x1F;
-        let frac_div = ((freq_khz % 64_000) << 10) / 250;
+        let freq_offset = freq_khz - 1_000;
+        let int_div = (freq_offset / 64_000) & 0x1F;
+        let frac_div = ((freq_offset % 64_000) << 10) / 250;
         let pll = read_volatile((RFEND_CAL_BASE + 0x44) as *const u32);
-        let pll = (pll & 0xFE0F_C000) | (int_div << 20) | (frac_div & 0x3FFF);
+        let pll = (pll & 0xFE0C_0000) | (int_div << 20) | (frac_div & 0x3_FFFF);
         write_volatile((RFEND_CAL_BASE + 0x44) as *mut u32, pll);
         let v = read_volatile((RFEND_CAL_BASE + 0x2C) as *const u32);
-        write_volatile((RFEND_CAL_BASE + 0x2C) as *mut u32, v | (1 << 1));
+        write_volatile((RFEND_CAL_BASE + 0x2C) as *mut u32, v | (1 << 1)); // set lock
     }
 
-    // 4. TX path select: LLE+0x00 clear bits[8:7], set bit8.
+    // 4. TX path select: LLE+0x00 clear bits[8:7] then set bit8.
     let ctrl = lle_read(0x00);
     lle_write(0x00, ctrl & !0x180);
     let ctrl = lle_read(0x00);
     lle_write(0x00, (ctrl & !0x180) | 0x100);
 
-    // 5. PA bias: RFEND+0x08 |= 0x330000.
+    // 5. PA bias: RFEND_CAL+0x08 |= 0x330000.
     let ana = read_volatile((RFEND_CAL_BASE + 0x08) as *const u32);
     write_volatile((RFEND_CAL_BASE + 0x08) as *mut u32, ana | 0x0033_0000);
 
     // 6. TX pre-delay: BB+0x50 = 90.
     bb_write(0x50, 90);
 
-    // 7. Release channel lock: RFEND+0x2C bit1 = 0.
+    // 7. Release channel lock: RFEND_CAL+0x2C bit1 = 0.
     let v = read_volatile((RFEND_CAL_BASE + 0x2C) as *const u32);
     write_volatile((RFEND_CAL_BASE + 0x2C) as *mut u32, v & !(1 << 1));
 
-    // 8. Channel index + whitening enable: LLE+0x00 bits[6:0] = (ch_idx & 0x3F) | 0x40.
-    // bit6=1 enables the BB hardware whitener and seeds its LFSR with {1, ch[5:0]}.
-    // (RF_DevSetChannel d.asm 71418; DTM writes only ch_idx & 0x7F, leaving bit6=0.)
+    // 8. Channel index + whitening enable: LLE+0x00 bits[6:0].
+    // bit6=1 enables BB hardware whitener (BLE spec Vol 6 §3.2, seed={1, ch[5:0]}).
+    // HW uses a LUT from this field for PLL freq select (confirmed Phase 1 SDR: HW output
+    // matched LLE+0x00 channel despite 14-bit PLL formula producing garbage RFEND values).
     let ctrl = lle_read(0x00);
     lle_write(0x00, (ctrl & !0x7F) | ((ch_idx as u32 & 0x3F) | 0x40));
 
     // 9. Access address: LLE+0x08 = ADV AA.
     lle_write(0x08, ADV_ACCESS_ADDR);
 
-    // 10. CRC init: LLE+0x04.
+    // 10. CRC init: LLE+0x04 = 0x555555.
     lle_write(0x04, ADV_CRC_INIT);
 
     // 11. TX buffer pointer: BB+0x70.
     bb_write(0x70, core::ptr::addr_of!(ADV_TX_BUF) as u32);
 
-    // 12. LLE arm: BB+0x00 = 2.
+    // 12. LLE arm: BB+0x00 = 2 — MUST come before GO bit.
+    // DTM comment: "Without this write the LLE ignores the GO pulse."
     bb_write(0x00, 2);
 
-    // 13. GO bit: LLE+0x00 clear then set (guaranteed 0→1 edge).
+    // Pre-GO: clear all BB+0x08 IRQ bits (full 32-bit W1C, same as DTM code).
+    // Bits 29+25 (0x22000000) are set by GO when TX fires; clearing here lets irq_post
+    // detect TX fire on a per-channel basis (if they are W1C-able at 32-bit width).
+    bb_write(0x08, 0xFFFF_FFFF);
+    let state_pre = bb_read(0x1C); // LLE state before GO; should be 108=Sleep
+
+    // 13. GO bit: LLE+0x00 |= 0x800. Clear first to guarantee 0→1 edge.
     let ctrl = lle_read(0x00);
     lle_write(0x00, ctrl & !0x800);
     let ctrl = lle_read(0x00);
     lle_write(0x00, ctrl | 0x800);
 
+    // Snapshot immediately after GO — before step 14 clears the arm.
+    // If state_post != state_pre: HW state machine accepted the GO command.
+    // If irq_post & 0xFFFF != 0: TX completion IRQ already fired.
+    let state_post = bb_read(0x1C);
+    let irq_post = bb_read(0x08);
+
     // 14. Clear TX arm: LLE+0x2C bits[1:0] = 00.
     let cfg = lle_read(0x2C);
     lle_write(0x2C, cfg & !0x3);
+
+    (state_pre, state_post, irq_post)
 }
 
-/// Poll for TX done (same as DTM: IRQ bits 29+25 = 0x22000000 at BB+0x08, W1C).
-unsafe fn wait_adv_tx_done() -> bool {
+/// Poll for TX completion — DTM-style.
+///
+/// BB+0x64 is event-driven and does not decrement in our TX mode (stays at 160).
+/// BB+0x08 bits 29+25 (0x22000000) are SET by the GO strobe when TX fires, matching
+/// the DTM TX behavior (confirmed: DTM INIT irq=0x00000000, after first GO irq=0x22000000).
+/// These bits are not clearable via W1C, so they remain set permanently.
+///
+/// After detecting TX fire via BB+0x08 != 0, we spin for ~350µs to allow the over-the-air
+/// packet to fully transmit before moving to the next advertising channel.
+///
+/// Returns (completed: bool, bb64_initial: u32, bb64_final: u32, bb08_final: u32).
+unsafe fn wait_adv_tx_done() -> (bool, u32, u32, u32) {
+    let initial = bb_read(0x64);
+    // Wait for TX fire indicator: BB+0x08 != 0 (bits 29+25 set by GO strobe).
     for _ in 0..10_000u32 {
         if bb_read(0x08) != 0 {
-            bb_write(0x08, 0xFFFF_FFFF);
-            return true;
+            // TX fired. Spin ~350µs at 144 MHz for over-the-air packet completion.
+            // ADV_NONCONN_IND packet @ 1 Mbps ≈ 240µs + pre-delay 90µs = 330µs.
+            for _ in 0..50_000u32 {
+                core::hint::spin_loop();
+            }
+            return (true, initial, bb_read(0x64), bb_read(0x08));
         }
         core::hint::spin_loop();
     }
-    bb_write(0x08, 0xFFFF_FFFF);
-    false
+    (false, initial, bb_read(0x64), bb_read(0x08))
+}
+
+// ── Diagnostic helpers ────────────────────────────────────────────────────────────────────────
+
+/// Read key registers for diagnostic logging.
+/// Returns (lle_2c, bb04_armed, lle_ctrl).
+/// Call immediately after `adv_tx_burst` / `adv_event` for a snapshot.
+pub unsafe fn diag_read() -> (u32, u32, u32) {
+    let lle_2c = lle_read(0x2C);      // channel field bits[30:25], TX arm bits[1:0]
+    let bb04 = bb_read(0x04);         // TX armed flag bit0
+    let ctrl = lle_read(0x00);        // channel bits[6:0] + whitening bit6 + GO bit11
+    (lle_2c, bb04, ctrl)
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────────────────────
@@ -218,15 +264,27 @@ unsafe fn wait_adv_tx_done() -> bool {
 /// Must call `ble_phy_init()` before this.
 /// `addr`, `addr_is_random`, `adv_data`: forwarded to `build_adv_pdu`.
 ///
-/// Returns number of channels on which TX completed without timeout (0-3).
-pub unsafe fn adv_event(addr: &[u8; 6], addr_is_random: bool, adv_data: &[u8]) -> u8 {
+/// Returns:
+///   ok_count: number of channels where TX completed (0-3).
+///   stats: per-channel tuple (bb64_init, bb64_final, irq_final, state_pre, state_post, irq_post_go).
+///     state_pre/post: LLE state machine (108=Sleep); non-108 post means HW accepted GO.
+///     irq_post_go: BB+0x08 bits[15:0] immediately after GO; non-zero = IRQ fired fast.
+pub unsafe fn adv_event_verbose(addr: &[u8; 6], addr_is_random: bool, adv_data: &[u8])
+    -> (u8, [(u32, u32, u32, u32, u32, u32); 3])
+{
     build_adv_pdu(addr, addr_is_random, adv_data);
     let mut ok = 0u8;
-    for (ch_idx, freq_khz) in ADV_CHANNELS {
-        adv_tx_burst(ch_idx, freq_khz);
-        if wait_adv_tx_done() {
-            ok += 1;
-        }
+    let mut stats = [(0u32, 0u32, 0u32, 0u32, 0u32, 0u32); 3];
+    for (i, (ch_idx, freq_khz)) in ADV_CHANNELS.iter().enumerate() {
+        let (state_pre, state_post, irq_post) = adv_tx_burst(*ch_idx, *freq_khz);
+        let (done, init, fin, irq_final) = wait_adv_tx_done();
+        stats[i] = (init, fin, irq_final, state_pre, state_post, irq_post);
+        if done { ok += 1; }
     }
+    (ok, stats)
+}
+
+pub unsafe fn adv_event(addr: &[u8; 6], addr_is_random: bool, adv_data: &[u8]) -> u8 {
+    let (ok, _) = adv_event_verbose(addr, addr_is_random, adv_data);
     ok
 }

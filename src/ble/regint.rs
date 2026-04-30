@@ -253,17 +253,23 @@ unsafe fn tx_tune_measure(freq_code: u32) -> (u8, u8) {
 ///
 /// Returns `true` if tune completed, `false` on timeout (LLE+0x64 reaches 0).
 #[inline]
+/// Poll for TX tune completion.
+///
+/// LLE+0x64 is event-driven (ticks only during active BLE events) so a software
+/// iteration counter is used instead of the original LLE countdown timeout.
+/// In practice, RFEND+0x90 bits 26+25 are set immediately after trigger assertion.
+#[inline]
 unsafe fn rfend_wait_tune() -> bool {
-    write_volatile((LLE_BASE + 0x64) as *mut u32, 6000);
-    loop {
+    for _ in 0..200_000u32 {
         let status = r(0x90);
         if status & (1 << 26) != 0 && status & (1 << 25) != 0 {
             return true;
         }
-        if read_volatile((LLE_BASE + 0x64) as *const u32) == 0 {
-            return false;
-        }
+        core::hint::spin_loop();
     }
+    #[cfg(feature = "defmt")]
+    defmt::warn!("rfend_wait_tune timeout");
+    false
 }
 
 /// RFEND_TXFtune: enable TX filter.
@@ -292,16 +298,18 @@ unsafe fn rfend_rx_filter() {
     rmw(0x0C, 0, 1 << 4);           // second strobe = actual calibration trigger
     rmw(0x04, 0, 1 << 12);          // set bit12 (RX_filter_mode)
 
-    write_volatile((LLE_BASE + 0x64) as *mut u32, 80);
-    loop {
+    // LLE+0x64 is event-driven (ticks only during active BLE events); use a software counter.
+    let mut filter_done = false;
+    for _ in 0..200_000u32 {
         if r(0x9C) & (1 << 8) != 0 {
+            filter_done = true;
             break;
         }
-        if read_volatile((LLE_BASE + 0x64) as *const u32) == 0 {
-            #[cfg(feature = "defmt")]
-            defmt::warn!("rfend_rx_filter timeout");
-            break;
-        }
+        core::hint::spin_loop();
+    }
+    #[cfg(feature = "defmt")]
+    if !filter_done {
+        defmt::warn!("rfend_rx_filter timeout");
     }
 
     let result = r(0x9C) & 0x1F;

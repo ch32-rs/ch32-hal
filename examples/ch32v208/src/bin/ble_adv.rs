@@ -16,7 +16,7 @@
 
 use {ch32_hal as hal, panic_halt as _};
 
-use hal::ble::adv::{ADV_DATA_MAX, ad_complete_name, ad_flags, adv_event};
+use hal::ble::adv::{ADV_DATA_MAX, ad_complete_name, ad_flags, adv_event, adv_event_verbose, diag_read};
 
 // 6-byte device address LE order. Random static requires bits[47:46] = 11
 // (= last byte bits[7:6] = 11, BLE Core Spec Vol 6 Part B §1.3.2.1).
@@ -41,12 +41,29 @@ fn main() -> ! {
     unsafe {
         hal::ble::ble_phy_init();
         hal::println!("PHY init done, advertising...");
+        hal::println!("[DIAG] state_machine + IRQ diagnostic mode");
 
         let mut total = 0u32;
         let mut ok_total = 0u32;
 
         loop {
-            let ok = adv_event(&ADDR, true, adv_data);
+            let ok;
+            if total < 5 {
+                // Verbose diagnostic for first 5 events.
+                let (n, stats) = adv_event_verbose(&ADDR, true, adv_data);
+                ok = n;
+                for (i, (init, fin, irq_final, state_pre, state_post, irq_post)) in stats.iter().enumerate() {
+                    let ch = [37u8, 38, 39][i];
+                    // state_pre/post: 108=Sleep; non-108 means HW accepted GO.
+                    // irq_post bits[15:0]: non-zero means TX-completion IRQ fired right after GO.
+                    hal::println!("[DIAG#{total}:ch{ch}] bb64={init}->{fin} irq_final=0x{irq_final:08x} | state={state_pre}->{state_post} irq_post=0x{irq_post:08x}");
+                }
+                let (lle_2c, bb04, ctrl) = diag_read();
+                hal::println!("[DIAG#{total}] lle_2c=0x{lle_2c:08x} bb04=0x{bb04:02x} ctrl=0x{ctrl:08x} ch_2c={} wh={}",
+                    (lle_2c >> 25) & 0x3F, (ctrl >> 6) & 1);
+            } else {
+                ok = adv_event(&ADDR, true, adv_data);
+            }
             ok_total += ok as u32;
             total += 1;
 
@@ -55,8 +72,9 @@ fn main() -> ! {
                     total, ok, ok_total, total * 3);
             }
 
-            // ~31 ms gap between advertising events (spec minimum is 20 ms).
-            qingke::riscv::asm::delay(20_000 * 50);
+            // ~247 ms gap — distinctive timing signature for SDR ON/OFF differential.
+            // (At 144 MHz, ~4 cycles/iter: 8_900_000 * 4 / 144_000_000 ≈ 247 ms)
+            qingke::riscv::asm::delay(20_000 * 445);
         }
     }
 }

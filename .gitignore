@@ -4,3 +4,4 @@ trash/
 .vscode/
 
 .DS_Store
+examples/dev
