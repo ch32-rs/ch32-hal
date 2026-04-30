@@ -94,7 +94,16 @@ pub(crate) unsafe fn init(config: Config) {
             w.set_hsebyp(config.hse.unwrap().mode == HseMode::Bypass);
             w.set_hseon(true);
         });
-        while !RCC.ctlr().read().hserdy() {}
+        // Wait for HSE ready with a bounded timeout (~50 ms at 8 MHz HSI).
+        let mut timeout = 400_000u32;
+        while !RCC.ctlr().read().hserdy() {
+            timeout = timeout.wrapping_sub(1);
+            if timeout == 0 {
+                panic!("HSE oscillator failed to start (HSERDY never set). \
+                        Check that a crystal is populated and properly \
+                        connected to OSC_IN/OSC_OUT.");
+            }
+        }
     }
 
     let sysclk = match config.sys {
