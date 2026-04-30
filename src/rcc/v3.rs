@@ -250,7 +250,7 @@ pub(crate) unsafe fn init(config: Config) {
                 timeout = timeout.wrapping_sub(1);
                 if timeout == 0 {
                     panic!("HSE oscillator failed to start (HSERDY never set). \
-                            Check that a 32 MHz crystal is populated and properly \
+                            Check that the crystal is populated and properly \
                             connected to OSC_IN/OSC_OUT.");
                 }
             }
