@@ -240,7 +240,7 @@ pub(crate) unsafe fn init(config: Config) {
             None
         }
         Some(hse) => {
-            RCC.ctlr().modify(|w| w.set_hsebyp(hse.mode != HseMode::Oscillator));
+            RCC.ctlr().modify(|w| w.set_hsebyp(hse.mode == HseMode::Bypass));
             RCC.ctlr().modify(|w| w.set_hseon(true));
             // Wait for HSE ready with a bounded timeout (≤ ~250 ms at 8 MHz HSI).
             // An infinite spin is dangerous on boards without an external crystal
@@ -249,7 +249,7 @@ pub(crate) unsafe fn init(config: Config) {
             while !RCC.ctlr().read().hserdy() {
                 timeout = timeout.wrapping_sub(1);
                 if timeout == 0 {
-                    if hse.mode != HseMode::Oscillator {
+                    if hse.mode == HseMode::Bypass {
                         panic!("HSE failed to start (HSERDY never set). \
                                 In Bypass mode: check that an external clock signal \
                                 is present on OSC_IN.");
