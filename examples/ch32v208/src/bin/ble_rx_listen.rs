@@ -385,6 +385,11 @@ fn main() -> ! {
             for _ in 0..2_000_000u32 {
                 // irq08 bit1 OR bit2 = RX done (WCH IRQSubHandler .L5 RX-done path).
                 if (bb_read(0x08) & 0x06) != 0 {
+                    // W1C bit1/bit2 immediately — replaces the IRQ-handler ACK that WCH's
+                    // LLE_IRQSubHandler does on every interrupt. Without this, bit2 stays
+                    // set as a "ghost" and fires spuriously on every subsequent ch37 poll
+                    // (patch #3.4 saw 857× all-zero-buffer LFSR keystream from stale bit2).
+                    bb_write(0x08, 0x06);
                     got_frame = true;
                     break;
                 }
