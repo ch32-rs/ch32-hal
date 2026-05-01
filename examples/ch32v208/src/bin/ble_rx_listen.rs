@@ -359,12 +359,23 @@ fn main() -> ! {
                     for i in 0..pdu.len() {
                         pdu[i] = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(9 + i));
                     }
+                    // Save first 16 raw bytes BEFORE dewhiten for LFSR verification.
+                    let mut raw_pdu16 = [0u8; 16];
+                    raw_pdu16.copy_from_slice(&pdu[..16]);
                     dewhiten_inplace(&mut pdu, logical_ch);
 
                     let pdu_type = pdu[0] & 0x0F;
-                    let real_len = (pdu[1] & 0x3F) as usize;
+                    // Cap at 37: BLE ADV max payload; prevents AD parser from walking off-end.
+                    let real_len = ((pdu[1] & 0x3F) as usize).min(37);
                     let tx_add   = (pdu[0] >> 6) & 1;
                     let rx_add   = (pdu[0] >> 7) & 1;
+
+                    // Debug dump: bb_irq + 9-byte prefix + raw PDU[0..16] (before dewhiten)
+                    // + dewhitened PDU[0..16]. Cindy runs the same LFSR in Python on raw_pdu
+                    // and compares byte-for-byte to confirm LFSR correctness before gate analysis.
+                    hal::println!("DBG#{rx_count} {ch_label} bb={bb_irq:#010x} \
+                        prefix={:02x?} raw={:02x?} pdu={:02x?}",
+                        &prefix9, &raw_pdu16, &pdu[..16]);
 
                     // AdvA: pdu[2..8] little-endian (on-air LSB first → print MSB first).
                     hal::print!("RX#{rx_count} {ch_label} type={pdu_type} len={real_len} \
@@ -379,7 +390,7 @@ fn main() -> ! {
                     }
 
                     // AD structures from pdu[8 .. 2+real_len] (payload after 6-byte AdvA).
-                    if real_len >= 7 {
+                    if real_len >= 8 {
                         let ad_end = (2 + real_len).min(pdu.len());
                         let mut p = 8usize;
                         let mut any = false;
@@ -416,10 +427,6 @@ fn main() -> ! {
                         }
                         if any { hal::print!("]"); }
                     }
-
-                    // 1-line raw comparison: DMA buffer at offset [1..3], no dewhiten.
-                    // (Tests "raw offset-1" hypothesis, empirically rejected — kept for reference.)
-                    hal::print!(" raw1_2={:02x}{:02x}", prefix9[1], prefix9[2]);
 
                     hal::println!(" prefix={:02x?}", &prefix9);
                 } else {
