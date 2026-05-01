@@ -1,43 +1,40 @@
-//! BLE RX bedrock scanner for CH32V208.
+//! BLE RX passive scanner for CH32V208 — ship baseline (2026-05-02).
 //!
-//! Rotates through ADV channels 37/38/39 (2402/2426/2480 MHz) listening for any
-//! BLE advertising packet. If ANY packet is received, the full PHY RX chain is proven:
-//!   HSE 32 MHz crystal → RFEND PLL lock → BB/LLE state machine → DMA → UART
+//! Rotates through ADV channels 37/38/39 (2402/2426/2480 MHz) listening for BLE
+//! advertising packets and decodes AdvA, Flags, Manufacturer Specific, and Name ADs.
 //!
-//! # Register name convention (same as ble_dtm_tx.rs — intentionally swapped)
+//! Proven: three-channel passive scan, raw PDU at DMA offset 0, HW dewhitens in scan
+//! mode (no SW dewhiten needed), real Flags/Mfr decodes (Apple 0x004c, MS 0x0006,
+//! Samsung 0x0075). See `docs/ble_rx_development.md` for full development history.
 //!
+//! # Register name convention (intentionally swapped vs WCH lib naming)
+//!
+//! ```text
+//! LLE_BASE = 0x40024100  (WCH: gptrBBReg)   → accessed via lle_read/lle_write
+//! BB_BASE  = 0x40024200  (WCH: gptrLLEReg)  → accessed via bb_read/bb_write
 //! ```
-//! const LLE_BASE = 0x40024100  → WCH gptrBBReg  (BB engine regs)
-//! const BB_BASE  = 0x40024200  → WCH gptrLLEReg  (link-layer timing/buffer regs)
-//! ```
-//! This swapped naming is intentional for compatibility with the WCH asm decode flow.
+//! This swap is kept for consistency with the d.asm decode workflow.
 //!
-//! # Key RX sequences (Lucy d.asm, 2026-05-01)
+//! # RX architecture: dual-track (cold boot + per-window)
 //!
-//! Two functions discovered — patch #3.4 dual-track:
+//! Cold boot (`LL_ScanSetRF`, L62824): full register init + RX GO (`bb_write(0x00, 1)`).
+//! Run once to pull HW into active scan.
 //!
-//! ## Cold boot: LL_ScanSetRF (L62824) — run ONCE
-//! Full register init + final RX GO (LLE+0x00 = 1 via bb_write).
-//! Pulls HW out of default state into active RX for the first window.
+//! Per-window (`llScanProcess .L562` → `llScanTraverseaChannel`, L62961):
+//! Timer reload BEFORE channel traverse. W1C bit13, bit7→bit8 transitions in LLE+0x00,
+//! PRE_DELAY + RFEND PA reset, channel update. No RX GO — HW is already live.
 //!
-//! ## Per-window: llScanTraverseaChannel (L62961) — run every subsequent window
-//! Minimal state-machine transition: W1C bit13, bit7→bit8 transitions in LLE+0x00,
-//! PRE_DELAY + RFEND PA reset, then `(ctrl & !0x7F) | channel` final write.
-//! **Does NOT write RX GO (bit0=1)** — HW is already live; full re-init would push
-//! it back to SLEEP.
+//! **Critical**: lle00, lle74, lle04 are HW-managed. Writing them causes regression.
 //!
-//! Root cause of patch #3.3 failure: running LL_ScanSetRF every window over-resets
-//! the state machine. HW entered SLEEP after the startup burst and never re-emerged.
+//! # Expected output
 //!
-//! # Expected output (success)
-//!
-//! ```
-//! RX#1 ch37/2402MHz: type=0 len=X AdvA=AA:BB:CC:DD:EE:FF [Flags=0x06,Name="device"]
+//! ```text
+//! RX#1 ch37/2402MHz: type=0 len=23 AdvA=28:af:42:30:5c:65 [Flags=0x1a,Mfr=0x004c]
 //! ```
 //!
 //! # If no packets appear
 //!
-//! Check: antenna connected, PHY calibration printed (CO non-zero), RF busy environment.
+//! Check: antenna connected, PHY calibration shows CO non-zero, BLE environment active.
 
 #![no_std]
 #![no_main]
@@ -75,31 +72,16 @@ unsafe fn rfend_write(off: usize, v: u32) { write_volatile((RFEND_BASE + off) as
 
 // ── BLE software dewhitening ──────────────────────────────────────────────────
 
-/// Dewhiten a BLE PDU in-place using the spec LFSR (polynomial x^7 + x^4 + 1).
+/// Dewhiten a BLE PDU in-place using the spec LFSR (x^7 + x^4 + 1).
 ///
-/// # Why needed
+/// **NOT needed in scan mode**: CH32V208 HW dewhitens automatically before DMA write
+/// (confirmed 2026-05-01; raw PDU at DMA offset 0 is already dewhitened).
+/// Kept as reference implementation and for potential future use (e.g. promiscuous modes
+/// where HW dewhiten may not apply).
 ///
-/// CH32V208 HW does NOT dewhiten before DMA write (confirmed 2026-05-01).
-/// Despite BB+0x00 bits[6:0] = channel|0x40 being the HW LFSR seed register,
-/// WCH's BLE library has zero SW dewhiten calls because the TMOS stack operates
-/// at a higher abstraction level that never sees raw DMA bytes.
-/// Empirical proof (Cindy bucket analysis, 1614 frames):
-///   - raw bit21-only bucket at offset 9 with SW dewhiten → type=90.4%, RFU=86.6%
-///   - raw bit21-only bucket at offset 9 WITHOUT dewhiten → ~62.5% (random baseline)
-///
-/// # LFSR spec
-///
-/// State: 7 bits. Seed = `channel | 0x40` (bit6 always 1).
-/// Each bit: output = state[0] (LSB); new input to state[6] = state[0] XOR state[4].
-/// BLE PDU bits are transmitted LSB first, so we apply the LFSR LSB-first within each byte.
-///
-/// # Polynomial derivation
-///
-/// Polynomial x^7 + x^4 + 1, right-shift Fibonacci LFSR (output from bit 0):
-///   feedback = bit0 XOR bit4   (taps at positions 0 and 4 from the output end)
-///   new_state = (state >> 1) | (feedback << 6)
-///
-/// NOT `bit6 XOR bit3` — that is the left-shift (output from bit6) variant and is WRONG here.
+/// Seed = `channel | 0x40`. Right-shift Fibonacci LFSR, output from bit 0.
+/// Feedback = bit0 XOR bit4. BLE bits are LSB-first on-air.
+#[allow(dead_code)]
 fn dewhiten_inplace(data: &mut [u8], channel: u8) {
     let mut lfsr = channel | 0x40; // 7-bit LFSR seed (bit6 always 1)
     for byte in data.iter_mut() {
@@ -373,7 +355,7 @@ fn main() -> ! {
     });
 
     hal::println!("BLE RX scanner — CH32V208 bedrock test");
-    hal::println!("Rotating ADV ch37/38/39 (patch #3.14: cold re-init on lle00=0x07 stuck)  Looking for any advertiser...");
+    hal::println!("Passive scan: ADV ch37/38/39 — AdvA + Flags + Mfr + Name");
 
     unsafe {
         let rcc_ctlr  = read_volatile(0x4002_1000 as *const u32);
@@ -400,8 +382,7 @@ fn main() -> ! {
         let mut rx_count  = 0u32;
         let mut scan_count = 0u32;
         let mut ch_idx    = 0usize;
-        let mut struct_ok_count = 0u32;   // structural gate passed
-        let mut crc_fail_count  = 0u32;   // struct_ok but bit21=0 (no DTM PRBS sync)
+        let mut struct_ok_count = 0u32;   // frames passing structural PDU gate
 
         loop {
             let (logical_ch, freq_khz, ch_label) = ADV_CHANNELS[ch_idx];
@@ -451,110 +432,45 @@ fn main() -> ! {
 
                 rx_count += 1;
 
-                // Read IRQ status registers for diagnostic output (NOT used as gate in Plan A2).
-                // irq08 bit1/bit2 are left intact (no W1C) — they are the state-machine keepalive.
-                let bb_irq  = lle_read(0x38);
-                let irq08   = bb_read(0x08);   // LLE IRQ status — diagnostic only; NOT W1C'd
-                lle_write(0x38, bb_irq);
+                // W1C BB IRQ status register (separate from LLE IRQ handled in W1C block below).
+                lle_write(0x38, lle_read(0x38));
 
-                // Snapshot 50 raw bytes from DMA buffer (covers prefix + max PDU + margin).
-                // Done BEFORE any decode so SCN scan and decode see the same snapshot.
+                // Snapshot 50 raw bytes from DMA buffer (covers PDU header + AdvA + payload).
+                // Read AFTER got_frame check so DMA is complete. pdu_off=0: HW dewhitens in
+                // scan mode — raw PDU starts at DMA buffer byte 0 (confirmed 2026-05-01).
                 let mut raw50 = [0u8; 50];
                 for i in 0..50usize {
                     raw50[i] = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(i));
                 }
 
-                // ── SCN: per-offset LFSR scan ─────────────────────────────────────────────
-                // Runs for EVERY got_frame event (outside CRC gate) so no frames are swallowed.
-                // For each offset 4..=12: fresh LFSR (seed=logical_ch|0x40), decode 2 bytes →
-                //   tT = PDU type (0-9 = valid BLE ADV); rR = bits[7:6]==00 (RFU valid).
-                // Also tests ±1 channel seed at offset 9 (channel-drift detection).
-                {
-                    // Helper closure: dewhiten 2 bytes from raw50 at 'off' with given seed ch.
-                    let dw2 = |off: usize, ch: u8| -> (u8, u8) {
-                        let mut lfsr = ch | 0x40;
-                        let (mut b0, mut b1) = (0u8, 0u8);
-                        for bit in 0..8u8 {
-                            let out = lfsr & 1;
-                            let fb = (lfsr ^ (lfsr >> 4)) & 1;
-                            lfsr = (lfsr >> 1) | (fb << 6);
-                            b0 |= (((raw50[off] >> bit) & 1) ^ out) << bit;
-                        }
-                        for bit in 0..8u8 {
-                            let out = lfsr & 1;
-                            let fb = (lfsr ^ (lfsr >> 4)) & 1;
-                            lfsr = (lfsr >> 1) | (fb << 6);
-                            b1 |= (((raw50[off + 1] >> bit) & 1) ^ out) << bit;
-                        }
-                        (b0 & 0x0F, ((b1 & 0xC0) == 0) as u8)
-                    };
-
-                    hal::print!("SCN#{rx_count} {ch_label} bb={bb_irq:#010x}:");
-                    for off in 4usize..=12 {
-                        let (t, r) = dw2(off, logical_ch);
-                        hal::print!(" o{}=t{}r{}", off, t, r);
-                    }
-                    let ch_m1 = logical_ch.saturating_sub(1);
-                    let ch_p1 = (logical_ch + 1).min(39);
-                    let (tm1, rm1) = dw2(9, ch_m1);
-                    let (t0,  r0)  = dw2(9, logical_ch);
-                    let (tp1, rp1) = dw2(9, ch_p1);
-                    hal::println!(" |o9: ch{}=t{}r{} ch{}=t{}r{} ch{}=t{}r{}",
-                        ch_m1, tm1, rm1, logical_ch, t0, r0, ch_p1, tp1, rp1);
-                }
-
-                // ── Decode: structural PDU validity gate ─────────────────────────────────
-                //
-                let _bit21 = (bb_irq >> 21) & 1; // keep for stats; NOT used as gate
-                //
-                // PDU layout (patch #3.8, confirmed by Cindy raw16 2026-05-01):
-                //   DMA buffer offset 0 = PDU header byte 0 (type/TxAdd/RxAdd)
-                //   DMA buffer offset 1 = PDU header byte 1 (len, RFU=0)
-                //   DMA buffer offset 2..8 = AdvA (6 bytes, little-endian)
-                //   DMA buffer offset 8..  = AD structures
-                //
-                // HW DOES dewhiten in scan mode (opposite of earlier DTM analysis):
-                //   raw16 data confirmed valid BLE ADV_IND at offset 0 with canonical
-                //   Flags/Mfr AD structures. No software dewhitening needed.
-                //   Earlier "8-9 byte prefix + SW dewhiten" was based on ghost frames.
-                let pdu_off: usize = 0;
+                // PDU layout (DMA offset 0, HW-dewhitened):
+                //   [0]      PDU header byte 0: bits[3:0]=type, bit6=TxAdd, bit7=RxAdd
+                //   [1]      PDU header byte 1: bits[5:0]=len, bits[7:6]=RFU (must be 0)
+                //   [2..8]   AdvA (6 bytes, little-endian on-air → print big-endian)
+                //   [8..]    AD structures
                 let mut pdu = [0u8; 41];
-                pdu.copy_from_slice(&raw50[pdu_off..pdu_off + 41]);
-                // dewhiten_inplace(&mut pdu, logical_ch); // NOT needed: HW dewhitens in scan mode
+                pdu.copy_from_slice(&raw50[..41]);
 
                 let pdu_type = pdu[0] & 0x0F;
-                let real_len = ((pdu[1] & 0x3F) as usize).min(37); // ADV max 37B
-                let tx_add   = (pdu[0] >> 6) & 1;
-                let rx_add   = (pdu[0] >> 7) & 1;
+                let real_len = ((pdu[1] & 0x3F) as usize).min(37);
                 let rfu_ok   = (pdu[1] & 0xC0) == 0;
 
-                // Structural gate: common ADV types, RFU==0, legal length.
+                // Structural gate: common passive-scan ADV types (0=ADV_IND, 2=ADV_NONCONN_IND,
+                // 4=SCAN_RSP, 5=ADV_DIRECT_IND, 6=ADV_SCAN_IND), RFU==0, min payload (AdvA=6B).
                 let struct_ok = matches!(pdu_type, 0 | 2 | 4 | 5 | 6)
                     && rfu_ok && real_len >= 8;
-                let valid_frame = struct_ok;
-
-                // Lucy trailer byte: WCH rf_rx_basic_rxProcess checks MEMAddr[MEMAddr[1]]==0x80.
-                // raw50[1] = RX_BUF[1] = second byte of HW metadata prefix = WCH's "length field".
-                // Trailer at RX_BUF[raw50[1]] = raw50[raw50[1]] (if index in range).
-                // Also check pdu[real_len+2] = raw50[pdu_off+real_len+2] (Lucy's formula for PDU-relative).
-                let wch_len   = raw50[1] as usize;
-                let wch_trl   = if wch_len < raw50.len() { raw50[wch_len] } else { 0xFF };
-                let pdu_trl   = if (real_len + 2) < pdu.len() { pdu[real_len + 2] } else { 0xFF };
 
                 if struct_ok { struct_ok_count += 1; }
-                if struct_ok && _bit21 == 0 { crc_fail_count += 1; }
 
-                if valid_frame {
-                    // AdvA: pdu[2..8] little-endian (on-air LSB first → print MSB first).
-                    hal::print!("RX#{rx_count} {ch_label} type={pdu_type} len={real_len} \
-                        tx={tx_add} rx={rx_add} bb={bb_irq:#010x} irq08={irq08:#010x} \
-                        b21={_bit21} wlen={wch_len} wtrl={wch_trl:#04x} ptrl={pdu_trl:#04x} AdvA=");
+                if struct_ok {
+                    // AdvA: bytes 2..8, little-endian on-air → print MSB-first.
+                    hal::print!("RX#{rx_count} {ch_label}: type={pdu_type} len={real_len} AdvA=");
                     for i in (2..8).rev() {
                         hal::print!("{:02x}", pdu[i]);
                         if i > 2 { hal::print!(":"); }
                     }
 
-                    // AD structures from pdu[8 .. 2+real_len] (payload after 6-byte AdvA).
+                    // AD structures: iterate pdu[8 .. 2+real_len].
                     let ad_end = (2 + real_len).min(pdu.len());
                     let mut p = 8usize;
                     let mut any = false;
@@ -585,46 +501,24 @@ fn main() -> ! {
                                 let company = u16::from_le_bytes([pdu[p+2], pdu[p+3]]);
                                 hal::print!("Mfr={company:#06x}");
                             }
-                            _ => hal::print!("T{ad_type:#04x}({B}B)", B = ad_len - 1),
+                            _ => hal::print!("T{ad_type:#04x}({}B)", ad_len - 1),
                         }
                         p += 1 + ad_len;
                     }
                     if any { hal::print!("]"); }
-
-                    // Diagnostic dumps for trailer byte analysis:
-                    // prefix = raw50[0..pdu_off] (HW metadata), bytes_after = raw50[pdu_off+real_len+2..]
-                    let dump_end = (2 + real_len).min(pdu.len());
-                    hal::print!(" ad0={:02x} ad1={:02x}", pdu[8], pdu[9]);
-                    hal::print!(" pfx={:02x?}", &raw50[..pdu_off]);
-                    let after_start = pdu_off + 2 + real_len;
-                    if after_start + 6 <= raw50.len() {
-                        hal::print!(" after={:02x?}", &raw50[after_start..after_start+6]);
-                    }
-                    hal::println!(" pdu={:02x?}", &pdu[..dump_end]);
-                } else {
-                    // Failed structural gate — suppress most; keep first 5 + every 200.
-                    // raw16 = raw50[0..16]: HW prefix + PDU start bytes. Helps diagnose
-                    // dewhitening offset errors (type=11/7 seen in #3.6 disc frames).
-                    if rx_count <= 5 || rx_count % 200 == 0 {
-                        hal::print!("  disc#{rx_count} {ch_label} type={pdu_type} \
-                            len={real_len} rfu={} wlen={wch_len} bb={bb_irq:#010x} irq08={irq08:#010x}",
-                            rfu_ok as u8);
-                        hal::println!(" raw16={:02x?}", &raw50[..16]);
-                    }
+                    hal::println!();
                 }
 
-            } else if scan_count <= 10 || scan_count % 30 == 0 {
-                // Keepalive: print scan stats + register snapshot.
-                // First 10 scans printed individually (Lucy: observe state 0-3s post cold-boot).
-                // Then every 30 scans.
-                let bb38 = lle_read(0x38);  // BB IRQ status (real CRC/event register)
-                let bb08 = bb_read(0x08);   // LLE IRQ status (for comparison)
-                let bb64 = bb_read(0x64);   // LLE+0x64: 0=idle, non-zero=RX in progress
-                let bb1c = bb_read(0x1C);   // LLE state machine
-                let lle00 = bb_read(0x00);  // LLE+0x00: GO/state-bits (watch for SLEEP drift)
-                let lle74 = bb_read(0x74);  // LLE+0x74: diagnostic (EVT=0x83, stall=0x4c)
-                hal::println!("  scan#{scan_count} rx={rx_count} struct={struct_ok_count} {ch_label}: no frame | \
-                    bb_irq={bb38:#010x} lle_irq={bb08:#010x} rxbusy={bb64:#010x} state={bb1c:#04x} lle00={lle00:#010x} lle74={lle74:#04x}");
+            } else if scan_count <= 5 || scan_count % 50 == 0 {
+                // Keepalive: scan stats + register snapshot every 50 windows (first 5 individually).
+                // lle00=0x07 = HW exited scan mode (stuck signature). lle74=0x4c = stalled.
+                // EVT baseline: lle00=1 (scan active), lle74=0x83.
+                let lle_irq = bb_read(0x08);
+                let lle64   = bb_read(0x64);
+                let lle00   = bb_read(0x00);
+                let lle74   = bb_read(0x74);
+                hal::println!("  scan#{scan_count} rx={rx_count} struct={struct_ok_count} {ch_label}: \
+                    lle_irq={lle_irq:#010x} lle64={lle64:#010x} lle00={lle00:#010x} lle74={lle74:#04x}");
             }
 
             // Canonical per-window W1C: replicates lle_irq_process @ L71240 (Lucy d.asm).
@@ -643,39 +537,6 @@ fn main() -> ! {
                 if irq & (1 << 1)  != 0 { bb_write(0x08, 2);      }
                 if irq & (1 << 13) != 0 { bb_write(0x08, 0x2000); }
                 if irq & (1 << 15) != 0 { bb_write(0x08, 0x8000); }
-            }
-
-            // ── Patch #3.14: stuck-state detection + conditional cold re-init ────────────
-            //
-            // Observation: after ~3 real RX frames, HW exits scan mode and lle00 drops to
-            // 0x07 (no bit7/bit8 = scan-active not set). EVT ground truth: scan-active =
-            // lle00=1 (cold-boot RX GO result). 0x07 is an idle/terminal state HW transitions
-            // to when its internal scan session ends without a proper state-machine update.
-            //
-            // rx_traverse() writes bit7/bit8/channel to lle00 each window, but HW immediately
-            // overwrites back to 0x07 — traverse only works on an already-active HW.
-            //
-            // Fix: detect lle00==0x07 on a no-frame window, then reset SCAN_INITED so that the
-            // next rx_arm call runs rx_cold_init() (full LL_ScanSetRF sequence, ending with
-            // RX GO). This restarts HW from scratch for another burst of real RX windows.
-            //
-            // Expected pattern if hypothesis holds:
-            //   ~3 frames → stuck (lle00=0x07) → re-init → ~3 frames → stuck → re-init → ...
-            //   RX total = N × burst_size, continuously accumulating.
-            //
-            // Difference from #3.3 regression (cold re-init EVERY window): we only re-init
-            // when we detect the stuck signature, not on every iteration. Working sessions are
-            // never interrupted.
-            //
-            // Lucy note: also check lle04 (bit0 = RX GO). rx_cold_init includes
-            //   bb_write(0x04, v | 0x1)  (step 5 = scan-mode enable in LLE+0x04)
-            // so a full cold re-init restores both RX GO and scan-mode-enable.
-            if !got_frame {
-                let lle00_post = bb_read(0x00);
-                if lle00_post == 0x07 {
-                    // HW has left scan mode — force cold re-init next window.
-                    SCAN_INITED.store(false, Ordering::Relaxed);
-                }
             }
 
             ch_idx = (ch_idx + 1) % ADV_CHANNELS.len();
