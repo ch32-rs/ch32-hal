@@ -239,6 +239,18 @@ unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
         SCAN_INITED.store(true, Ordering::Relaxed);
         rx_cold_init(logical_ch, freq_khz);
     } else {
+        // Partial re-arm — restore lle00 bit7 (scan-active) before each window (patch #3.12).
+        //
+        // Canonical llScanTraverseaChannel (.L544) sets lle00 bit7 (scan-active mode).
+        // Snapshot (Cindy 2026-05-01): stuck state shows lle00=0x07 (bit7 absent);
+        // expected normal: lle00 = 0x80 | channel (e.g. 0xa5 ch37, 0xa7 ch39).
+        // HW clears bit7 after each RX window; we must restore it before the next.
+        //
+        // Single-variable test (#3.12): only this one write, no W1C/timer changes.
+        // If SCN > 20 → bit7 was the stuck signature. If unchanged → try W1C fix next.
+        let lle00 = bb_read(0x00);
+        bb_write(0x00, (lle00 & !0x180) | 0x80); // restore bit7 (scan-active mode)
+
         rx_window_timer_reload(); // .L562: mask 0x0C + W1C bit13 + lle64=406 + restore
         rx_traverse(logical_ch, freq_khz);
     }
@@ -303,18 +315,6 @@ unsafe fn rx_cold_init(logical_ch: u8, freq_khz: u32) {
 unsafe fn rx_traverse(logical_ch: u8, freq_khz: u32) {
     // Update RFEND PLL to new channel frequency.
     set_channel_freq(freq_khz);
-
-    // Restore LLE+0x74 to EVT baseline value each window (patch #3.11).
-    //
-    // Single-variable hypothesis (Lucy + Cindy 2026-05-01):
-    //   EVT stall snapshot: lle74=0x83 (working), Rust stall snapshot: lle74=0x4c.
-    //   0x83 and 0x4c are both < 1KB — too small for an SRAM address.
-    //   LLE_DevInit loads lle74 from a global array offset; semantic unknown (HW counter?
-    //   burst control? DMA status?). Writing 0x83 (EVT working value) restores EVT baseline.
-    //
-    // If this fixes SCN > 20 → lle74 confirmed as stuck register, 0x83 is correct restore.
-    // If SCN unchanged → lle74 is a passive status, try lle00 bit7 fix next (#3.12).
-    bb_write(0x74, 0x83);
 
     // llScanTraverseaChannel: W1C bit13 only (not full 0xF00F).
     // The IRQ handler normally W1Cs bit13 (scan-window-done event) per window.
@@ -381,7 +381,7 @@ fn main() -> ! {
     });
 
     hal::println!("BLE RX scanner — CH32V208 bedrock test");
-    hal::println!("Rotating ADV ch37/38/39 (patch #3.11: lle74=0x83 restore per window)  Looking for any advertiser...");
+    hal::println!("Rotating ADV ch37/38/39 (patch #3.12: lle00 bit7 scan-active restore)  Looking for any advertiser...");
 
     unsafe {
         let rcc_ctlr  = read_volatile(0x4002_1000 as *const u32);
