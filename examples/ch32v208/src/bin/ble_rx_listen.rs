@@ -138,9 +138,13 @@ unsafe fn ble_set_phy_rx_mode_normal() {
 /// IMPORTANT: call `RX_BUF.fill(0)` before arming so a stale `buf[1] != 0` from a
 /// previous receive is not misidentified as a new packet.
 unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
-    // 1. BB_CFG (+0x2C) bits[1:0] = 01 (RX/TX mode arm). Preserve bits[30:25] (rf_flag=0x09).
+    // 1. BB_CFG (+0x2C) bits[30:25] = logical_ch; bits[1:0] = 01 (RX mode arm).
+    //    bits[30:25]: HW whitening/CRC LUT channel selector.
+    //    From adv.rs: "without this, all ADV channels use channel-9 LUT (rf_flag=9
+    //    from bb_dev_init) → wrong whitening seed → CRC fail → no DMA write."
+    //    Write logical_ch (37/38/39) to override rf_flag=9. bit31,bit24:0 preserved.
     let cfg = lle_read(0x2C);
-    lle_write(0x2C, (cfg & !0x3) | 0x1);
+    lle_write(0x2C, (cfg & 0x81FF_FFFF) | ((logical_ch as u32 & 0x3F) << 25) | 0x1);
 
     // 2. Program PLL to channel frequency; sets RFEND+0x2C bit1=1 (channel lock).
     set_channel_freq(freq_khz);
@@ -282,54 +286,65 @@ fn main() -> ! {
             scan_count += 1;
 
             // Poll until packet received or window expires.
-            // buf[1] = PDU payload-length byte (DMA writes ≠ 0 when packet lands).
-            // LLE+0x64 counts down from RX_WINDOW_TIMEOUT; reaching 0 = no packet this window.
+            // DMA writes 32-bit words as bits arrive at 1 Mbps; buf[1] != 0 fires when
+            // the first word (bytes 0-3) lands — the rest of the payload is still in flight.
             let mut got_frame = false;
-            // Outer loop: hardware window + software watchdog for safety.
             for _ in 0..2_000_000u32 {
-                let len_byte = read_volatile(RX_BUF.as_ptr().add(1));
-                if len_byte != 0 {
+                if read_volatile(RX_BUF.as_ptr().add(1)) != 0 {
                     got_frame = true;
                     break;
                 }
-                // Hardware window expired?
-                if bb_read(0x64) == 0 {
-                    break;
-                }
+                if bb_read(0x64) == 0 { break; } // LLE window expired
                 core::hint::spin_loop();
             }
 
             if got_frame {
+                // Settle: wait for DMA to finish writing the rest of the packet.
+                // At 1 Mbps a max ADV (2+37B PDU + 3B CRC = 42B) takes 336 µs on-air.
+                // We detected after the first 32-bit word (~32 µs), so need ~304 µs more.
+                // 40_000 nops @ 96 MHz ≈ 417 µs — covers full packet + margin.
+                for _ in 0..40_000u32 { core::hint::spin_loop(); }
+
                 rx_count += 1;
-                let hdr0    = RX_BUF[0];
-                let raw_len = (RX_BUF[1] & 0x3F) as usize;
-                let frame_end = (2 + raw_len).min(RX_BUF.len());
 
-                // Snapshot raw bytes before dewhitening.
-                let raw_snap: [u8; 10] = {
-                    let mut s = [0u8; 10];
-                    for (i, b) in s.iter_mut().enumerate() {
-                        if i < frame_end { *b = RX_BUF[i]; }
-                    }
-                    s
-                };
+                // Snapshot raw bytes (whitened, as written by DMA) for diagnostics.
+                // 50 bytes: enough for max ADV PDU (2+37) + trailer + safety margin.
+                let mut raw50 = [0u8; 50];
+                for (i, r) in raw50.iter_mut().enumerate() {
+                    *r = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(i));
+                }
 
-                // Dewhiten header + payload in-place.
+                // Dewhiten a header copy to get the real PDU type and length.
+                // raw buf[1] is the WHITENED length byte — meaningless as a length.
+                let mut hdr = [raw50[0], raw50[1]];
+                dewhiten_inplace(&mut hdr, logical_ch);
+                let pdu_type = hdr[0] & 0x0F;
+                let real_len = (hdr[1] as usize).min(39); // BLE 4.x ADV max 37B
+                let frame_end = (2 + real_len).min(RX_BUF.len());
+
+                // Dewhiten full frame in-place.
                 dewhiten_inplace(&mut RX_BUF[..frame_end], logical_ch);
 
-                let pdu_type = RX_BUF[0] & 0x0F;
-                let length   = RX_BUF[1] & 0x3F;
+                // Check hardware status byte at buf[frame_end] (BLE Core PDU layout):
+                //   buf[2 + payload_len] = 0x80  →  CRC passed, frame OK.
+                // Note: frame_end (=2+real_len) is NOT included in the dewhiten slice above,
+                // so RX_BUF[frame_end] is the raw hardware-written trailer byte.
+                // (Lucy asm rf_rx_basic_rxProcess uses buf[buf[1]] which may fold the +2 offset
+                //  into buf[1] depending on WCH encoding; raw50 dump will clarify the layout.)
+                let crc_ok = frame_end < RX_BUF.len() && RX_BUF[frame_end] == 0x80;
 
-                hal::print!("RX#{rx_count} {ch_label}: raw_hdr=0x{hdr0:02x} type={pdu_type} len={length}");
+                hal::print!("RX#{rx_count} {ch_label} type={pdu_type} len={real_len} crc={}",
+                    if crc_ok { "OK" } else { "?" });
 
-                if length >= 6 && frame_end >= 8 {
+                if real_len >= 6 && frame_end >= 8 {
                     hal::print!(" AdvA=");
                     for i in (2..8).rev() {
                         hal::print!("{:02x}", RX_BUF[i]);
                         if i > 2 { hal::print!(":"); }
                     }
                 }
-                hal::println!(" raw=[{:02x?}]", &raw_snap[..frame_end.min(10)]);
+                // raw50: first 50 whitened bytes as DMA wrote them — layout diagnostic.
+                hal::println!(" raw50={:02x?}", &raw50);
 
             } else if scan_count % 30 == 0 {
                 // Keepalive: print scan stats + register snapshot.
