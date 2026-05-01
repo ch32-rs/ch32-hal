@@ -173,8 +173,13 @@ unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
     // 9. CRC init value.
     lle_write(0x04, ADV_CRC_INIT);
 
-    // 10. RX DMA buffer pointer: LLE+0x70 = &RX_BUF.
-    bb_write(0x70, addr_of!(RX_BUF) as u32);
+    // 10. RX DMA buffer pointer: LLE+0x74 = &RX_BUF (MEMAddr).
+    //
+    // LLE+0x70 is the TX-specific buffer slot (used by ble_dtm_tx.rs, works for TX).
+    // LLE+0x74 is MEMAddr — the general DMA landing zone for received packets.
+    // WCH rf_rx_basic_rxProcess reads: s1 = gBleIPPara[36] = MEMAddr; len = *(s1+1).
+    // lle_dev_init() already wrote LLE+0x74 = LLE_DMA_BUF; overwrite with RX_BUF here.
+    bb_write(0x74, addr_of!(RX_BUF) as u32);
 
     // 11. LLE+0x04 bit0 clear (LL_ReceiverTest asm L_c8: "lle_modify(0x04, 0x1, 0)").
     let v = bb_read(0x04);
