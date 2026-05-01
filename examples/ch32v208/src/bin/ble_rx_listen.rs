@@ -12,14 +12,22 @@
 //! ```
 //! This swapped naming is intentional for compatibility with the WCH asm decode flow.
 //!
-//! # Key RX sequence (LL_ScanSetRF, d.asm L62824 — confirmed 2026-05-01)
+//! # Key RX sequences (Lucy d.asm, 2026-05-01)
 //!
-//! rx_arm() follows LL_ScanSetRF exactly, NOT LL_ReceiverTest (which was wrong for Observer):
-//! - LLE+0x64 = 0 before GO (HW raises on GO, clears on done; 0 = idle/done)
-//! - LLE+0x08 W1C 0x2000 (clear stale bit13 IRQ before new window)
-//! - LLE+0x04 |= 1 (scan mode enable; ReceiverTest CLEARS this — opposite polarity!)
-//! - Channel written FIRST, then bit8=1 (RX-mode marker)
-//! - irq08 bit1 OR bit2 = RX done (WCH LLE_IRQSubHandler .L5 path)
+//! Two functions discovered — patch #3.4 dual-track:
+//!
+//! ## Cold boot: LL_ScanSetRF (L62824) — run ONCE
+//! Full register init + final RX GO (LLE+0x00 = 1 via bb_write).
+//! Pulls HW out of default state into active RX for the first window.
+//!
+//! ## Per-window: llScanTraverseaChannel (L62961) — run every subsequent window
+//! Minimal state-machine transition: W1C bit13, bit7→bit8 transitions in LLE+0x00,
+//! PRE_DELAY + RFEND PA reset, then `(ctrl & !0x7F) | channel` final write.
+//! **Does NOT write RX GO (bit0=1)** — HW is already live; full re-init would push
+//! it back to SLEEP.
+//!
+//! Root cause of patch #3.3 failure: running LL_ScanSetRF every window over-resets
+//! the state machine. HW entered SLEEP after the startup burst and never re-emerged.
 //!
 //! # Expected output (success)
 //!
@@ -35,7 +43,11 @@
 #![no_main]
 
 use core::ptr::{addr_of, read_volatile, write_volatile};
+use core::sync::atomic::{AtomicBool, Ordering};
 use {ch32_hal as hal, panic_halt as _};
+
+/// Guards cold-boot init — only LL_ScanSetRF runs once; subsequent windows use traverse.
+static SCAN_INITED: AtomicBool = AtomicBool::new(false);
 
 // ── Register base addresses (swapped WCH naming — see module doc) ────────────
 
@@ -173,44 +185,48 @@ unsafe fn ble_set_phy_rx_mode_normal() {
     lle_write(0x00, (ctrl & !0x3000) | 0x1000);
 }
 
-// ── RX arm / GO ───────────────────────────────────────────────────────────────
+// ── RX arm / GO — dual-track: cold boot vs per-window ────────────────────────
 
-/// Arm the BLE receiver for one scan window on `logical_ch` / `freq_khz`.
+/// Arm the BLE receiver: cold-boot on first call, per-window traverse on subsequent calls.
 ///
-/// Sequence follows `LL_ScanSetRF` (d.asm L62824), NOT `LL_ReceiverTest`.
-/// Observer/scan path differs from DTM ReceiverTest in three critical ways:
-///   1. LLE+0x04 bit0 **SET** (scan mode enable) — ReceiverTest CLEARS it (opposite!)
-///   2. LLE+0x64 written 0 before GO — HW self-raises on GO, clears on completion
-///   3. Channel written FIRST in BB+0x00, then bit8 RX-mode marker (not the other way)
+/// Architecture (patch #3.4, Lucy d.asm, 2026-05-01):
 ///
-/// IMPORTANT: clear RX_BUF to 0 and W1C BB+0x38 before calling.
+/// Cold boot (`LL_ScanSetRF`, L62824): full register init + RX GO.
+///   Run once to pull HW from init state into active RX.
+///
+/// Per-window (`llScanTraverseaChannel`, L62961): minimal state-machine transition.
+///   W1C bit13 → bit7 transition → bit8 transition → channel update → done.
+///   **No RX GO (bit0=1)** — HW is already live; writing full re-init pushed HW to SLEEP.
+///
+/// Root cause of #3.3 failure:
+///   LL_ScanSetRF every window over-reset the state machine. HW entered SLEEP (state=0x6c)
+///   after the first real timeout and ignored all subsequent GO commands.
 unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
+    if !SCAN_INITED.load(Ordering::Relaxed) {
+        SCAN_INITED.store(true, Ordering::Relaxed);
+        rx_cold_init(logical_ch, freq_khz);
+    } else {
+        rx_traverse(logical_ch, freq_khz);
+    }
+}
+
+/// Cold-boot RX init: full `LL_ScanSetRF` (L62824) + RX GO. Call once.
+unsafe fn rx_cold_init(logical_ch: u8, freq_khz: u32) {
     // Pre: program PLL to target channel frequency (sets RFEND+0x2C bit1=1 = channel lock).
     set_channel_freq(freq_khz);
 
     // LL_ScanSetRF step 1: LLE+0x64 = 0.
-    // Semantic: 0 = RX idle. HW raises this non-zero on RX GO; clears when RX completes.
-    // Previous code wrote RX_WINDOW_TIMEOUT here — WRONG; that confused "HW busy" signal
-    // with a software-controlled countdown, causing the poll loop to see premature exits.
     bb_write(0x64, 0);
 
-    // LL_ScanSetRF step 2: LLE+0x08 W1C — clear all stale IRQ event bits.
-    // WCH writes 0x2000 (bit13 only) because their LLE_IRQHandler auto-W1C's bit1/bit2
-    // on every RX-done interrupt. We have NO IRQ handler, so bit1/bit2 stay set across
-    // windows and cause the poll loop to break immediately on stale state.
-    // Use 0xF00F (= lle_dev_init's IRQ mask: bits 0-3 + bits 12-15) to W1C all
-    // enabled IRQ bits while leaving hardware status bits (bits 25-28) untouched.
-    // (d.asm L71020 LLE_IRQSubHandler — W1C mask source)
+    // LL_ScanSetRF step 2: LLE+0x08 W1C — clear stale IRQ bits.
+    // Use 0xF00F (lle_dev_init mask: bits 0-3 + 12-15) for cold-boot clearing.
     bb_write(0x08, 0xF00F);
 
     // LL_ScanSetRF step 3: BB+0x08 = ADV AA, BB+0x04 = CRC seed.
     lle_write(0x08, ADV_AA);
     lle_write(0x04, ADV_CRC_INIT);
 
-    // LL_ScanSetRF step 4: LLE+0x04 |= 1 (scan mode enable).
-    // CRITICAL: previous code had this as `& !0x1` (clear) — that was LL_ReceiverTest
-    // polarity (DTM mode). For Observer/scan, bit0 must be SET. This is likely the
-    // primary reason HW never completed RX (irq08 bit1/bit2 never fired).
+    // LL_ScanSetRF step 4: LLE+0x04 |= 1 (scan mode enable; DTM ReceiverTest CLEARS it).
     let v = bb_read(0x04);
     bb_write(0x04, v | 0x1);
 
@@ -221,32 +237,64 @@ unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
     let v = rfend_read(0x2C);
     rfend_write(0x2C, v & !(1 << 1));
 
-    // LL_ScanSetRF step 7: BB+0x00 bits[5:0] = logical_ch (no 0x40).
-    // Channel must be written BEFORE bit8 RX-mode marker (step 8).
-    // Earlier code wrote bit8 first then channel — wrong order.
+    // LL_ScanSetRF step 7: BB+0x00 bits[5:0] = logical_ch. Channel BEFORE bit8.
     let ctrl = lle_read(0x00);
     lle_write(0x00, (ctrl & !0x7F) | (logical_ch as u32 & 0x3F));
 
-    // LL_ScanSetRF step 8: BB+0x00 bits[8:7] = 10b (RX-mode marker, written AFTER channel).
+    // LL_ScanSetRF step 8: BB+0x00 bits[8:7] = 10b (RX-mode marker, AFTER channel).
     let ctrl = lle_read(0x00);
     lle_write(0x00, (ctrl & !0x180) | 0x100);
 
     // LL_ScanSetRF step 9: RFEND+0x08 |= 0x330000 (PA/LNA/RX path enable).
-    // Placed after channel + RX-mode marker (LL_ScanSetRF order).
     let ana = rfend_read(0x08);
     rfend_write(0x08, ana | 0x0033_0000);
 
-    // LL_ScanSetRF step 10: LLE+0x50 = 89 (PRE_DELAY; TX uses 90).
+    // LL_ScanSetRF step 10: LLE+0x50 = 89 (PRE_DELAY).
     bb_write(0x50, 89);
 
-    // Polling-mode addition: write scan window countdown to LLE+0x64 just before GO.
-    // LL_ScanSetRF (IRQ-driven) leaves LLE+0x64=0; we need a timeout for our polling model.
-    // HW decrements from SCAN_WINDOW; poll loop checks == 0 to detect window expiry.
-    // (This write must come AFTER step 1's clearing and BEFORE RX GO.)
+    // Write scan-window countdown before GO (polling-model addition).
     bb_write(0x64, SCAN_WINDOW);
 
-    // LL_ScanSetRF step 11: RX GO — always the last write.
+    // LL_ScanSetRF step 11: RX GO — always the last write. Pulls HW into active RX.
     bb_write(0x00, 1);
+}
+
+/// Per-window RX advance: `llScanTraverseaChannel` style (L62961). No full re-init.
+///
+/// Follows the per-window state-machine transition sequence from d.asm, which does NOT
+/// write RX GO (bit0=1). HW remains live from the cold-boot GO; the traverse just
+/// switches channel and nudges the state machine without resetting it.
+unsafe fn rx_traverse(logical_ch: u8, freq_khz: u32) {
+    // Update RFEND PLL to new channel frequency.
+    set_channel_freq(freq_khz);
+
+    // llScanTraverseaChannel: W1C bit13 only (not full 0xF00F).
+    // The IRQ handler normally W1Cs bit13 (scan-window-done event) per window.
+    // We have no handler, so do it manually. Bits 1/2 (RX-done) are NOT cleared here
+    // — they will be set naturally when HW completes a reception.
+    bb_write(0x08, 0x2000);
+
+    // State-machine transition step 1: set bit7 in LLE+0x00.
+    // llScanTraverseaChannel clears bits[8:7] then sets bit7 first (.L544 step 1).
+    let c = bb_read(0x00);
+    bb_write(0x00, (c & !0x180) | 0x80);
+
+    // State-machine transition step 2: set bit8 (second transition after bit7).
+    // (.L544 step 4: clear bits[8:7] again, set bit8)
+    let c = bb_read(0x00);
+    bb_write(0x00, (c & !0x180) | 0x100);
+
+    // PRE_DELAY = 89 and RFEND PA reset (clear RFEND+0x2C bit1).
+    bb_write(0x50, 89);
+    let v = rfend_read(0x2C);
+    rfend_write(0x2C, v & !0x02);
+
+    // Final write: set new channel bits[5:0], preserve bit7+bit8 from above.
+    // (.L544 end: andi a4,-128; or a4,a4,channel; sw a4,0(a5))
+    // — keeps bits[8:7] from the state transitions, replaces bits[6:0] with channel.
+    let c = bb_read(0x00);
+    bb_write(0x00, (c & !0x7F) | (logical_ch as u32 & 0x3F));
+    // No RX GO write: HW is already in active scan from cold-boot.
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -510,14 +558,17 @@ fn main() -> ! {
                     }
                 }
 
-            } else if scan_count % 30 == 0 {
+            } else if scan_count <= 10 || scan_count % 30 == 0 {
                 // Keepalive: print scan stats + register snapshot.
+                // First 10 scans printed individually (Lucy: observe state 0-3s post cold-boot).
+                // Then every 30 scans.
                 let bb38 = lle_read(0x38);  // BB IRQ status (real CRC/event register)
                 let bb08 = bb_read(0x08);   // LLE IRQ status (for comparison)
                 let bb64 = bb_read(0x64);   // LLE+0x64: 0=idle, non-zero=RX in progress
                 let bb1c = bb_read(0x1C);   // LLE state machine
-                hal::println!("  scan#{scan_count} rx={rx_count} struct={struct_ok_count} crc_fail={crc_fail_count} {ch_label}: no frame | \
-                    bb_irq={bb38:#010x} lle_irq={bb08:#010x} rxbusy={bb64} state={bb1c:#04x}");
+                let lle00 = bb_read(0x00);  // LLE+0x00: GO/state-bits (watch for SLEEP drift)
+                hal::println!("  scan#{scan_count} rx={rx_count} struct={struct_ok_count} {ch_label}: no frame | \
+                    bb_irq={bb38:#010x} lle_irq={bb08:#010x} rxbusy={bb64:#010x} state={bb1c:#04x} lle00={lle00:#010x}");
             }
 
             ch_idx = (ch_idx + 1) % ADV_CHANNELS.len();
