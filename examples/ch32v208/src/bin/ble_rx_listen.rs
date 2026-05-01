@@ -303,10 +303,14 @@ unsafe fn rx_traverse(logical_ch: u8, freq_khz: u32) {
     let c = bb_read(0x00);
     bb_write(0x00, (c & !0x7F) | (logical_ch as u32 & 0x3F));
     // No RX GO write: HW is already in active scan from cold-boot.
-    // No SCAN_WINDOW write here: patch #3.6 showed that writing 0x64 in traverse
-    // (without a paired RX GO) pushes HW into SLEEP after 2 windows — HW interprets
-    // the countdown-to-0 as "window expired, no GO follows → sleep".
-    // Per-window timeout is now a pure software iteration count in the poll loop.
+    // No LLE+0x1C write: 0x6c is EVT's normal idle/post-RX state (EVT SDI confirmed).
+
+    // Schedule next window timer: llScanProcess (.L562, L63159) W1Cs bit13 (already done
+    // above) then writes LLE+0x64 = 406 (0x196). This is the SW-managed per-window timer.
+    // 406 is the confirmed d.asm value; EVT SDI lle64=0x107a was the HW mid-countdown
+    // sample, NOT the software-written initial value (Lucy d.asm 2026-05-01).
+    bb_write(0x64, 406);
+    // LLE+0x0C: llScanProcess also writes this; value pending Lucy's d.asm scan.
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -343,7 +347,7 @@ fn main() -> ! {
     });
 
     hal::println!("BLE RX scanner — CH32V208 bedrock test");
-    hal::println!("Rotating ADV ch37/38/39 (Plan A3: SW poll + wtrl gate, no 0x64 in traverse, cold-init sw={})  Looking for any advertiser...", SCAN_WINDOW);
+    hal::println!("Rotating ADV ch37/38/39 (patch #3.8: pdu_off=0 + 0x64=0x107a/traverse)  Looking for any advertiser...");
 
     unsafe {
         let rcc_ctlr  = read_volatile(0x4002_1000 as *const u32);
@@ -469,21 +473,22 @@ fn main() -> ! {
 
                 // ── Decode: structural PDU validity gate ─────────────────────────────────
                 //
-                // patch #2.5 (2026-05-01): bit21 confirmed NOT CRC-OK in non-DTM mode —
-                // it was a DTM PRBS sync event (bit21=0/3438 after removing DTM bits).
-                // Lucy: real CRC-OK bit is still unknown; hunting in d.asm bb_irq_handler.
-                // Meanwhile: structural gate only, add struct_ok_but_crc_fail counter.
-                // Bits 1,6 in bb_irq at 0x001e8046/66 may carry the real CRC status.
                 let _bit21 = (bb_irq >> 21) & 1; // keep for stats; NOT used as gate
                 //
-                // Channel-specific PDU offset (confirmed 2026-05-01):
-                //   ch37 → 8-byte HW prefix → PDU at DMA offset 8
-                //   ch38, ch39 → 9-byte HW prefix → PDU at DMA offset 9
-                let pdu_off: usize = if logical_ch == 37 { 8 } else { 9 };
+                // PDU layout (patch #3.8, confirmed by Cindy raw16 2026-05-01):
+                //   DMA buffer offset 0 = PDU header byte 0 (type/TxAdd/RxAdd)
+                //   DMA buffer offset 1 = PDU header byte 1 (len, RFU=0)
+                //   DMA buffer offset 2..8 = AdvA (6 bytes, little-endian)
+                //   DMA buffer offset 8..  = AD structures
+                //
+                // HW DOES dewhiten in scan mode (opposite of earlier DTM analysis):
+                //   raw16 data confirmed valid BLE ADV_IND at offset 0 with canonical
+                //   Flags/Mfr AD structures. No software dewhitening needed.
+                //   Earlier "8-9 byte prefix + SW dewhiten" was based on ghost frames.
+                let pdu_off: usize = 0;
                 let mut pdu = [0u8; 41];
                 pdu.copy_from_slice(&raw50[pdu_off..pdu_off + 41]);
-                // HW does NOT dewhiten before DMA (confirmed 2026-05-01, LFSR 35/35 verified).
-                dewhiten_inplace(&mut pdu, logical_ch);
+                // dewhiten_inplace(&mut pdu, logical_ch); // NOT needed: HW dewhitens in scan mode
 
                 let pdu_type = pdu[0] & 0x0F;
                 let real_len = ((pdu[1] & 0x3F) as usize).min(37); // ADV max 37B
@@ -587,6 +592,24 @@ fn main() -> ! {
                 let lle00 = bb_read(0x00);  // LLE+0x00: GO/state-bits (watch for SLEEP drift)
                 hal::println!("  scan#{scan_count} rx={rx_count} struct={struct_ok_count} {ch_label}: no frame | \
                     bb_irq={bb38:#010x} lle_irq={bb08:#010x} rxbusy={bb64:#010x} state={bb1c:#04x} lle00={lle00:#010x}");
+            }
+
+            // Canonical per-window W1C: replicates lle_irq_process @ L71240 (Lucy d.asm).
+            // Rules confirmed from d.asm:
+            //   - Each bit W1C'd independently — NEVER merge (e.g. writing 0x06 for bit1+bit2
+            //     broke state machine in patch #3.5: SCN 2575→21)
+            //   - bit2: frame received (write 4)
+            //   - bit1: alt RX path (write 2; no state write in canonical handler)
+            //   - bit13: scan-window-timeout (write 0x2000)
+            //   - bit15: timer event (write 0x8000)
+            //   - NO LLE+0x64 write: HW manages timer autonomously
+            //   - NO LLE+0x1C write: 0x6c is normal idle state (EVT SDI confirmed)
+            {
+                let irq = bb_read(0x08);
+                if irq & (1 << 2)  != 0 { bb_write(0x08, 4);      }
+                if irq & (1 << 1)  != 0 { bb_write(0x08, 2);      }
+                if irq & (1 << 13) != 0 { bb_write(0x08, 0x2000); }
+                if irq & (1 << 15) != 0 { bb_write(0x08, 0x8000); }
             }
 
             ch_idx = (ch_idx + 1) % ADV_CHANNELS.len();
