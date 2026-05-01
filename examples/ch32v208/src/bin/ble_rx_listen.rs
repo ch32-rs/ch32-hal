@@ -198,23 +198,6 @@ unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
     bb_write(0x00, 1);
 }
 
-// ── BLE de-whitening ──────────────────────────────────────────────────────────
-
-/// BLE LFSR de-whitening: x^7 + x^4 + 1, seed = {1, ch\[5:0\]}.
-fn dewhiten_inplace(data: &mut [u8], logical_ch: u8) {
-    let mut lfsr = (logical_ch & 0x3F) | 0x40;
-    for byte in data.iter_mut() {
-        let mut wbyte = 0u8;
-        for bit in 0..8u8 {
-            let wbit = lfsr & 1;
-            wbyte |= wbit << bit;
-            let fb = ((lfsr >> 6) ^ (lfsr >> 3)) & 1;
-            lfsr = ((lfsr >> 1) | (fb << 6)) & 0x7F;
-        }
-        *byte ^= wbyte;
-    }
-}
-
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[qingke_rt::entry]
@@ -307,55 +290,61 @@ fn main() -> ! {
 
                 rx_count += 1;
 
-                // Snapshot raw bytes (whitened, as written by DMA) for diagnostics.
+                // Snapshot raw bytes (HW-dewhitened by BB before DMA write) for diagnostics.
                 // 50 bytes: enough for max ADV PDU (2+37) + trailer + safety margin.
                 let mut raw50 = [0u8; 50];
                 for (i, r) in raw50.iter_mut().enumerate() {
                     *r = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(i));
                 }
 
-                // Dewhiten a header copy to get the real PDU type and length.
-                // raw buf[1] is the WHITENED length byte — meaningless as a length.
-                let mut hdr = [raw50[0], raw50[1]];
-                dewhiten_inplace(&mut hdr, logical_ch);
-                let pdu_type = hdr[0] & 0x0F;
-                // BLE PDU length field is 6 bits [5:0]; bits[7:6] are RFU.
-                // Without the & 0x3F mask, XOR noise in the RFU bits causes
-                // hdr[1] > 39 → clamped to 39 → wrong frame_end for short packets.
-                let real_len = (hdr[1] as usize & 0x3F).min(63); // 6-bit field, cap at 63
-                let frame_end = (2 + real_len).min(RX_BUF.len() - 1);
+                // HW BB dewhitens before DMA write (confirmed by Lucy asm decode 2026-05-01):
+                // - WCH BLE_LIB has zero software dewhiten calls in all .o files.
+                // - BB+0x00 bits[6:0] = channel|0x40 IS the hardware LFSR seed register.
+                // - rf_rx_basic_rxProcess reads s1[1] as length with no per-byte LFSR loop.
+                // Therefore raw50 IS the already-dewhitened PDU — read fields directly.
+                let pdu_type = raw50[0] & 0x0F;
+                // BLE PDU length field is 6 bits [5:0]; bits[7:6] are TxAdd/RxAdd flags
+                // or RFU — mask to 6 bits for the payload byte count.
+                let real_len = (raw50[1] as usize & 0x3F).min(37); // ADV max 37B payload
+                let frame_end = 2 + real_len; // index of hardware status byte
 
-                // Dewhiten full frame in-place.
-                dewhiten_inplace(&mut RX_BUF[..frame_end], logical_ch);
+                // PDU header byte 0 flag bits: TxAdd (bit6) = sender random addr; RxAdd (bit7).
+                let tx_add = (raw50[0] >> 6) & 1;
+                let rx_add = (raw50[0] >> 7) & 1;
 
-                // Check hardware status byte at buf[frame_end] (BLE Core PDU layout):
-                //   buf[2 + payload_len] = 0x80  →  CRC passed, frame OK.
-                // Note: frame_end (=2+real_len) is NOT included in the dewhiten slice above,
-                // so RX_BUF[frame_end] is the raw hardware-written trailer byte.
-                // (Lucy asm rf_rx_basic_rxProcess uses buf[buf[1]] which may fold the +2 offset
-                //  into buf[1] depending on WCH encoding; raw50 dump will clarify the layout.)
-                let crc_ok = frame_end < RX_BUF.len() && RX_BUF[frame_end] == 0x80;
+                // Read LLE IRQ status (bb_read(0x08) = gptrLLEReg+0x08) — may carry CRC bits.
+                let lirq = bb_read(0x08);
 
-                // Find first 0x80 in raw50 (raw/whitened) — hardware trailer position.
-                // The HW writes 0x80 at buf[2+payload_len] on CRC OK (after settle,
-                // this tells us the real trailer index independent of our decode).
+                // CRC status: hardware writes 0x80 at raw50[frame_end] on CRC pass.
+                // (Lucy: rf_rx_basic_rxProcess writes buf[buf[1]] = 0x80 on CRC OK; with
+                //  HW dewhiten, buf[1] = real payload len, so trailer at 2+len = frame_end.)
+                let crc_ok = frame_end < raw50.len() && raw50[frame_end] == 0x80;
+
+                // First 0x80 position in the dewhitened raw50 — should cluster at frame_end
+                // for CRC-OK packets (trailer byte) after this fix.
                 let raw_trailer_idx = raw50.iter().position(|&b| b == 0x80);
 
-                hal::print!("RX#{rx_count} {ch_label} type={pdu_type} len={real_len} crc={}",
+                hal::print!(
+                    "RX#{rx_count} {ch_label} type={pdu_type} len={real_len} \
+                     tx={tx_add} rx={rx_add} crc={} lirq={lirq:#010x}",
                     if crc_ok { "OK" } else { "?" });
 
                 if let Some(ti) = raw_trailer_idx {
-                    hal::print!(" t80={ti}");
+                    // at_fe=true → trailer aligns with BLE spec (2+real_len) — expected for CRC-OK.
+                    // at_len=true → trailer aligns with raw50[1] raw value (WCH asm alternate).
+                    let at_fe  = ti == frame_end;
+                    let at_len = ti == (raw50[1] as usize);
+                    hal::print!(" t80={ti}(fe={at_fe},l={at_len})");
                 }
 
                 if real_len >= 6 && frame_end >= 8 {
                     hal::print!(" AdvA=");
                     for i in (2..8).rev() {
-                        hal::print!("{:02x}", RX_BUF[i]);
+                        hal::print!("{:02x}", raw50[i]);
                         if i > 2 { hal::print!(":"); }
                     }
                 }
-                // raw50: first 50 whitened bytes as DMA wrote them — layout diagnostic.
+                // raw50: first 50 dewhitened bytes (BB HW dewhitens before DMA write).
                 hal::println!(" raw50={:02x?}", &raw50);
 
             } else if scan_count % 30 == 0 {
