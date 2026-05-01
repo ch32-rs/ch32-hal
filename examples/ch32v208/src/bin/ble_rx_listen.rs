@@ -117,6 +117,12 @@ const ADV_CHANNELS: [(u8, u32, &str); 3] = [
     (39, 2_480_000, "ch39/2480MHz"),
 ];
 
+/// Scan window duration written to LLE+0x64 just before RX GO (polling model addition).
+/// LL_ScanSetRF (IRQ-driven Observer) writes 0 here (no countdown needed; IRQ fires on done).
+/// In our polling model we need a window bound: HW counts down from this value; == 0 means
+/// window expired. At ~30 cycles/iter × 400_000 iters / 96 MHz ≈ 125 ms per channel.
+const SCAN_WINDOW: u32 = 400_000;
+
 // ── RX DMA buffer ─────────────────────────────────────────────────────────────
 
 /// DMA RX buffer: PDU header (2B) + AdvA (6B) + payload (≤31B) + CRC (3B) + margin.
@@ -233,6 +239,12 @@ unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
     // LL_ScanSetRF step 10: LLE+0x50 = 89 (PRE_DELAY; TX uses 90).
     bb_write(0x50, 89);
 
+    // Polling-mode addition: write scan window countdown to LLE+0x64 just before GO.
+    // LL_ScanSetRF (IRQ-driven) leaves LLE+0x64=0; we need a timeout for our polling model.
+    // HW decrements from SCAN_WINDOW; poll loop checks == 0 to detect window expiry.
+    // (This write must come AFTER step 1's clearing and BEFORE RX GO.)
+    bb_write(0x64, SCAN_WINDOW);
+
     // LL_ScanSetRF step 11: RX GO — always the last write.
     bb_write(0x00, 1);
 }
@@ -271,7 +283,7 @@ fn main() -> ! {
     });
 
     hal::println!("BLE RX scanner — CH32V208 bedrock test");
-    hal::println!("Rotating ADV ch37/38/39 (LL_ScanSetRF path)  Looking for any advertiser...");
+    hal::println!("Rotating ADV ch37/38/39 (LL_ScanSetRF path) window={}  Looking for any advertiser...", SCAN_WINDOW);
 
     unsafe {
         let rcc_ctlr  = read_volatile(0x4002_1000 as *const u32);
@@ -310,25 +322,25 @@ fn main() -> ! {
             rx_arm(logical_ch, freq_khz);
             scan_count += 1;
 
-            // Poll until packet received or software safety timeout.
-            // Two exit conditions (either fires got_frame=true):
-            //   A. RX_BUF[1] != 0 — DMA started writing bytes (early trigger; need settle delay)
-            //   B. irq08 (LLE+0x08) bit1 OR bit2 — WCH IRQSubHandler .L5 RX-done path
-            //      (HW declares a valid, CRC-checked frame complete; DMA already finished)
-            // NOTE: bb_read(0x64)==0 is REMOVED. LLE+0x64=0 now means "RX idle" not "timeout".
-            //   HW raises LLE+0x64 on GO and clears it on completion; checking for 0 was
-            //   causing premature exits before HW finished receiving.
+            // Poll until packet received or scan window expires.
+            // Exit conditions (in priority order):
+            //   A. RX_BUF[1] != 0 — DMA started writing (early trigger; need settle delay)
+            //   B. irq08 bit1|bit2 — HW declared valid CRC-OK frame (Lucy d.asm L69423)
+            //   C. bb_read(0x64) == 0 — scan window countdown expired (restored in #3.2)
+            //      LLE+0x64 was written SCAN_WINDOW before GO; HW decrements it;
+            //      == 0 means window over. 2M spin is a software safety backstop.
             let mut got_frame = false;
             for _ in 0..2_000_000u32 {
                 if read_volatile(RX_BUF.as_ptr().add(1)) != 0 {
                     got_frame = true;
                     break;
                 }
-                // irq08 bit1 OR bit2 = RX done (Lucy d.asm L69423 ll_rx_wait_finish).
+                // irq08 bit1 OR bit2 = RX done (WCH IRQSubHandler .L5 RX-done path).
                 if (bb_read(0x08) & 0x06) != 0 {
                     got_frame = true;
                     break;
                 }
+                if bb_read(0x64) == 0 { break; } // LLE window countdown expired
                 core::hint::spin_loop();
             }
 
