@@ -305,12 +305,24 @@ unsafe fn rx_traverse(logical_ch: u8, freq_khz: u32) {
     // No RX GO write: HW is already in active scan from cold-boot.
     // No LLE+0x1C write: 0x6c is EVT's normal idle/post-RX state (EVT SDI confirmed).
 
-    // Schedule next window timer: llScanProcess (.L562, L63159) W1Cs bit13 (already done
-    // above) then writes LLE+0x64 = 406 (0x196). This is the SW-managed per-window timer.
-    // 406 is the confirmed d.asm value; EVT SDI lle64=0x107a was the HW mid-countdown
-    // sample, NOT the software-written initial value (Lucy d.asm 2026-05-01).
-    bb_write(0x64, 406);
-    // LLE+0x0C: llScanProcess also writes this; value pending Lucy's d.asm scan.
+    // Schedule next window timer: canonical llScanProcess (.L562, L63159) mask/restore sequence.
+    //
+    // d.asm sequence (patch #3.9, Lucy 2026-05-01):
+    //   50: lw a3, 12(a2)           # a3 = lle0C (= 0xF00F)
+    //   52: and a5, a5, a3          # a5 = ~0x2000 & 0xF00F = 0xD00F
+    //   54: sw a5, 12(a2)           # lle0C = 0xD00F  — mask bit13 IRQ temporarily
+    //   5E: sw a4, 8(a5)            # W1C bit13 (lle08 = 0x2000)
+    //   82: sw a4, 100(a5)          # lle64 = 406  — reload window timer
+    //   84: sw a3, 12(a5)           # lle0C = 0xF00F  — restore IRQ mask
+    //
+    // Masking bit13 before the reload prevents a spurious bit13 IRQ from firing during
+    // the timer reload window (bit13 = scan-window-timeout, triggers on timer expiry).
+    // 406 (0x196) is the confirmed d.asm value; EVT SDI lle64=0x107a was HW mid-countdown.
+    let lle0c_orig = bb_read(0x0C);           // should be 0xF00F (LLE_DevInit default)
+    bb_write(0x0C, lle0c_orig & !0x2000);     // 0xD00F: temporarily mask bit13 IRQ
+    bb_write(0x08, 0x2000);                   // W1C bit13 (canonical .L562 pre-reload ack)
+    bb_write(0x64, 406);                      // 0x196: reload per-window timer
+    bb_write(0x0C, lle0c_orig);               // 0xF00F: restore IRQ mask
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -347,7 +359,7 @@ fn main() -> ! {
     });
 
     hal::println!("BLE RX scanner — CH32V208 bedrock test");
-    hal::println!("Rotating ADV ch37/38/39 (patch #3.8: pdu_off=0 + 0x64=0x107a/traverse)  Looking for any advertiser...");
+    hal::println!("Rotating ADV ch37/38/39 (patch #3.9: 0x0C mask/restore + 0x64=406)  Looking for any advertiser...");
 
     unsafe {
         let rcc_ctlr  = read_volatile(0x4002_1000 as *const u32);
@@ -403,10 +415,9 @@ fn main() -> ! {
             //   bit1/bit2 are sticky "RX-pending" state indicators, NOT per-frame triggers.
             //   W1C'ing them signals "all consumed" → HW enters full SLEEP.
             //
-            // We do NOT write LLE+0x64 in traverse (patch #3.6 lesson, Lucy 2026-05-01):
-            //   Writing SCAN_WINDOW to 0x64 in traverse triggers HW SLEEP after countdown
-            //   (only 2 windows before state=0x6c). LLE+0x64 is HW-managed; only cold-boot
-            //   writes it (step 1: 0, step 11: SCAN_WINDOW).
+            // LLE+0x64 in traverse: patched #3.9 writes 406 with canonical 0x0C mask/restore.
+            //   patch #3.6 lesson: writing SCAN_WINDOW (400k) without mask → HW SLEEP.
+            //   patch #3.9 fix: write 406 (d.asm .L562 value) with bit13 masked during reload.
             for _ in 0..2_000_000u32 {
                 if read_volatile(addr_of!(RX_BUF).cast::<u8>().add(50)) != 0 { break; }
                 core::hint::spin_loop();
@@ -602,7 +613,7 @@ fn main() -> ! {
             //   - bit1: alt RX path (write 2; no state write in canonical handler)
             //   - bit13: scan-window-timeout (write 0x2000)
             //   - bit15: timer event (write 0x8000)
-            //   - NO LLE+0x64 write: HW manages timer autonomously
+            //   - LLE+0x64 written in rx_traverse (406) with 0x0C mask/restore (patch #3.9)
             //   - NO LLE+0x1C write: 0x6c is normal idle state (EVT SDI confirmed)
             {
                 let irq = bb_read(0x08);
