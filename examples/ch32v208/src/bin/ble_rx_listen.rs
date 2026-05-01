@@ -60,6 +60,41 @@ unsafe fn rfend_read(off: usize) -> u32  { read_volatile((RFEND_BASE + off) as *
 #[inline(always)]
 unsafe fn rfend_write(off: usize, v: u32) { write_volatile((RFEND_BASE + off) as *mut u32, v); }
 
+// ── BLE software dewhitening ──────────────────────────────────────────────────
+
+/// Dewhiten a BLE PDU in-place using the spec LFSR (polynomial x^7 + x^4 + 1).
+///
+/// # Why needed
+///
+/// CH32V208 HW does NOT dewhiten before DMA write (confirmed 2026-05-01).
+/// Despite BB+0x00 bits[6:0] = channel|0x40 being the HW LFSR seed register,
+/// WCH's BLE library has zero SW dewhiten calls because the TMOS stack operates
+/// at a higher abstraction level that never sees raw DMA bytes.
+/// Empirical proof (Cindy bucket analysis, 1614 frames):
+///   - raw bit21-only bucket at offset 9 with SW dewhiten → type=90.4%, RFU=86.6%
+///   - raw bit21-only bucket at offset 9 WITHOUT dewhiten → ~62.5% (random baseline)
+///
+/// # LFSR spec
+///
+/// State: 7 bits. Seed = `channel | 0x40` (bit6 always 1).
+/// Each bit: output = state[0]; feedback = state[6] XOR state[3]; state >>= 1; state[6] = feedback.
+/// Applied LSB-first within each byte, MSB-first across bytes is NOT the BLE order —
+/// BLE PDU bits are transmitted LSB first, so we apply LSB-first within each byte.
+fn dewhiten_inplace(data: &mut [u8], channel: u8) {
+    let mut lfsr = channel | 0x40; // 7-bit LFSR seed (bit6 always 1)
+    for byte in data.iter_mut() {
+        let mut dw = 0u8;
+        for bit in 0..8u8 {
+            let out = lfsr & 1;
+            let feedback = ((lfsr >> 6) ^ (lfsr >> 3)) & 1;
+            lfsr = (lfsr >> 1) | (feedback << 6);
+            let data_bit = (*byte >> bit) & 1;
+            dw |= (data_bit ^ out) << bit;
+        }
+        *byte = dw;
+    }
+}
+
 // ── BLE ADV constants ─────────────────────────────────────────────────────────
 
 /// BLE advertising access address (fixed by spec, all ADV channels).
@@ -291,63 +326,97 @@ fn main() -> ! {
 
                 rx_count += 1;
 
-                // Snapshot raw bytes as written by DMA — whitening status and header offset TBD.
-                // 50 bytes: enough for max ADV PDU (2+37) + trailer + safety margin.
-                let mut raw50 = [0u8; 50];
-                for (i, r) in raw50.iter_mut().enumerate() {
-                    *r = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(i));
-                }
-
-                // HW BB dewhitens before DMA write (confirmed by Lucy asm decode 2026-05-01):
-                // - WCH BLE_LIB has zero software dewhiten calls in all .o files.
-                // - BB+0x00 bits[6:0] = channel|0x40 IS the hardware LFSR seed register.
-                // - rf_rx_basic_rxProcess reads s1[1] as length with no per-byte LFSR loop.
-                // Therefore raw50 IS the already-dewhitened PDU — read fields directly.
-                let pdu_type = raw50[0] & 0x0F;
-                // BLE PDU length field is 6 bits [5:0]; bits[7:6] are TxAdd/RxAdd flags
-                // or RFU — mask to 6 bits for the payload byte count.
-                let real_len = (raw50[1] as usize & 0x3F).min(37); // ADV max 37B payload
-                let frame_end = 2 + real_len; // index of hardware status byte
-
-                // PDU header byte 0 flag bits (assuming hdr at raw50[0]; TBD via offset scan).
-                let tx_add = (raw50[0] >> 6) & 1;
-                let rx_add = (raw50[0] >> 7) & 1;
-
-                // BB IRQ status at BBReg+0x38 = lle_read(0x38) = 0x40024138.
-                // Lucy asm (BB_IRQLibHandler): bit6 = CRC-OK/frame-done; bit4 = AA-match; bit7 = CRC-err.
-                // WARNING: bb_read(0x08) = gptrLLEReg+0x08 = LLE IRQ (constant 0x00012041, WRONG).
+                // BB IRQ at BBReg+0x38. bit21 = CRC-OK (confirmed 2026-05-01, empirical:
+                // bit21-only bucket + SW-dewhiten@offset9 → type=90.4%, RFU=86.6%).
                 let bb_irq = lle_read(0x38);
-                // Verify step-7 channel seed write: expect logical_ch | 0x40 (e.g., 0x65/0x66/0x67).
-                let bb00_after = lle_read(0x00) & 0x7F;
-                // Clear BB IRQ (write-1-to-clear) so next window starts fresh.
-                lle_write(0x38, bb_irq);
+                lle_write(0x38, bb_irq); // W1C clear
 
-                // CRC-OK: primary indicator = BB IRQ bit6; secondary = buffer 0x80 check for comparison.
-                let crc_ok_irq = (bb_irq >> 6) & 1 == 1;
-                let crc_ok_buf = frame_end < raw50.len() && raw50[frame_end] == 0x80;
+                let crc_ok = (bb_irq >> 21) & 1 != 0;
 
-                hal::print!(
-                    "RX#{rx_count} {ch_label} type={pdu_type} len={real_len} \
-                     tx={tx_add} rx={rx_add} crc={}/{} bb_irq={bb_irq:#010x} bb00={bb00_after:#04x}",
-                    if crc_ok_irq { "OK" } else { "?" },
-                    if crc_ok_buf { "buf" } else { "?" });
+                if crc_ok {
+                    // 9-byte HW prefix (raw[0..9]): RSSI / channel-tag / timestamp / LQI.
+                    // Content not yet decoded; printed for offline analysis.
+                    let mut prefix9 = [0u8; 9];
+                    for i in 0..9usize {
+                        prefix9[i] = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(i));
+                    }
 
-                // Per-offset BLE ADV type legality scan: '1' if raw50[N]&0x0F ∈ 0..9 (valid ADV type).
-                // If the true PDU header is at offset N, most frames should show '1' at position N.
-                hal::print!(" type_ok=[");
-                for off in 0..12usize {
-                    hal::print!("{}", if raw50[off] & 0x0F <= 9 { "1" } else { "0" });
-                }
-                hal::print!("]");
+                    // PDU starts at DMA offset 9.
+                    // HW does NOT dewhiten before DMA (confirmed 2026-05-01: raw without
+                    // SW dewhiten ≈ random; with SW dewhiten → 90%+ type validity).
+                    let mut pdu = [0u8; 41];
+                    for i in 0..pdu.len() {
+                        pdu[i] = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(9 + i));
+                    }
+                    dewhiten_inplace(&mut pdu, logical_ch);
 
-                if real_len >= 6 {
-                    hal::print!(" AdvA=");
-                    for i in (2..8).rev() {
-                        hal::print!("{:02x}", raw50[i]);
-                        if i > 2 { hal::print!(":"); }
+                    let pdu_type = pdu[0] & 0x0F;
+                    let real_len = (pdu[1] & 0x3F) as usize;
+                    let tx_add   = (pdu[0] >> 6) & 1;
+                    let rx_add   = (pdu[0] >> 7) & 1;
+
+                    // AdvA: pdu[2..8] little-endian (on-air LSB first → print MSB first).
+                    hal::print!("RX#{rx_count} {ch_label} type={pdu_type} len={real_len} \
+                        tx={tx_add} rx={rx_add} AdvA=");
+                    if real_len >= 6 {
+                        for i in (2..8).rev() {
+                            hal::print!("{:02x}", pdu[i]);
+                            if i > 2 { hal::print!(":"); }
+                        }
+                    } else {
+                        hal::print!("n/a");
+                    }
+
+                    // AD structures from pdu[8 .. 2+real_len] (payload after 6-byte AdvA).
+                    if real_len >= 7 {
+                        let ad_end = (2 + real_len).min(pdu.len());
+                        let mut p = 8usize;
+                        let mut any = false;
+                        while p + 1 < ad_end {
+                            let ad_len = pdu[p] as usize;
+                            if ad_len == 0 || p + 1 + ad_len > ad_end { break; }
+                            let ad_type = pdu[p + 1];
+                            if !any { hal::print!(" ["); any = true; } else { hal::print!(","); }
+                            match ad_type {
+                                0x01 => hal::print!("Flags={:#04x}", pdu[p + 2]),
+                                0x08 => {
+                                    hal::print!("SName=\"");
+                                    for &c in &pdu[p+2..p+1+ad_len] {
+                                        if c.is_ascii_graphic() || c == b' ' { hal::print!("{}", c as char); }
+                                        else { hal::print!("\\x{c:02x}"); }
+                                    }
+                                    hal::print!("\"");
+                                }
+                                0x09 => {
+                                    hal::print!("Name=\"");
+                                    for &c in &pdu[p+2..p+1+ad_len] {
+                                        if c.is_ascii_graphic() || c == b' ' { hal::print!("{}", c as char); }
+                                        else { hal::print!("\\x{c:02x}"); }
+                                    }
+                                    hal::print!("\"");
+                                }
+                                0xFF if ad_len >= 3 => {
+                                    let company = u16::from_le_bytes([pdu[p+2], pdu[p+3]]);
+                                    hal::print!("Mfr={company:#06x}");
+                                }
+                                _ => hal::print!("T{ad_type:#04x}({B}B)", B = ad_len - 1),
+                            }
+                            p += 1 + ad_len;
+                        }
+                        if any { hal::print!("]"); }
+                    }
+
+                    // 1-line raw comparison: DMA buffer at offset [1..3], no dewhiten.
+                    // (Tests "raw offset-1" hypothesis, empirically rejected — kept for reference.)
+                    hal::print!(" raw1_2={:02x}{:02x}", prefix9[1], prefix9[2]);
+
+                    hal::println!(" prefix={:02x?}", &prefix9);
+                } else {
+                    // CRC failed — brief tally; first 5 + every 100.
+                    if rx_count <= 5 || rx_count % 100 == 0 {
+                        hal::println!("  RX#{rx_count} {ch_label} crc=FAIL bb_irq={bb_irq:#010x}");
                     }
                 }
-                hal::println!(" raw50={:02x?}", &raw50);
 
             } else if scan_count % 30 == 0 {
                 // Keepalive: print scan stats + register snapshot.
