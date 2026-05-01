@@ -12,23 +12,24 @@
 //! ```
 //! This swapped naming is intentional for compatibility with the WCH asm decode flow.
 //!
-//! # Key RX vs TX differences (from Lucy's asm decode of LL_ReceiverTest)
+//! # Key RX sequence (LL_ScanSetRF, d.asm L62824 — confirmed 2026-05-01)
 //!
-//! - LLE+0x00 (`bb_write(0x00, ...)`) = 1 for RX (TX = 2); this IS the RX GO trigger
-//! - BB+0x00 bits\[8:7\] = 10b for both TX and RX (NOT a TX/RX selector; it's BB-enable)
-//! - BB+0x50 (LLE+0x50, `bb_write(0x50, ...)`) pre-delay = 89 (TX = 90)
-//! - LLE+0x64 (hardware countdown) = window timeout; check == 0 for scan done
+//! rx_arm() follows LL_ScanSetRF exactly, NOT LL_ReceiverTest (which was wrong for Observer):
+//! - LLE+0x64 = 0 before GO (HW raises on GO, clears on done; 0 = idle/done)
+//! - LLE+0x08 W1C 0x2000 (clear stale bit13 IRQ before new window)
+//! - LLE+0x04 |= 1 (scan mode enable; ReceiverTest CLEARS this — opposite polarity!)
+//! - Channel written FIRST, then bit8=1 (RX-mode marker)
+//! - irq08 bit1 OR bit2 = RX done (WCH LLE_IRQSubHandler .L5 path)
 //!
 //! # Expected output (success)
 //!
 //! ```
-//! RX#1 ch37/2402MHz: raw_hdr=0x.. type=0 len=X AdvA=AA:BB:CC:DD:EE:FF raw=[..]
+//! RX#1 ch37/2402MHz: type=0 len=X AdvA=AA:BB:CC:DD:EE:FF [Flags=0x06,Name="device"]
 //! ```
 //!
 //! # If no packets appear
 //!
 //! Check: antenna connected, PHY calibration printed (CO non-zero), RF busy environment.
-//! Try increasing RX_WINDOW_TIMEOUT or the outer retry loop count.
 
 #![no_std]
 #![no_main]
@@ -116,10 +117,6 @@ const ADV_CHANNELS: [(u8, u32, &str); 3] = [
     (39, 2_480_000, "ch39/2480MHz"),
 ];
 
-/// Hardware RX window timeout loaded into LLE+0x64 before each GO.
-/// At 96 MHz with typical BLE ADV intervals, 400_000 ≈ ~4 ms scan window.
-const RX_WINDOW_TIMEOUT: u32 = 400_000;
-
 // ── RX DMA buffer ─────────────────────────────────────────────────────────────
 
 /// DMA RX buffer: PDU header (2B) + AdvA (6B) + payload (≤31B) + CRC (3B) + margin.
@@ -174,74 +171,65 @@ unsafe fn ble_set_phy_rx_mode_normal() {
 
 /// Arm the BLE receiver for one scan window on `logical_ch` / `freq_khz`.
 ///
-/// Sequence mirrors LL_ReceiverTest() from libwchble.a V1.40 as decoded by Lucy
-/// (2026-05-01 asm audit, ctl_input.o + ip.o + rf_fh.o).
+/// Sequence follows `LL_ScanSetRF` (d.asm L62824), NOT `LL_ReceiverTest`.
+/// Observer/scan path differs from DTM ReceiverTest in three critical ways:
+///   1. LLE+0x04 bit0 **SET** (scan mode enable) — ReceiverTest CLEARS it (opposite!)
+///   2. LLE+0x64 written 0 before GO — HW self-raises on GO, clears on completion
+///   3. Channel written FIRST in BB+0x00, then bit8 RX-mode marker (not the other way)
 ///
-/// IMPORTANT: call `RX_BUF.fill(0)` before arming so a stale `buf[1] != 0` from a
-/// previous receive is not misidentified as a new packet.
+/// IMPORTANT: clear RX_BUF to 0 and W1C BB+0x38 before calling.
 unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
-    // 1. BB_CFG (+0x2C): DO NOT TOUCH.
-    //    EVT Observer diff confirms: WCH Observer leaves BB+0x2C at bb_dev_init value
-    //    (0x92010EC8, rf_flag=9, bit0=0) and relies solely on RFEND PLL for channel select.
-    //    Previous write of bits[30:25]=logical_ch + bit0=1 was WRONG for RX path:
-    //      - bit0=1 is the DTM TX mode arm bit (ll_hw_api_tx_direct_test) — Lucy confirmed
-    //      - bits[30:25] channel LUT override not used in Observer (EVT doesn't do this)
-    //      - Channel frequency is set exclusively by RFEND PLL (step 2), not BB+0x2C
-
-    // 2. Program PLL to channel frequency; sets RFEND+0x2C bit1=1 (channel lock).
+    // Pre: program PLL to target channel frequency (sets RFEND+0x2C bit1=1 = channel lock).
     set_channel_freq(freq_khz);
 
-    // 3. BB+0x00 bits[8:7] = 10b (BB enable; same for TX and RX per Lucy asm L0xca-0xda).
-    //    "a5 &= ~0x180; a5 |= 0x100; a4[0] = a5" (LL_ReceiverTest asm)
-    let ctrl = lle_read(0x00);
-    lle_write(0x00, (ctrl & !0x180) | 0x100);
+    // LL_ScanSetRF step 1: LLE+0x64 = 0.
+    // Semantic: 0 = RX idle. HW raises this non-zero on RX GO; clears when RX completes.
+    // Previous code wrote RX_WINDOW_TIMEOUT here — WRONG; that confused "HW busy" signal
+    // with a software-controlled countdown, causing the poll loop to see premature exits.
+    bb_write(0x64, 0);
 
-    // 4. PA / RF path enable: RFEND+0x08 |= 0x330000 (bits 16,17,20,21).
-    //    Enables PLL output and RX path power; mirrored from LL_ReceiverTest asm.
-    let ana = rfend_read(0x08);
-    rfend_write(0x08, ana | 0x0033_0000);
+    // LL_ScanSetRF step 2: LLE+0x08 = 0x2000 (W1C — clear stale RX-timeout IRQ bit13).
+    // Without this clear, a stale bit13 from the previous window may cause the HW state
+    // machine to reject a new RX GO as a duplicate event.
+    bb_write(0x08, 0x2000);
 
-    // 5. Pre-delay timer: LLE+0x50 = 89 (RX; TX = 90).
-    bb_write(0x50, 89);
+    // LL_ScanSetRF step 3: BB+0x08 = ADV AA, BB+0x04 = CRC seed.
+    lle_write(0x08, ADV_AA);
+    lle_write(0x04, ADV_CRC_INIT);
 
-    // 6. Release channel lock: RFEND+0x2C bit1 = 0 (PLL free-runs at programmed freq).
+    // LL_ScanSetRF step 4: LLE+0x04 |= 1 (scan mode enable).
+    // CRITICAL: previous code had this as `& !0x1` (clear) — that was LL_ReceiverTest
+    // polarity (DTM mode). For Observer/scan, bit0 must be SET. This is likely the
+    // primary reason HW never completed RX (irq08 bit1/bit2 never fired).
+    let v = bb_read(0x04);
+    bb_write(0x04, v | 0x1);
+
+    // LL_ScanSetRF step 5: DMA buffer pointer (LLE+0x74 = MEMAddr = &RX_BUF).
+    bb_write(0x74, addr_of!(RX_BUF) as u32);
+
+    // LL_ScanSetRF step 6: RFEND+0x2C bit1 = 0 (release PLL lock — PLL holds freq).
     let v = rfend_read(0x2C);
     rfend_write(0x2C, v & !(1 << 1));
 
-    // 7. BB+0x00 bits[5:0] = logical_ch (channel index, no 0x40 OR — patch #2).
-    //    EVT Observer diff: EVT writes just logical_ch (38=0x26) to bits[5:0], bit6=0.
-    //    Previous code wrote logical_ch|0x40, setting bit6=1 which may be a TX test mode bit
-    //    (same pattern as BB+0x2C bit0). With bit6=1, HW CRC validation uses wrong whitening
-    //    seed → CRC fail on all real frames → bit21 unreliable → no filtered-correct-frames path.
-    //    HW internally seeds CRC-check LFSR as (channel | 0x40), so HW adds 0x40 itself.
-    //    SW dewhitening seed (channel | 0x40 in dewhiten_inplace) is UNCHANGED — correct per spec.
+    // LL_ScanSetRF step 7: BB+0x00 bits[5:0] = logical_ch (no 0x40).
+    // Channel must be written BEFORE bit8 RX-mode marker (step 8).
+    // Earlier code wrote bit8 first then channel — wrong order.
     let ctrl = lle_read(0x00);
     lle_write(0x00, (ctrl & !0x7F) | (logical_ch as u32 & 0x3F));
 
-    // 8. ACCESS_ADDR = BLE ADV access address.
-    lle_write(0x08, ADV_AA);
+    // LL_ScanSetRF step 8: BB+0x00 bits[8:7] = 10b (RX-mode marker, written AFTER channel).
+    let ctrl = lle_read(0x00);
+    lle_write(0x00, (ctrl & !0x180) | 0x100);
 
-    // 9. CRC init value.
-    lle_write(0x04, ADV_CRC_INIT);
+    // LL_ScanSetRF step 9: RFEND+0x08 |= 0x330000 (PA/LNA/RX path enable).
+    // Placed after channel + RX-mode marker (LL_ScanSetRF order).
+    let ana = rfend_read(0x08);
+    rfend_write(0x08, ana | 0x0033_0000);
 
-    // 10. RX DMA buffer pointer: LLE+0x74 = &RX_BUF (MEMAddr).
-    //
-    // LLE+0x70 is the TX-specific buffer slot (used by ble_dtm_tx.rs, works for TX).
-    // LLE+0x74 is MEMAddr — the general DMA landing zone for received packets.
-    // WCH rf_rx_basic_rxProcess reads: s1 = gBleIPPara[36] = MEMAddr; len = *(s1+1).
-    // lle_dev_init() already wrote LLE+0x74 = LLE_DMA_BUF; overwrite with RX_BUF here.
-    bb_write(0x74, addr_of!(RX_BUF) as u32);
+    // LL_ScanSetRF step 10: LLE+0x50 = 89 (PRE_DELAY; TX uses 90).
+    bb_write(0x50, 89);
 
-    // 11. LLE+0x04 bit0 clear (LL_ReceiverTest asm L_c8: "lle_modify(0x04, 0x1, 0)").
-    let v = bb_read(0x04);
-    bb_write(0x04, v & !0x1);
-
-    // 12. Window timeout: LLE+0x64 = countdown initial value.
-    //     Hardware decrements this; == 0 means window expired (no packet received).
-    bb_write(0x64, RX_WINDOW_TIMEOUT);
-
-    // 13. RX GO: LLE+0x00 = 1 — triggers the RX state machine.
-    //     (TX uses bit11 edge strobe; RX uses direct write of 1 to LLE+0x00.)
+    // LL_ScanSetRF step 11: RX GO — always the last write.
     bb_write(0x00, 1);
 }
 
@@ -279,7 +267,7 @@ fn main() -> ! {
     });
 
     hal::println!("BLE RX scanner — CH32V208 bedrock test");
-    hal::println!("Rotating ADV ch37/38/39, window={}  Looking for any advertiser...", RX_WINDOW_TIMEOUT);
+    hal::println!("Rotating ADV ch37/38/39 (LL_ScanSetRF path)  Looking for any advertiser...");
 
     unsafe {
         let rcc_ctlr  = read_volatile(0x4002_1000 as *const u32);
@@ -318,16 +306,25 @@ fn main() -> ! {
             rx_arm(logical_ch, freq_khz);
             scan_count += 1;
 
-            // Poll until packet received or window expires.
-            // DMA writes 32-bit words as bits arrive at 1 Mbps; buf[1] != 0 fires when
-            // the first word (bytes 0-3) lands — the rest of the payload is still in flight.
+            // Poll until packet received or software safety timeout.
+            // Two exit conditions (either fires got_frame=true):
+            //   A. RX_BUF[1] != 0 — DMA started writing bytes (early trigger; need settle delay)
+            //   B. irq08 (LLE+0x08) bit1 OR bit2 — WCH IRQSubHandler .L5 RX-done path
+            //      (HW declares a valid, CRC-checked frame complete; DMA already finished)
+            // NOTE: bb_read(0x64)==0 is REMOVED. LLE+0x64=0 now means "RX idle" not "timeout".
+            //   HW raises LLE+0x64 on GO and clears it on completion; checking for 0 was
+            //   causing premature exits before HW finished receiving.
             let mut got_frame = false;
             for _ in 0..2_000_000u32 {
                 if read_volatile(RX_BUF.as_ptr().add(1)) != 0 {
                     got_frame = true;
                     break;
                 }
-                if bb_read(0x64) == 0 { break; } // LLE window expired
+                // irq08 bit1 OR bit2 = RX done (Lucy d.asm L69423 ll_rx_wait_finish).
+                if (bb_read(0x08) & 0x06) != 0 {
+                    got_frame = true;
+                    break;
+                }
                 core::hint::spin_loop();
             }
 
@@ -501,10 +498,10 @@ fn main() -> ! {
                 // Keepalive: print scan stats + register snapshot.
                 let bb38 = lle_read(0x38);  // BB IRQ status (real CRC/event register)
                 let bb08 = bb_read(0x08);   // LLE IRQ status (for comparison)
-                let bb64 = bb_read(0x64);   // LLE countdown (0 = window expired)
+                let bb64 = bb_read(0x64);   // LLE+0x64: 0=idle, non-zero=RX in progress
                 let bb1c = bb_read(0x1C);   // LLE state machine
                 hal::println!("  scan#{scan_count} rx={rx_count} struct={struct_ok_count} crc_fail={crc_fail_count} {ch_label}: no frame | \
-                    bb_irq={bb38:#010x} lle_irq={bb08:#010x} lcount={bb64} state={bb1c:#04x}");
+                    bb_irq={bb38:#010x} lle_irq={bb08:#010x} rxbusy={bb64} state={bb1c:#04x}");
             }
 
             ch_idx = (ch_idx + 1) % ADV_CHANNELS.len();
