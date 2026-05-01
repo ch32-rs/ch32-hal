@@ -208,12 +208,15 @@ unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
     let v = rfend_read(0x2C);
     rfend_write(0x2C, v & !(1 << 1));
 
-    // 7. BB+0x00 bits[5:0] = logical_ch | 0x40 (channel index + whitening enable).
-    //    bit6=1 is the "test/whitening marker" — same as in TX.
-    //    NOTE (EVT diff 2026-05-01): EVT writes just logical_ch (no 0x40); bit6=0 in EVT.
-    //    If patch #1 (BB+0x2C removal) is insufficient, remove | 0x40 here as patch #2.
+    // 7. BB+0x00 bits[5:0] = logical_ch (channel index, no 0x40 OR — patch #2).
+    //    EVT Observer diff: EVT writes just logical_ch (38=0x26) to bits[5:0], bit6=0.
+    //    Previous code wrote logical_ch|0x40, setting bit6=1 which may be a TX test mode bit
+    //    (same pattern as BB+0x2C bit0). With bit6=1, HW CRC validation uses wrong whitening
+    //    seed → CRC fail on all real frames → bit21 unreliable → no filtered-correct-frames path.
+    //    HW internally seeds CRC-check LFSR as (channel | 0x40), so HW adds 0x40 itself.
+    //    SW dewhitening seed (channel | 0x40 in dewhiten_inplace) is UNCHANGED — correct per spec.
     let ctrl = lle_read(0x00);
-    lle_write(0x00, (ctrl & !0x7F) | ((logical_ch as u32 & 0x3F) | 0x40));
+    lle_write(0x00, (ctrl & !0x7F) | (logical_ch as u32 & 0x3F));
 
     // 8. ACCESS_ADDR = BLE ADV access address.
     lle_write(0x08, ADV_AA);
@@ -385,11 +388,14 @@ fn main() -> ! {
                         ch_m1, tm1, rm1, logical_ch, t0, r0, ch_p1, tp1, rp1);
                 }
 
-                // ── Decode: always run, gate on structural PDU validity ───────────────────
+                // ── Decode: gate on bit21 (HW CRC-OK) AND structural PDU validity ─────────
                 //
-                // bb_irq bit21 gate was environment-dependent (0 in current run) and is
-                // dropped as the primary gate. Structural validity (type + RFU + len) is
-                // self-validating and robust across environments.
+                // patch #2 fix (2026-05-01): BB+0x00 bit6 removed → HW CRC uses correct
+                // whitening seed → bit21 should now reliably indicate CRC-OK frames.
+                // Without CRC gate, we accept corrupted frames where type/len accidentally
+                // pass structural check but AD data is garbage (explains 0 Mfr/Name hits).
+                // Re-enabling bit21 gate combined with structural gate to filter real packets.
+                let crc_ok = (bb_irq >> 21) & 1 == 1;
                 //
                 // Channel-specific PDU offset (confirmed 2026-05-01):
                 //   ch37 → 8-byte HW prefix → PDU at DMA offset 8
@@ -407,7 +413,9 @@ fn main() -> ! {
                 let rfu_ok   = (pdu[1] & 0xC0) == 0;
 
                 // Structural gate: common ADV types, RFU==0, legal length.
-                let valid_frame = matches!(pdu_type, 0 | 2 | 4 | 5 | 6)
+                // Combined with CRC-OK (bit21) gate for full validation.
+                let valid_frame = crc_ok
+                    && matches!(pdu_type, 0 | 2 | 4 | 5 | 6)
                     && rfu_ok && real_len >= 8;
 
                 if valid_frame {
