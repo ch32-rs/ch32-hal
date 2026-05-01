@@ -373,7 +373,7 @@ fn main() -> ! {
     });
 
     hal::println!("BLE RX scanner — CH32V208 bedrock test");
-    hal::println!("Rotating ADV ch37/38/39 (patch #3.13: bit13 window-timeout poll exit)  Looking for any advertiser...");
+    hal::println!("Rotating ADV ch37/38/39 (patch #3.14: cold re-init on lle00=0x07 stuck)  Looking for any advertiser...");
 
     unsafe {
         let rcc_ctlr  = read_volatile(0x4002_1000 as *const u32);
@@ -430,10 +430,10 @@ fn main() -> ! {
             //        • Fix: exit promptly on bit13 → reload issued within a few µs of
             //          window expiry → HW can restart scan window on schedule.
             //
-            // NOTE: bit13 may already be set stale if a prior window timed out without being
-            // W1C'd. An immediate exit is correct — it recycles the window faster, which is
-            // exactly what we want. The per-window W1C block at the bottom of the loop handles
-            // the clear. rx_window_timer_reload() also W1Cs bit13 before the next reload.
+            // NOTE: bit13 may already be set stale from the prior window. The per-window W1C
+            // block at the bottom handles the clear. rx_window_timer_reload() and rx_traverse()
+            // both W1C bit13 before poll start. The poll exits on a FRESH bit13 assertion fired
+            // during this window's lle64 countdown, not on stale events (they were already W1C'd).
             //
             // We do NOT poll irq08 bit1/bit2 (patch #3.5 lesson, Lucy 2026-05-01):
             //   bit1/bit2 are sticky "RX-pending" state indicators, NOT per-frame triggers.
@@ -643,6 +643,39 @@ fn main() -> ! {
                 if irq & (1 << 1)  != 0 { bb_write(0x08, 2);      }
                 if irq & (1 << 13) != 0 { bb_write(0x08, 0x2000); }
                 if irq & (1 << 15) != 0 { bb_write(0x08, 0x8000); }
+            }
+
+            // ── Patch #3.14: stuck-state detection + conditional cold re-init ────────────
+            //
+            // Observation: after ~3 real RX frames, HW exits scan mode and lle00 drops to
+            // 0x07 (no bit7/bit8 = scan-active not set). EVT ground truth: scan-active =
+            // lle00=1 (cold-boot RX GO result). 0x07 is an idle/terminal state HW transitions
+            // to when its internal scan session ends without a proper state-machine update.
+            //
+            // rx_traverse() writes bit7/bit8/channel to lle00 each window, but HW immediately
+            // overwrites back to 0x07 — traverse only works on an already-active HW.
+            //
+            // Fix: detect lle00==0x07 on a no-frame window, then reset SCAN_INITED so that the
+            // next rx_arm call runs rx_cold_init() (full LL_ScanSetRF sequence, ending with
+            // RX GO). This restarts HW from scratch for another burst of real RX windows.
+            //
+            // Expected pattern if hypothesis holds:
+            //   ~3 frames → stuck (lle00=0x07) → re-init → ~3 frames → stuck → re-init → ...
+            //   RX total = N × burst_size, continuously accumulating.
+            //
+            // Difference from #3.3 regression (cold re-init EVERY window): we only re-init
+            // when we detect the stuck signature, not on every iteration. Working sessions are
+            // never interrupted.
+            //
+            // Lucy note: also check lle04 (bit0 = RX GO). rx_cold_init includes
+            //   bb_write(0x04, v | 0x1)  (step 5 = scan-mode enable in LLE+0x04)
+            // so a full cold re-init restores both RX GO and scan-mode-enable.
+            if !got_frame {
+                let lle00_post = bb_read(0x00);
+                if lle00_post == 0x07 {
+                    // HW has left scan mode — force cold re-init next window.
+                    SCAN_INITED.store(false, Ordering::Relaxed);
+                }
             }
 
             ch_idx = (ch_idx + 1) % ADV_CHANNELS.len();
