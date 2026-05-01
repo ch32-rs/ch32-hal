@@ -225,11 +225,12 @@ unsafe fn rx_window_timer_reload() {
 /// Cold boot (`LL_ScanSetRF`, L62824): full register init + RX GO.
 ///   Run once to pull HW from init state into active RX.
 ///
-/// Per-window — canonical two-step (Plan C, patch #3.10):
+/// Per-window — canonical two-step (Plan C, patch #3.10/#3.13):
 ///   Step 1: `rx_window_timer_reload()` — equivalent to `llScanProcess .L562`.
 ///     Reload lle64=406 with lle0C mask/restore BEFORE channel switch.
 ///   Step 2: `rx_traverse()` — equivalent to `llScanTraverseaChannel`.
-///     W1C bit13 + bit7/bit8 transitions + channel update + lle74 restore. No RX GO.
+///     W1C bit13 + bit7/bit8 transitions + channel update. No RX GO.
+///   No HW-managed register writes: lle00/lle74 are fully HW-owned (#3.11/#3.12 lesson).
 ///
 /// Root cause of #3.3 failure:
 ///   LL_ScanSetRF every window over-reset the state machine. HW entered SLEEP (state=0x6c)
@@ -239,18 +240,9 @@ unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
         SCAN_INITED.store(true, Ordering::Relaxed);
         rx_cold_init(logical_ch, freq_khz);
     } else {
-        // Partial re-arm — restore lle00 bit7 (scan-active) before each window (patch #3.12).
-        //
-        // Canonical llScanTraverseaChannel (.L544) sets lle00 bit7 (scan-active mode).
-        // Snapshot (Cindy 2026-05-01): stuck state shows lle00=0x07 (bit7 absent);
-        // expected normal: lle00 = 0x80 | channel (e.g. 0xa5 ch37, 0xa7 ch39).
-        // HW clears bit7 after each RX window; we must restore it before the next.
-        //
-        // Single-variable test (#3.12): only this one write, no W1C/timer changes.
-        // If SCN > 20 → bit7 was the stuck signature. If unchanged → try W1C fix next.
-        let lle00 = bb_read(0x00);
-        bb_write(0x00, (lle00 & !0x180) | 0x80); // restore bit7 (scan-active mode)
-
+        // Per-window canonical two-step (Plan C, patch #3.10):
+        //   Step 1: timer reload (.L562) → Step 2: channel traverse (.L544).
+        // No HW-managed register writes (lle00/lle74 are HW-only — #3.11/#3.12 lesson).
         rx_window_timer_reload(); // .L562: mask 0x0C + W1C bit13 + lle64=406 + restore
         rx_traverse(logical_ch, freq_khz);
     }
@@ -381,7 +373,7 @@ fn main() -> ! {
     });
 
     hal::println!("BLE RX scanner — CH32V208 bedrock test");
-    hal::println!("Rotating ADV ch37/38/39 (patch #3.12: lle00 bit7 scan-active restore)  Looking for any advertiser...");
+    hal::println!("Rotating ADV ch37/38/39 (patch #3.13: bit13 window-timeout poll exit)  Looking for any advertiser...");
 
     unsafe {
         let rcc_ctlr  = read_volatile(0x4002_1000 as *const u32);
@@ -420,28 +412,35 @@ fn main() -> ! {
             rx_arm(logical_ch, freq_khz);
             scan_count += 1;
 
-            // Poll until the HW scan window expires (Plan A2, patch #3.6).
+            // Poll until frame arrives OR HW scan window expires (patch #3.13).
             //
-            // Poll until DMA completes or software timeout (Plan A3, patch #3.7).
+            // Two exit conditions:
             //
-            // Early exit: RX_BUF[50] != 0 (wtrl position).
-            //   WCH writes a trailer byte (0x80) at RX_BUF[RX_BUF[1]] as the LAST DMA write
-            //   after a full packet. Checking a late buffer position (~50 for typical ADV PDU)
-            //   gives an early exit without reading mid-DMA. RX_BUF[50] is around the trailer
-            //   for typical ADV_IND (prefix 8-9B + PDU ≤39B = ~48B total).
+            //   1. RX_BUF[50] != 0 (wtrl position): DMA trailer written — packet received.
+            //      WCH writes 0x80 at RX_BUF[RX_BUF[1]] as the LAST DMA write after a full
+            //      packet. RX_BUF[50] is the trailer position for typical ADV_IND.
             //
-            // Fallthrough: 2M software iterations ≈ 62ms — ensures even short/absent packets
-            //   get enough dwell time. got_frame is then set by RX_BUF[1] != 0 (see below).
+            //   2. LLE+0x08 bit13 set: HW scan-window timer expired (lle64 → 0).
+            //      Root cause of SCN=20 ceiling (Lucy hypothesis, patch #3.13):
+            //        • lle64=406 loaded by rx_window_timer_reload(); HW counts down to 0.
+            //        • When lle64=0, HW sets bit13 (scan-window-timeout IRQ).
+            //        • Previous loop had NO bit13 exit — loop spun full 2M iters (~625ms).
+            //        • W1C of bit13 + next reload happened ~625ms LATE each window.
+            //        • After ~20 windows the accumulated latency stalls HW permanently.
+            //        • Fix: exit promptly on bit13 → reload issued within a few µs of
+            //          window expiry → HW can restart scan window on schedule.
+            //
+            // NOTE: bit13 may already be set stale if a prior window timed out without being
+            // W1C'd. An immediate exit is correct — it recycles the window faster, which is
+            // exactly what we want. The per-window W1C block at the bottom of the loop handles
+            // the clear. rx_window_timer_reload() also W1Cs bit13 before the next reload.
             //
             // We do NOT poll irq08 bit1/bit2 (patch #3.5 lesson, Lucy 2026-05-01):
             //   bit1/bit2 are sticky "RX-pending" state indicators, NOT per-frame triggers.
             //   W1C'ing them signals "all consumed" → HW enters full SLEEP.
-            //
-            // LLE+0x64: written by rx_window_timer_reload() BEFORE traverse (Plan C, #3.10).
-            //   canonical .L562 order: reload timer → channel traverse (not reverse).
-            //   patch #3.9: reload was at END of traverse (wrong order); #3.10 fixes it.
             for _ in 0..2_000_000u32 {
-                if read_volatile(addr_of!(RX_BUF).cast::<u8>().add(50)) != 0 { break; }
+                if read_volatile(addr_of!(RX_BUF).cast::<u8>().add(50)) != 0 { break; } // packet
+                if bb_read(0x08) & 0x2000 != 0 { break; }  // bit13: HW scan-window timeout
                 core::hint::spin_loop();
             }
             // After poll: RX_BUF[1] = HW DMA length byte; non-zero = DMA actually wrote data.
