@@ -180,13 +180,13 @@ unsafe fn ble_set_phy_rx_mode_normal() {
 /// IMPORTANT: call `RX_BUF.fill(0)` before arming so a stale `buf[1] != 0` from a
 /// previous receive is not misidentified as a new packet.
 unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
-    // 1. BB_CFG (+0x2C) bits[30:25] = logical_ch; bits[1:0] = 01 (RX mode arm).
-    //    bits[30:25]: HW whitening/CRC LUT channel selector.
-    //    From adv.rs: "without this, all ADV channels use channel-9 LUT (rf_flag=9
-    //    from bb_dev_init) → wrong whitening seed → CRC fail → no DMA write."
-    //    Write logical_ch (37/38/39) to override rf_flag=9. bit31,bit24:0 preserved.
-    let cfg = lle_read(0x2C);
-    lle_write(0x2C, (cfg & 0x81FF_FFFF) | ((logical_ch as u32 & 0x3F) << 25) | 0x1);
+    // 1. BB_CFG (+0x2C): DO NOT TOUCH.
+    //    EVT Observer diff confirms: WCH Observer leaves BB+0x2C at bb_dev_init value
+    //    (0x92010EC8, rf_flag=9, bit0=0) and relies solely on RFEND PLL for channel select.
+    //    Previous write of bits[30:25]=logical_ch + bit0=1 was WRONG for RX path:
+    //      - bit0=1 is the DTM TX mode arm bit (ll_hw_api_tx_direct_test) — Lucy confirmed
+    //      - bits[30:25] channel LUT override not used in Observer (EVT doesn't do this)
+    //      - Channel frequency is set exclusively by RFEND PLL (step 2), not BB+0x2C
 
     // 2. Program PLL to channel frequency; sets RFEND+0x2C bit1=1 (channel lock).
     set_channel_freq(freq_khz);
@@ -210,6 +210,8 @@ unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
 
     // 7. BB+0x00 bits[5:0] = logical_ch | 0x40 (channel index + whitening enable).
     //    bit6=1 is the "test/whitening marker" — same as in TX.
+    //    NOTE (EVT diff 2026-05-01): EVT writes just logical_ch (no 0x40); bit6=0 in EVT.
+    //    If patch #1 (BB+0x2C removal) is insufficient, remove | 0x40 here as patch #2.
     let ctrl = lle_read(0x00);
     lle_write(0x00, (ctrl & !0x7F) | ((logical_ch as u32 & 0x3F) | 0x40));
 
