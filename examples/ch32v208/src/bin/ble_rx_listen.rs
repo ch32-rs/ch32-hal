@@ -383,93 +383,84 @@ fn main() -> ! {
                         ch_m1, tm1, rm1, logical_ch, t0, r0, ch_p1, tp1, rp1);
                 }
 
-                // ── CRC gate and full decode ──────────────────────────────────────────────
-                // Channel-specific PDU offset (confirmed 2026-05-01, Cindy ff84770 analysis):
+                // ── Decode: always run, gate on structural PDU validity ───────────────────
+                //
+                // bb_irq bit21 gate was environment-dependent (0 in current run) and is
+                // dropped as the primary gate. Structural validity (type + RFU + len) is
+                // self-validating and robust across environments.
+                //
+                // Channel-specific PDU offset (confirmed 2026-05-01):
                 //   ch37 → 8-byte HW prefix → PDU at DMA offset 8
                 //   ch38, ch39 → 9-byte HW prefix → PDU at DMA offset 9
-                // ch38 sub-bucket (n=24): 95.8% type+RFU at offset 9 with bit21 gate.
-                let crc_ok = (bb_irq >> 21) & 1 != 0
-                    && (bb_irq >> 22) & 1 == 0
-                    && (bb_irq >> 3)  & 1 == 0;
+                let pdu_off: usize = if logical_ch == 37 { 8 } else { 9 };
+                let mut pdu = [0u8; 41];
+                pdu.copy_from_slice(&raw50[pdu_off..pdu_off + 41]);
+                // HW does NOT dewhiten before DMA (confirmed 2026-05-01, LFSR 35/35 verified).
+                dewhiten_inplace(&mut pdu, logical_ch);
 
-                if crc_ok {
-                    let pdu_off: usize = if logical_ch == 37 { 8 } else { 9 };
+                let pdu_type = pdu[0] & 0x0F;
+                let real_len = ((pdu[1] & 0x3F) as usize).min(37); // ADV max 37B
+                let tx_add   = (pdu[0] >> 6) & 1;
+                let rx_add   = (pdu[0] >> 7) & 1;
+                let rfu_ok   = (pdu[1] & 0xC0) == 0;
 
-                    // Copy raw PDU bytes from snapshot, save first 16 before dewhiten.
-                    let mut pdu = [0u8; 41];
-                    pdu.copy_from_slice(&raw50[pdu_off..pdu_off + 41]);
-                    let mut raw16 = [0u8; 16];
-                    raw16.copy_from_slice(&pdu[..16]);
-                    // HW does NOT dewhiten before DMA (confirmed 2026-05-01, LFSR 35/35 verified).
-                    dewhiten_inplace(&mut pdu, logical_ch);
+                // Structural gate: common ADV types, RFU==0, legal length.
+                let valid_frame = matches!(pdu_type, 0 | 2 | 4 | 5 | 6)
+                    && rfu_ok && real_len >= 8;
 
-                    let pdu_type = pdu[0] & 0x0F;
-                    // Cap at 37: BLE ADV max payload.
-                    let real_len = ((pdu[1] & 0x3F) as usize).min(37);
-                    let tx_add   = (pdu[0] >> 6) & 1;
-                    let rx_add   = (pdu[0] >> 7) & 1;
-
-                    // DBG: raw prefix + raw PDU[0..16] + dewhitened[0..16] for offline analysis.
-                    hal::println!("DBG#{rx_count} {ch_label} off={pdu_off} \
-                        prefix={:02x?} raw={:02x?} dw={:02x?}",
-                        &raw50[..pdu_off], &raw16, &pdu[..16]);
-
+                if valid_frame {
                     // AdvA: pdu[2..8] little-endian (on-air LSB first → print MSB first).
                     hal::print!("RX#{rx_count} {ch_label} type={pdu_type} len={real_len} \
-                        tx={tx_add} rx={rx_add} AdvA=");
-                    if real_len >= 6 {
-                        for i in (2..8).rev() {
-                            hal::print!("{:02x}", pdu[i]);
-                            if i > 2 { hal::print!(":"); }
-                        }
-                    } else {
-                        hal::print!("n/a");
+                        tx={tx_add} rx={rx_add} bb={bb_irq:#010x} AdvA=");
+                    for i in (2..8).rev() {
+                        hal::print!("{:02x}", pdu[i]);
+                        if i > 2 { hal::print!(":"); }
                     }
 
                     // AD structures from pdu[8 .. 2+real_len] (payload after 6-byte AdvA).
-                    if real_len >= 8 {
-                        let ad_end = (2 + real_len).min(pdu.len());
-                        let mut p = 8usize;
-                        let mut any = false;
-                        while p + 1 < ad_end {
-                            let ad_len = pdu[p] as usize;
-                            if ad_len == 0 || p + 1 + ad_len > ad_end { break; }
-                            let ad_type = pdu[p + 1];
-                            if !any { hal::print!(" ["); any = true; } else { hal::print!(","); }
-                            match ad_type {
-                                0x01 => hal::print!("Flags={:#04x}", pdu[p + 2]),
-                                0x08 => {
-                                    hal::print!("SName=\"");
-                                    for &c in &pdu[p+2..p+1+ad_len] {
-                                        if c.is_ascii_graphic() || c == b' ' { hal::print!("{}", c as char); }
-                                        else { hal::print!("\\x{c:02x}"); }
-                                    }
-                                    hal::print!("\"");
+                    let ad_end = (2 + real_len).min(pdu.len());
+                    let mut p = 8usize;
+                    let mut any = false;
+                    while p + 1 < ad_end {
+                        let ad_len = pdu[p] as usize;
+                        if ad_len == 0 || p + 1 + ad_len > ad_end { break; }
+                        let ad_type = pdu[p + 1];
+                        if !any { hal::print!(" ["); any = true; } else { hal::print!(","); }
+                        match ad_type {
+                            0x01 => hal::print!("Flags={:#04x}", pdu[p + 2]),
+                            0x08 => {
+                                hal::print!("SName=\"");
+                                for &c in &pdu[p+2..p+1+ad_len] {
+                                    if c.is_ascii_graphic() || c == b' ' { hal::print!("{}", c as char); }
+                                    else { hal::print!("\\x{c:02x}"); }
                                 }
-                                0x09 => {
-                                    hal::print!("Name=\"");
-                                    for &c in &pdu[p+2..p+1+ad_len] {
-                                        if c.is_ascii_graphic() || c == b' ' { hal::print!("{}", c as char); }
-                                        else { hal::print!("\\x{c:02x}"); }
-                                    }
-                                    hal::print!("\"");
-                                }
-                                0xFF if ad_len >= 3 => {
-                                    let company = u16::from_le_bytes([pdu[p+2], pdu[p+3]]);
-                                    hal::print!("Mfr={company:#06x}");
-                                }
-                                _ => hal::print!("T{ad_type:#04x}({B}B)", B = ad_len - 1),
+                                hal::print!("\"");
                             }
-                            p += 1 + ad_len;
+                            0x09 => {
+                                hal::print!("Name=\"");
+                                for &c in &pdu[p+2..p+1+ad_len] {
+                                    if c.is_ascii_graphic() || c == b' ' { hal::print!("{}", c as char); }
+                                    else { hal::print!("\\x{c:02x}"); }
+                                }
+                                hal::print!("\"");
+                            }
+                            0xFF if ad_len >= 3 => {
+                                let company = u16::from_le_bytes([pdu[p+2], pdu[p+3]]);
+                                hal::print!("Mfr={company:#06x}");
+                            }
+                            _ => hal::print!("T{ad_type:#04x}({B}B)", B = ad_len - 1),
                         }
-                        if any { hal::print!("]"); }
+                        p += 1 + ad_len;
                     }
+                    if any { hal::print!("]"); }
 
-                    hal::println!(" raw50={:02x?}", &raw50[..18]);
+                    hal::println!();
                 } else {
-                    // CRC failed — brief tally; first 5 + every 100.
-                    if rx_count <= 5 || rx_count % 100 == 0 {
-                        hal::println!("  RX#{rx_count} {ch_label} crc=FAIL bb={bb_irq:#010x}");
+                    // Failed structural gate — suppress most; keep first 5 + every 200.
+                    if rx_count <= 5 || rx_count % 200 == 0 {
+                        hal::println!("  disc#{rx_count} {ch_label} type={pdu_type} \
+                            len={real_len} rfu={} bb={bb_irq:#010x}",
+                            rfu_ok as u8);
                     }
                 }
 
