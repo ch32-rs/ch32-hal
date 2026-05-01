@@ -263,8 +263,9 @@ fn main() -> ! {
         loop {
             let (logical_ch, freq_khz, ch_label) = ADV_CHANNELS[ch_idx];
 
-            // Clear RX buffer and arm the receiver.
+            // Clear RX buffer, pre-clear BB IRQ (W1C), then arm the receiver.
             core::ptr::write_bytes(RX_BUF.as_mut_ptr(), 0, RX_BUF.len());
+            lle_write(0x38, 0xFFFF_FFFF); // clear stale BB IRQ events before new window
             rx_arm(logical_ch, freq_khz);
             scan_count += 1;
 
@@ -290,7 +291,7 @@ fn main() -> ! {
 
                 rx_count += 1;
 
-                // Snapshot raw bytes (HW-dewhitened by BB before DMA write) for diagnostics.
+                // Snapshot raw bytes as written by DMA — whitening status and header offset TBD.
                 // 50 bytes: enough for max ADV PDU (2+37) + trailer + safety margin.
                 let mut raw50 = [0u8; 50];
                 for (i, r) in raw50.iter_mut().enumerate() {
@@ -308,52 +309,54 @@ fn main() -> ! {
                 let real_len = (raw50[1] as usize & 0x3F).min(37); // ADV max 37B payload
                 let frame_end = 2 + real_len; // index of hardware status byte
 
-                // PDU header byte 0 flag bits: TxAdd (bit6) = sender random addr; RxAdd (bit7).
+                // PDU header byte 0 flag bits (assuming hdr at raw50[0]; TBD via offset scan).
                 let tx_add = (raw50[0] >> 6) & 1;
                 let rx_add = (raw50[0] >> 7) & 1;
 
-                // Read LLE IRQ status (bb_read(0x08) = gptrLLEReg+0x08) — may carry CRC bits.
-                let lirq = bb_read(0x08);
+                // BB IRQ status at BBReg+0x38 = lle_read(0x38) = 0x40024138.
+                // Lucy asm (BB_IRQLibHandler): bit6 = CRC-OK/frame-done; bit4 = AA-match; bit7 = CRC-err.
+                // WARNING: bb_read(0x08) = gptrLLEReg+0x08 = LLE IRQ (constant 0x00012041, WRONG).
+                let bb_irq = lle_read(0x38);
+                // Verify step-7 channel seed write: expect logical_ch | 0x40 (e.g., 0x65/0x66/0x67).
+                let bb00_after = lle_read(0x00) & 0x7F;
+                // Clear BB IRQ (write-1-to-clear) so next window starts fresh.
+                lle_write(0x38, bb_irq);
 
-                // CRC status: hardware writes 0x80 at raw50[frame_end] on CRC pass.
-                // (Lucy: rf_rx_basic_rxProcess writes buf[buf[1]] = 0x80 on CRC OK; with
-                //  HW dewhiten, buf[1] = real payload len, so trailer at 2+len = frame_end.)
-                let crc_ok = frame_end < raw50.len() && raw50[frame_end] == 0x80;
-
-                // First 0x80 position in the dewhitened raw50 — should cluster at frame_end
-                // for CRC-OK packets (trailer byte) after this fix.
-                let raw_trailer_idx = raw50.iter().position(|&b| b == 0x80);
+                // CRC-OK: primary indicator = BB IRQ bit6; secondary = buffer 0x80 check for comparison.
+                let crc_ok_irq = (bb_irq >> 6) & 1 == 1;
+                let crc_ok_buf = frame_end < raw50.len() && raw50[frame_end] == 0x80;
 
                 hal::print!(
                     "RX#{rx_count} {ch_label} type={pdu_type} len={real_len} \
-                     tx={tx_add} rx={rx_add} crc={} lirq={lirq:#010x}",
-                    if crc_ok { "OK" } else { "?" });
+                     tx={tx_add} rx={rx_add} crc={}/{} bb_irq={bb_irq:#010x} bb00={bb00_after:#04x}",
+                    if crc_ok_irq { "OK" } else { "?" },
+                    if crc_ok_buf { "buf" } else { "?" });
 
-                if let Some(ti) = raw_trailer_idx {
-                    // at_fe=true → trailer aligns with BLE spec (2+real_len) — expected for CRC-OK.
-                    // at_len=true → trailer aligns with raw50[1] raw value (WCH asm alternate).
-                    let at_fe  = ti == frame_end;
-                    let at_len = ti == (raw50[1] as usize);
-                    hal::print!(" t80={ti}(fe={at_fe},l={at_len})");
+                // Per-offset BLE ADV type legality scan: '1' if raw50[N]&0x0F ∈ 0..9 (valid ADV type).
+                // If the true PDU header is at offset N, most frames should show '1' at position N.
+                hal::print!(" type_ok=[");
+                for off in 0..12usize {
+                    hal::print!("{}", if raw50[off] & 0x0F <= 9 { "1" } else { "0" });
                 }
+                hal::print!("]");
 
-                if real_len >= 6 && frame_end >= 8 {
+                if real_len >= 6 {
                     hal::print!(" AdvA=");
                     for i in (2..8).rev() {
                         hal::print!("{:02x}", raw50[i]);
                         if i > 2 { hal::print!(":"); }
                     }
                 }
-                // raw50: first 50 dewhitened bytes (BB HW dewhitens before DMA write).
                 hal::println!(" raw50={:02x?}", &raw50);
 
             } else if scan_count % 30 == 0 {
                 // Keepalive: print scan stats + register snapshot.
-                let bb08 = bb_read(0x08);   // LLE IRQ status
+                let bb38 = lle_read(0x38);  // BB IRQ status (real CRC/event register)
+                let bb08 = bb_read(0x08);   // LLE IRQ status (for comparison)
                 let bb64 = bb_read(0x64);   // LLE countdown (0 = window expired)
                 let bb1c = bb_read(0x1C);   // LLE state machine
                 hal::println!("  scan#{scan_count} rx={rx_count} {ch_label}: no frame | \
-                    lirq=0x{bb08:08x} lcount={bb64} state=0x{bb1c:02x}");
+                    bb_irq={bb38:#010x} lle_irq={bb08:#010x} lcount={bb64} state={bb1c:#04x}");
             }
 
             ch_idx = (ch_idx + 1) % ADV_CHANNELS.len();
