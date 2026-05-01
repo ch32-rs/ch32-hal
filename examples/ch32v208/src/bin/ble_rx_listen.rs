@@ -322,19 +322,19 @@ fn main() -> ! {
             rx_arm(logical_ch, freq_khz);
             scan_count += 1;
 
-            // Poll until packet received or scan window expires.
-            // Exit conditions (in priority order):
-            //   A. RX_BUF[1] != 0 — DMA started writing (early trigger; need settle delay)
-            //   B. irq08 bit1|bit2 — HW declared valid CRC-OK frame (Lucy d.asm L69423)
-            //   C. bb_read(0x64) == 0 — scan window countdown expired (restored in #3.2)
-            //      LLE+0x64 was written SCAN_WINDOW before GO; HW decrements it;
-            //      == 0 means window over. 2M spin is a software safety backstop.
+            // Poll until HW signals frame complete or scan window expires.
+            //
+            // Exit conditions:
+            //   A. irq08 bit1|bit2 — HW RX-done (WCH IRQSubHandler .L5 path, d.asm L69423).
+            //      This is the ONLY valid "got frame" signal. RX_BUF[1] != 0 was removed
+            //      in patch #3.3 (Lucy 2026-05-01): that fires on partial DMA (mid-write)
+            //      and causes us to re-arm while HW is still writing, aborting in-flight
+            //      frames and eventually killing the state machine after ~13 hits.
+            //   B. bb_read(0x64) == 0 — scan window countdown expired (no packet this window).
+            //      LLE+0x64 written SCAN_WINDOW before GO; HW decrements it; 0 = window over.
+            //   C. 2M iteration safety backstop (software guard, should never fire in practice).
             let mut got_frame = false;
             for _ in 0..2_000_000u32 {
-                if read_volatile(RX_BUF.as_ptr().add(1)) != 0 {
-                    got_frame = true;
-                    break;
-                }
                 // irq08 bit1 OR bit2 = RX done (WCH IRQSubHandler .L5 RX-done path).
                 if (bb_read(0x08) & 0x06) != 0 {
                     got_frame = true;
