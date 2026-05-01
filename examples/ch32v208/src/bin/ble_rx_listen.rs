@@ -188,10 +188,14 @@ unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
     // with a software-controlled countdown, causing the poll loop to see premature exits.
     bb_write(0x64, 0);
 
-    // LL_ScanSetRF step 2: LLE+0x08 = 0x2000 (W1C — clear stale RX-timeout IRQ bit13).
-    // Without this clear, a stale bit13 from the previous window may cause the HW state
-    // machine to reject a new RX GO as a duplicate event.
-    bb_write(0x08, 0x2000);
+    // LL_ScanSetRF step 2: LLE+0x08 W1C — clear all stale IRQ event bits.
+    // WCH writes 0x2000 (bit13 only) because their LLE_IRQHandler auto-W1C's bit1/bit2
+    // on every RX-done interrupt. We have NO IRQ handler, so bit1/bit2 stay set across
+    // windows and cause the poll loop to break immediately on stale state.
+    // Use 0xF00F (= lle_dev_init's IRQ mask: bits 0-3 + bits 12-15) to W1C all
+    // enabled IRQ bits while leaving hardware status bits (bits 25-28) untouched.
+    // (d.asm L71020 LLE_IRQSubHandler — W1C mask source)
+    bb_write(0x08, 0xF00F);
 
     // LL_ScanSetRF step 3: BB+0x08 = ADV AA, BB+0x04 = CRC seed.
     lle_write(0x08, ADV_AA);
