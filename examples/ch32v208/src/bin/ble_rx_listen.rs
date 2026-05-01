@@ -386,9 +386,10 @@ fn main() -> ! {
                         let mut raw18 = [0u8; 18];
                         raw18[..9].copy_from_slice(&prefix9);
                         raw18[9..18].copy_from_slice(&raw_pdu16[..9]);
-                        hal::print!("SCN#{rx_count} {ch_label} ch={}:", logical_ch);
-                        for off in 4usize..=12 {
-                            let mut lfsr = logical_ch | 0x40; // fresh seed per offset
+                        // Helper: dewhiten 2 bytes at raw18[off] with LFSR seed ch|0x40.
+                        // Returns (type_nibble, rfu_ok).
+                        let dw2 = |raw18: &[u8; 18], off: usize, ch: u8| -> (u8, u8) {
+                            let mut lfsr = ch | 0x40;
                             let mut b0 = 0u8;
                             let mut b1 = 0u8;
                             for bit in 0..8u8 {
@@ -403,11 +404,26 @@ fn main() -> ! {
                                 lfsr = (lfsr >> 1) | (fb << 6);
                                 b1 |= (((raw18[off + 1] >> bit) & 1) ^ out) << bit;
                             }
-                            let t = b0 & 0x0F;
-                            let rfu = ((b1 & 0xC0) == 0) as u8;
-                            hal::print!(" o{}=t{}r{}", off, t, rfu);
+                            (b0 & 0x0F, ((b1 & 0xC0) == 0) as u8)
+                        };
+
+                        // Per-offset scan with logical_ch seed.
+                        hal::print!("SCN#{rx_count} {ch_label} ch={}:", logical_ch);
+                        for off in 4usize..=12 {
+                            let (t, r) = dw2(&raw18, off, logical_ch);
+                            hal::print!(" o{}=t{}r{}", off, t, r);
                         }
-                        hal::println!();
+
+                        // Channel-drift test at offset 9: try ch-1, ch, ch+1 seeds.
+                        // If a ±1 seed gives better type/RFU than logical_ch → interrupt
+                        // captured logical_ch after channel hop (channel-drift hypothesis).
+                        let ch_m1 = logical_ch.saturating_sub(1);
+                        let ch_p1 = (logical_ch + 1).min(39);
+                        let (tm1, rm1) = dw2(&raw18, 9, ch_m1);
+                        let (t0,  r0 ) = dw2(&raw18, 9, logical_ch);
+                        let (tp1, rp1) = dw2(&raw18, 9, ch_p1);
+                        hal::println!(" |drift@o9: ch{}=t{}r{} ch{}=t{}r{} ch{}=t{}r{}",
+                            ch_m1, tm1, rm1, logical_ch, t0, r0, ch_p1, tp1, rp1);
                     }
 
                     // AdvA: pdu[2..8] little-endian (on-air LSB first → print MSB first).
