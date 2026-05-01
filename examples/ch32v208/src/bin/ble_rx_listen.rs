@@ -129,10 +129,18 @@ const ADV_CHANNELS: [(u8, u32, &str); 3] = [
     (39, 2_480_000, "ch39/2480MHz"),
 ];
 
-/// Scan window duration written to LLE+0x64 just before RX GO (polling model addition).
-/// LL_ScanSetRF (IRQ-driven Observer) writes 0 here (no countdown needed; IRQ fires on done).
-/// In our polling model we need a window bound: HW counts down from this value; == 0 means
-/// window expired. At ~30 cycles/iter × 400_000 iters / 96 MHz ≈ 125 ms per channel.
+/// HW scan-window countdown written to LLE+0x64 before each RX window.
+///
+/// HW counts down from SCAN_WINDOW; when it hits 0 the window is "done"
+/// (frame received OR timeout). Used as the primary poll-exit signal (Plan A2).
+///
+/// Critical (Lucy, patch #3.6): do NOT pair with W1C of irq08 bit1/bit2.
+/// bit1/bit2 are sticky "RX-pending" state indicators — NOT per-frame triggers.
+/// In WCH's IRQ model, W1C is done only as part of IRQ dispatch, not standalone.
+/// Clearing them in polling mode (patch #3.5) tells HW "all RX consumed, idle"
+/// → full SLEEP (SCN dropped 2575→21). Leaving them set keeps state machine active.
+///
+/// At ~30 cycles/iter × 400_000 / 96 MHz ≈ 125 ms per channel (3 ch ≈ 375 ms/rot).
 const SCAN_WINDOW: u32 = 400_000;
 
 // ── RX DMA buffer ─────────────────────────────────────────────────────────────
@@ -295,6 +303,12 @@ unsafe fn rx_traverse(logical_ch: u8, freq_khz: u32) {
     let c = bb_read(0x00);
     bb_write(0x00, (c & !0x7F) | (logical_ch as u32 & 0x3F));
     // No RX GO write: HW is already in active scan from cold-boot.
+
+    // Reset scan-window countdown so the poll loop gets a fresh ~125ms window.
+    // In WCH's IRQ-driven model the scan timer is managed by the stack; in our
+    // polling model we write SCAN_WINDOW here so each traverse window has a
+    // defined duration before poll exits via `bb_read(0x64) == 0`.
+    bb_write(0x64, SCAN_WINDOW);
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -331,7 +345,7 @@ fn main() -> ! {
     });
 
     hal::println!("BLE RX scanner — CH32V208 bedrock test");
-    hal::println!("Rotating ADV ch37/38/39 (LL_ScanSetRF path) window={}  Looking for any advertiser...", SCAN_WINDOW);
+    hal::println!("Rotating ADV ch37/38/39 (Plan A2: 0x64 poll, no W1C bit1/2, sw={})  Looking for any advertiser...", SCAN_WINDOW);
 
     unsafe {
         let rcc_ctlr  = read_volatile(0x4002_1000 as *const u32);
@@ -370,45 +384,41 @@ fn main() -> ! {
             rx_arm(logical_ch, freq_khz);
             scan_count += 1;
 
-            // Poll until HW signals frame complete or scan window expires.
+            // Poll until the HW scan window expires (Plan A2, patch #3.6).
             //
-            // Exit conditions:
-            //   A. irq08 bit1|bit2 — HW RX-done (WCH IRQSubHandler .L5 path, d.asm L69423).
-            //      This is the ONLY valid "got frame" signal. RX_BUF[1] != 0 was removed
-            //      in patch #3.3 (Lucy 2026-05-01): that fires on partial DMA (mid-write)
-            //      and causes us to re-arm while HW is still writing, aborting in-flight
-            //      frames and eventually killing the state machine after ~13 hits.
-            //   B. bb_read(0x64) == 0 — scan window countdown expired (no packet this window).
-            //      LLE+0x64 written SCAN_WINDOW before GO; HW decrements it; 0 = window over.
-            //   C. 2M iteration safety backstop (software guard, should never fire in practice).
-            let mut got_frame = false;
+            // Exit condition: bb_read(0x64) == 0.
+            //   LLE+0x64 is written SCAN_WINDOW before each window (cold-boot and traverse).
+            //   HW counts it down; when it hits 0 the window is "done" — either a frame
+            //   was fully received (DMA complete) OR the window timed out with no packet.
+            //
+            // We do NOT poll irq08 bit1/bit2 (patch #3.5 lesson, Lucy 2026-05-01):
+            //   bit1/bit2 are sticky "RX-pending" state indicators, NOT per-frame triggers.
+            //   W1C'ing them signals "all consumed" → HW enters full SLEEP (state=0x6c)
+            //   and stops all RX activity (SCN dropped from 2575 to 21 in patch #3.5).
+            //   Leaving them set maintains the "pending" keepalive and keeps SCN alive.
+            //
+            // After exit: inspect RX_BUF[1] (HW DMA length byte) to distinguish real
+            //   frame (non-zero) from timeout (zero). Safe here because 0x64==0 guarantees
+            //   HW finished writing (unlike checking mid-DMA which caused #3.3 state death).
             for _ in 0..2_000_000u32 {
-                // irq08 bit1 OR bit2 = RX done (WCH IRQSubHandler .L5 RX-done path).
-                if (bb_read(0x08) & 0x06) != 0 {
-                    // W1C bit1/bit2 immediately — replaces the IRQ-handler ACK that WCH's
-                    // LLE_IRQSubHandler does on every interrupt. Without this, bit2 stays
-                    // set as a "ghost" and fires spuriously on every subsequent ch37 poll
-                    // (patch #3.4 saw 857× all-zero-buffer LFSR keystream from stale bit2).
-                    bb_write(0x08, 0x06);
-                    got_frame = true;
-                    break;
-                }
-                if bb_read(0x64) == 0 { break; } // LLE window countdown expired
+                if bb_read(0x64) == 0 { break; }
                 core::hint::spin_loop();
             }
+            // RX_BUF[1] = HW metadata length byte; non-zero = DMA actually wrote data.
+            let got_frame = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(1)) != 0;
 
             if got_frame {
-                // Settle: wait for DMA to finish writing the rest of the packet.
-                // At 1 Mbps a max ADV (2+37B PDU + 3B CRC = 42B) takes 336 µs on-air.
-                // 40_000 nops @ 96 MHz ≈ 417 µs — covers full packet + margin.
-                for _ in 0..40_000u32 { core::hint::spin_loop(); }
+                // Extra settle margin. 0x64==0 should already guarantee DMA complete,
+                // but a short spin ensures any pipeline/cache effects are flushed before
+                // we snapshot raw50.
+                for _ in 0..4_000u32 { core::hint::spin_loop(); }
 
                 rx_count += 1;
 
-                // Read BB IRQ (0x40024100+0x38) + LLE IRQ (0x40024200+0x08) before W1C.
-                // Lucy: WCH IRQSubHandler uses LLE+0x08 bit1/bit2 for RX done, not BB+0x38.
+                // Read IRQ status registers for diagnostic output (NOT used as gate in Plan A2).
+                // irq08 bit1/bit2 are left intact (no W1C) — they are the state-machine keepalive.
                 let bb_irq  = lle_read(0x38);
-                let irq08   = bb_read(0x08);   // LLE IRQ status: bit1/bit2 = RX done path
+                let irq08   = bb_read(0x08);   // LLE IRQ status — diagnostic only; NOT W1C'd
                 lle_write(0x38, bb_irq);
 
                 // Snapshot 50 raw bytes from DMA buffer (covers prefix + max PDU + margin).
