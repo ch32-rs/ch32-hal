@@ -102,6 +102,32 @@ unsafe fn set_channel_freq(freq_khz: u32) {
     rfend_write(0x2C, v | (1 << 1));
 }
 
+// ── BLE PHY RX mode setup ─────────────────────────────────────────────────────
+
+/// Configure BB for normal-mode BLE reception (observer / scanner).
+///
+/// Derived from `BLE_SetPHYRxMode()` in libwchble.a V1.40, `.L94` branch
+/// (`dtmFlag bit1=0`, offset 0xae–0x118), decoded by Lucy 2026-05-01.
+///
+/// Call once after `ble_phy_init()`, before the scan loop.
+/// These are static mode-setup registers — not per-channel.
+///
+/// # Register mapping (Lucy's standard naming → this file's swapped naming)
+/// Lucy's `bb_write(reg, val)` = `lle_write(reg, val)` here (gptrBBReg = LLE_BASE).
+unsafe fn ble_set_phy_rx_mode_normal() {
+    lle_write(0x20, 0x0009_0083); // PHY mode (DTM mode uses 0x90086)
+    lle_write(0x14, 0x0810_1901); // RX correlation threshold #1 (DTM: 0x8301FF1)
+    lle_write(0x18, 0x0003_1624); // RX correlation threshold #2 (DTM: 0x31619)
+    lle_write(0x28, 0x0000_28BE); // RX symbol detect (DTM: 0x28DE)
+    lle_write(0x24, 0x0100_6310); // RX equalizer (same in DTM)
+    lle_write(0x10, 0x0032_22D0); // RX matched filter coeffs, dtmFlag=0 path
+
+    // BB+0x00 bits[13:12] = 01b (RX enable; LL_ReceiverTest a0!=1 path).
+    // asm: "a4 &= 0xFFFFCFFF; a4 |= 0x1000"
+    let ctrl = lle_read(0x00);
+    lle_write(0x00, (ctrl & !0x3000) | 0x1000);
+}
+
 // ── RX arm / GO ───────────────────────────────────────────────────────────────
 
 /// Arm the BLE receiver for one scan window on `logical_ch` / `freq_khz`.
@@ -224,6 +250,10 @@ fn main() -> ! {
             (rcc_ctlr >> 17) & 1, (rcc_ctlr >> 25) & 1, (rcc_cfgr0 >> 2) & 3);
 
         hal::ble::ble_phy_init();
+
+        // Configure BB for normal-mode BLE scanning (BLE_SetPHYRxMode, dtmFlag=0 path).
+        // Must be called after ble_phy_init() — overwrites some bb_dev_init defaults.
+        ble_set_phy_rx_mode_normal();
 
         // Calibration result dump (same as ble_dtm_tx.rs).
         let rfend90  = read_volatile(0x4002_5090 as *const u32);
