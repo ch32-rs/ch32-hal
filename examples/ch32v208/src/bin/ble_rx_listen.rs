@@ -319,8 +319,11 @@ fn main() -> ! {
                 let mut hdr = [raw50[0], raw50[1]];
                 dewhiten_inplace(&mut hdr, logical_ch);
                 let pdu_type = hdr[0] & 0x0F;
-                let real_len = (hdr[1] as usize).min(39); // BLE 4.x ADV max 37B
-                let frame_end = (2 + real_len).min(RX_BUF.len());
+                // BLE PDU length field is 6 bits [5:0]; bits[7:6] are RFU.
+                // Without the & 0x3F mask, XOR noise in the RFU bits causes
+                // hdr[1] > 39 → clamped to 39 → wrong frame_end for short packets.
+                let real_len = (hdr[1] as usize & 0x3F).min(63); // 6-bit field, cap at 63
+                let frame_end = (2 + real_len).min(RX_BUF.len() - 1);
 
                 // Dewhiten full frame in-place.
                 dewhiten_inplace(&mut RX_BUF[..frame_end], logical_ch);
@@ -333,8 +336,17 @@ fn main() -> ! {
                 //  into buf[1] depending on WCH encoding; raw50 dump will clarify the layout.)
                 let crc_ok = frame_end < RX_BUF.len() && RX_BUF[frame_end] == 0x80;
 
+                // Find first 0x80 in raw50 (raw/whitened) — hardware trailer position.
+                // The HW writes 0x80 at buf[2+payload_len] on CRC OK (after settle,
+                // this tells us the real trailer index independent of our decode).
+                let raw_trailer_idx = raw50.iter().position(|&b| b == 0x80);
+
                 hal::print!("RX#{rx_count} {ch_label} type={pdu_type} len={real_len} crc={}",
                     if crc_ok { "OK" } else { "?" });
+
+                if let Some(ti) = raw_trailer_idx {
+                    hal::print!(" t80={ti}");
+                }
 
                 if real_len >= 6 && frame_end >= 8 {
                     hal::print!(" AdvA=");
