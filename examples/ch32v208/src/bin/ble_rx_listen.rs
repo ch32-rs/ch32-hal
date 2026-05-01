@@ -306,6 +306,8 @@ fn main() -> ! {
         let mut rx_count  = 0u32;
         let mut scan_count = 0u32;
         let mut ch_idx    = 0usize;
+        let mut struct_ok_count = 0u32;   // structural gate passed
+        let mut crc_fail_count  = 0u32;   // struct_ok but bit21=0 (no DTM PRBS sync)
 
         loop {
             let (logical_ch, freq_khz, ch_label) = ADV_CHANNELS[ch_idx];
@@ -388,14 +390,14 @@ fn main() -> ! {
                         ch_m1, tm1, rm1, logical_ch, t0, r0, ch_p1, tp1, rp1);
                 }
 
-                // ── Decode: gate on bit21 (HW CRC-OK) AND structural PDU validity ─────────
+                // ── Decode: structural PDU validity gate ─────────────────────────────────
                 //
-                // patch #2 fix (2026-05-01): BB+0x00 bit6 removed → HW CRC uses correct
-                // whitening seed → bit21 should now reliably indicate CRC-OK frames.
-                // Without CRC gate, we accept corrupted frames where type/len accidentally
-                // pass structural check but AD data is garbage (explains 0 Mfr/Name hits).
-                // Re-enabling bit21 gate combined with structural gate to filter real packets.
-                let crc_ok = (bb_irq >> 21) & 1 == 1;
+                // patch #2.5 (2026-05-01): bit21 confirmed NOT CRC-OK in non-DTM mode —
+                // it was a DTM PRBS sync event (bit21=0/3438 after removing DTM bits).
+                // Lucy: real CRC-OK bit is still unknown; hunting in d.asm bb_irq_handler.
+                // Meanwhile: structural gate only, add struct_ok_but_crc_fail counter.
+                // Bits 1,6 in bb_irq at 0x001e8046/66 may carry the real CRC status.
+                let _bit21 = (bb_irq >> 21) & 1; // keep for stats; NOT used as gate
                 //
                 // Channel-specific PDU offset (confirmed 2026-05-01):
                 //   ch37 → 8-byte HW prefix → PDU at DMA offset 8
@@ -413,15 +415,17 @@ fn main() -> ! {
                 let rfu_ok   = (pdu[1] & 0xC0) == 0;
 
                 // Structural gate: common ADV types, RFU==0, legal length.
-                // Combined with CRC-OK (bit21) gate for full validation.
-                let valid_frame = crc_ok
-                    && matches!(pdu_type, 0 | 2 | 4 | 5 | 6)
+                let struct_ok = matches!(pdu_type, 0 | 2 | 4 | 5 | 6)
                     && rfu_ok && real_len >= 8;
+                let valid_frame = struct_ok;
+
+                if struct_ok { struct_ok_count += 1; }
+                if struct_ok && _bit21 == 0 { crc_fail_count += 1; }
 
                 if valid_frame {
                     // AdvA: pdu[2..8] little-endian (on-air LSB first → print MSB first).
                     hal::print!("RX#{rx_count} {ch_label} type={pdu_type} len={real_len} \
-                        tx={tx_add} rx={rx_add} bb={bb_irq:#010x} AdvA=");
+                        tx={tx_add} rx={rx_add} bb={bb_irq:#010x} b21={_bit21} AdvA=");
                     for i in (2..8).rev() {
                         hal::print!("{:02x}", pdu[i]);
                         if i > 2 { hal::print!(":"); }
@@ -485,7 +489,7 @@ fn main() -> ! {
                 let bb08 = bb_read(0x08);   // LLE IRQ status (for comparison)
                 let bb64 = bb_read(0x64);   // LLE countdown (0 = window expired)
                 let bb1c = bb_read(0x1C);   // LLE state machine
-                hal::println!("  scan#{scan_count} rx={rx_count} {ch_label}: no frame | \
+                hal::println!("  scan#{scan_count} rx={rx_count} struct={struct_ok_count} crc_fail={crc_fail_count} {ch_label}: no frame | \
                     bb_irq={bb38:#010x} lle_irq={bb08:#010x} lcount={bb64} state={bb1c:#04x}");
             }
 
