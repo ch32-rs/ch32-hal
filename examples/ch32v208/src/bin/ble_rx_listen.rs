@@ -339,9 +339,10 @@ fn main() -> ! {
 
                 rx_count += 1;
 
-                // Read BB IRQ; W1C clear for next window.
-                // bit21 = CRC-OK gate (environment-dependent; confirmed ~9.7% in busy environment).
-                let bb_irq = lle_read(0x38);
+                // Read BB IRQ (0x40024100+0x38) + LLE IRQ (0x40024200+0x08) before W1C.
+                // Lucy: WCH IRQSubHandler uses LLE+0x08 bit1/bit2 for RX done, not BB+0x38.
+                let bb_irq  = lle_read(0x38);
+                let irq08   = bb_read(0x08);   // LLE IRQ status: bit1/bit2 = RX done path
                 lle_write(0x38, bb_irq);
 
                 // Snapshot 50 raw bytes from DMA buffer (covers prefix + max PDU + margin).
@@ -419,13 +420,22 @@ fn main() -> ! {
                     && rfu_ok && real_len >= 8;
                 let valid_frame = struct_ok;
 
+                // Lucy trailer byte: WCH rf_rx_basic_rxProcess checks MEMAddr[MEMAddr[1]]==0x80.
+                // raw50[1] = RX_BUF[1] = second byte of HW metadata prefix = WCH's "length field".
+                // Trailer at RX_BUF[raw50[1]] = raw50[raw50[1]] (if index in range).
+                // Also check pdu[real_len+2] = raw50[pdu_off+real_len+2] (Lucy's formula for PDU-relative).
+                let wch_len   = raw50[1] as usize;
+                let wch_trl   = if wch_len < raw50.len() { raw50[wch_len] } else { 0xFF };
+                let pdu_trl   = if (real_len + 2) < pdu.len() { pdu[real_len + 2] } else { 0xFF };
+
                 if struct_ok { struct_ok_count += 1; }
                 if struct_ok && _bit21 == 0 { crc_fail_count += 1; }
 
                 if valid_frame {
                     // AdvA: pdu[2..8] little-endian (on-air LSB first → print MSB first).
                     hal::print!("RX#{rx_count} {ch_label} type={pdu_type} len={real_len} \
-                        tx={tx_add} rx={rx_add} bb={bb_irq:#010x} b21={_bit21} AdvA=");
+                        tx={tx_add} rx={rx_add} bb={bb_irq:#010x} irq08={irq08:#010x} \
+                        b21={_bit21} wlen={wch_len} wtrl={wch_trl:#04x} ptrl={pdu_trl:#04x} AdvA=");
                     for i in (2..8).rev() {
                         hal::print!("{:02x}", pdu[i]);
                         if i > 2 { hal::print!(":"); }
@@ -468,12 +478,16 @@ fn main() -> ! {
                     }
                     if any { hal::print!("]"); }
 
-                    // Raw dewhitened PDU dump: hdr(2) + AdvA(6) + AD section.
-                    // pdu[8]/pdu[9] = first AD length + type bytes; if pdu[8]>31 or 0 →
-                    // parser bails immediately (explains 0 Name/Mfr). Shown separately for easy grep.
+                    // Diagnostic dumps for trailer byte analysis:
+                    // prefix = raw50[0..pdu_off] (HW metadata), bytes_after = raw50[pdu_off+real_len+2..]
                     let dump_end = (2 + real_len).min(pdu.len());
-                    hal::println!(" ad0={:02x} ad1={:02x} pdu={:02x?}",
-                        pdu[8], pdu[9], &pdu[..dump_end]);
+                    hal::print!(" ad0={:02x} ad1={:02x}", pdu[8], pdu[9]);
+                    hal::print!(" pfx={:02x?}", &raw50[..pdu_off]);
+                    let after_start = pdu_off + 2 + real_len;
+                    if after_start + 6 <= raw50.len() {
+                        hal::print!(" after={:02x?}", &raw50[after_start..after_start+6]);
+                    }
+                    hal::println!(" pdu={:02x?}", &pdu[..dump_end]);
                 } else {
                     // Failed structural gate — suppress most; keep first 5 + every 200.
                     if rx_count <= 5 || rx_count % 200 == 0 {
