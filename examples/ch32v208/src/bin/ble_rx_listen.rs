@@ -371,11 +371,44 @@ fn main() -> ! {
                     let rx_add   = (pdu[0] >> 7) & 1;
 
                     // Debug dump: bb_irq + 9-byte prefix + raw PDU[0..16] (before dewhiten)
-                    // + dewhitened PDU[0..16]. Cindy runs the same LFSR in Python on raw_pdu
-                    // and compares byte-for-byte to confirm LFSR correctness before gate analysis.
+                    // + dewhitened PDU[0..16]. LFSR confirmed correct (86ca6a6, 35/35 match).
                     hal::println!("DBG#{rx_count} {ch_label} bb={bb_irq:#010x} \
                         prefix={:02x?} raw={:02x?} pdu={:02x?}",
                         &prefix9, &raw_pdu16, &pdu[..16]);
+
+                    // Per-offset scan: for each candidate PDU start (offset 4..=12 in DMA buffer),
+                    // apply a FRESH LFSR (seed=channel|0x40) to the raw bytes at that offset and
+                    // decode the first 2 bytes as PDU hdr0 (type) and hdr1 (len/RFU).
+                    // Format: oN=tTrR where T=pdu_type (0-9 valid) and R=RFU00 (1=bits[7:6]==00).
+                    // True PDU start: offset where T is consistently 0-9 AND R=1.
+                    {
+                        // Combine prefix9 + raw_pdu16[0..9] → 18 bytes covering DMA[0..18].
+                        let mut raw18 = [0u8; 18];
+                        raw18[..9].copy_from_slice(&prefix9);
+                        raw18[9..18].copy_from_slice(&raw_pdu16[..9]);
+                        hal::print!("SCN#{rx_count} {ch_label} ch={}:", logical_ch);
+                        for off in 4usize..=12 {
+                            let mut lfsr = logical_ch | 0x40; // fresh seed per offset
+                            let mut b0 = 0u8;
+                            let mut b1 = 0u8;
+                            for bit in 0..8u8 {
+                                let out = lfsr & 1;
+                                let fb = (lfsr ^ (lfsr >> 4)) & 1;
+                                lfsr = (lfsr >> 1) | (fb << 6);
+                                b0 |= (((raw18[off] >> bit) & 1) ^ out) << bit;
+                            }
+                            for bit in 0..8u8 {
+                                let out = lfsr & 1;
+                                let fb = (lfsr ^ (lfsr >> 4)) & 1;
+                                lfsr = (lfsr >> 1) | (fb << 6);
+                                b1 |= (((raw18[off + 1] >> bit) & 1) ^ out) << bit;
+                            }
+                            let t = b0 & 0x0F;
+                            let rfu = ((b1 & 0xC0) == 0) as u8;
+                            hal::print!(" o{}=t{}r{}", off, t, rfu);
+                        }
+                        hal::println!();
+                    }
 
                     // AdvA: pdu[2..8] little-endian (on-air LSB first → print MSB first).
                     hal::print!("RX#{rx_count} {ch_label} type={pdu_type} len={real_len} \
