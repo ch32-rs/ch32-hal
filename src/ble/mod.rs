@@ -84,9 +84,15 @@ pub unsafe fn ble_tx_wait_done(timeout_loops: u32, settle_loops: u32) -> bool {
 const OSC_HSE_CAL_CTRL: *mut u32 = 0x4002_202C as *mut u32;
 
 /// RCC AHB peripheral enable register (AHBPCENR).
-/// CH32V208: CRC clock bit is bit 6.
+/// CH32V208: CRC clock bit is bit 6; BLE controller clocks are bits 16+17.
+/// From ch32v20x_rcc.h L134: RCC_AHBPeriph_BLE_CRC = 0x00030040
+///   bit  6 = CRC peripheral clock
+///   bit 16 = BLEC (BLE controller clock, also gates BB register writes)
+///   bit 17 = BLES (BLE schedule clock)
+/// ALL three must be enabled BEFORE bb_dev_init — BB registers (including the
+/// bit23 analog-enable strobe) are non-retentive without the BLE controller clock.
 const RCC_AHBPCENR: *mut u32 = 0x4002_1014 as *mut u32;
-const RCC_AHBPCENR_CRC_EN: u32 = 1 << 6;
+const RCC_AHBPCENR_BLE_CRC_EN: u32 = 0x0003_0040; // bits 6 + 16 + 17
 
 /// RCC CTLR register address.
 /// bit16=HSEON, bit17=HSERDY (32 MHz external crystal).
@@ -107,50 +113,72 @@ const RCC_CTLR: *mut u32 = 0x4002_1000 as *mut u32;
 /// Must be called exactly once at startup, before any BLE operation.
 /// Interrupts BB (63) and LLE (64) must have handlers registered before calling.
 pub unsafe fn ble_phy_init() {
-    // ── Step 0: ensure HSE (32 MHz external crystal) is running ──────────────
+    // ── Step 0: 32 MHz crystal oscillator calibration ────────────────────────
+    // Configure load capacitance (bits[30:28]) and drive current (bits[25:24])
+    // BEFORE enabling HSE, so the analog parameters are settled when oscillation starts.
+    // Values from WCHBLE_Init (MCU.c): load = 0x3 << 28, drive = 3 << 24.
+    // NOTE: If HSE fails to start, try commenting out this block to use reset-default
+    // values — crystal-specific parameters may differ from the WCH reference board.
+    let osc = core::ptr::read_volatile(OSC_HSE_CAL_CTRL);
+    let osc = (osc & !(0x07 << 28)) | (0x03 << 28);
+    let osc = osc | (3 << 24);
+    core::ptr::write_volatile(OSC_HSE_CAL_CTRL, osc);
+
+    // ── Step 1: ensure HSE (32 MHz external crystal) is running ──────────────
     // The BLE RF frontend uses HSE as its reference oscillator.
     // WCH official SDK relies on SystemInit() to enable HSE before BLE init;
     // our Rust hal::init(Default::default()) leaves HSEON=0 (HSI only).
     // We enable HSE here if not already running.
     let ctlr = core::ptr::read_volatile(RCC_CTLR);
     if ctlr & (1 << 17) == 0 {
-        // HSERDY=0: enable HSE and wait up to ~50k iterations for HSERDY.
-        core::ptr::write_volatile(RCC_CTLR, ctlr | (1 << 16)); // set HSEON
+        // HSERDY=0 — enable HSE in oscillator mode (HSEBYP=0, crystal on OSC_IN/OUT).
+        // Explicitly clear HSEBYP (bit 18) to guarantee oscillator mode regardless of
+        // any previous state, then set HSEON (bit 16).
+        core::ptr::write_volatile(RCC_CTLR, (ctlr & !(1 << 18)) | (1 << 16));
         let mut i = 0u32;
         while core::ptr::read_volatile(RCC_CTLR) & (1 << 17) == 0 {
             i += 1;
-            if i > 50_000 {
-                // Crystal did not start — proceed anyway; RF will not function.
+            if i > 500_000 {
+                // HSE did not start within ~300 ms. Break and let the caller's
+                // post-init diagnostic print the ctlr/hserdy values — panic_halt
+                // would swallow them. Downstream RF will not function, but the
+                // "post: hseon=? hserdy=? hsebyp=? osc_cal=?" line will still appear.
                 break;
             }
             core::hint::spin_loop();
         }
     }
 
-    // ── Step 1: 32 MHz crystal oscillator calibration ────────────────────────
-    // Configure 32 MHz crystal load capacitance and drive current.
-    // From WCHBLE_Init (MCU.c): clear bits[30:28], set to 0x3 << 28, set 3 << 24.
-    let osc = core::ptr::read_volatile(OSC_HSE_CAL_CTRL);
-    let osc = (osc & !(0x07 << 28)) | (0x03 << 28);
-    let osc = osc | (3 << 24);
-    core::ptr::write_volatile(OSC_HSE_CAL_CTRL, osc);
+    // ── Step 2: Enable BLE controller clocks BEFORE any dev_init ────────────
+    // RCC_AHBPeriph_BLE_CRC (0x00030040) = bits 6 (CRC) + 16 (BLEC) + 17 (BLES).
+    // BB register writes (especially the bit23 analog-enable strobe) are
+    // non-retentive without BLEC/BLES running — bit23 self-clears immediately if
+    // the BLE controller clock is gated. Hardware confirmed: with only bit6 (CRC)
+    // enabled, BB+0x00 bit23 latches momentarily but is cleared by the next write.
+    // Must be done BEFORE lle_dev_init / rfend_dev_init / bb_dev_init.
+    let ahb = core::ptr::read_volatile(RCC_AHBPCENR);
+    core::ptr::write_volatile(RCC_AHBPCENR, ahb | RCC_AHBPCENR_BLE_CRC_EN);
 
-    // Init order from BLE_IPCoreInit in dtm.elf: LLE first, then RFEND, then BB.
-    // LLE must be initialized before BB_DevInit fires the GO strobe.
+    // Init order: LLE → RFEND → BB → ble_reg_init (RF calibration, always last).
+    //
+    // CRITICAL ORDER: ble_reg_init() MUST run AFTER all three dev_inits.
+    // WCH BLE_IPCoreInit (asm L71209-71248) tail-calls ble_reg_init as the final
+    // step after all three dev_inits complete. bb_dev_init() enables the BB analog
+    // domain (bit23 strobe) and timing registers needed by the calibration PLL.
+    //
+    // Note: the exact relative order of rfend/bb/lle dev_inits is uncertain from asm
+    // (call 1/2/3 at L71239-71243 not decoded individually). Current order below
+    // matches WCH SDK MCU.c (RFEND → BB → LLE) and hardware-validated.
     lle_dev_init();
     rfend_dev_init();
     bb_dev_init(bb::BB_RF_FLAG_1M);
 
-    // Enable CRC peripheral clock (required by BLE stack).
-    let ahb = core::ptr::read_volatile(RCC_AHBPCENR);
-    core::ptr::write_volatile(RCC_AHBPCENR, ahb | RCC_AHBPCENR_CRC_EN);
+    // RF calibration last — always, unconditionally.
+    ble_reg_init();
 
     // NOTE: BB (IRQn 63) and LLE (IRQn 64) interrupts are NOT enabled here.
     // The DTM polling TX path reads IRQ status directly via register polling.
     // Enabling IRQs without registered handlers causes unhandled exception faults.
     // Applications that use interrupt-driven BLE (TMOS/BLE stack) must enable
     // them separately after installing BB_IRQHandler / LLE_IRQHandler.
-
-    // RF calibration: CO/GA lookup tables (mirrors BLE_RegInit tail-call in BLE_IPCoreInit).
-    ble_reg_init();
 }

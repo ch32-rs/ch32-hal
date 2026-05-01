@@ -56,8 +56,12 @@ fn main() -> ! {
 
         // ── BLE register diagnostic (after init) ─────────────────────────────
         let rcc_ctlr2 = core::ptr::read_volatile(0x4002_1000 as *const u32);
+        let osc_cal   = core::ptr::read_volatile(0x4002_202C as *const u32);
+        let hseon     = (rcc_ctlr2 >> 16) & 1;
         let hserdy2   = (rcc_ctlr2 >> 17) & 1;
-        hal::println!("RCC post-init: hserdy={hserdy2} (must be 1 for RF)");
+        let hsebyp    = (rcc_ctlr2 >> 18) & 1;
+        hal::println!("post: ctlr=0x{rcc_ctlr2:08x} hseon={hseon} hserdy={hserdy2} hsebyp={hsebyp} osc_cal=0x{osc_cal:08x}");
+        // Expected: hseon=1, hserdy=1, hsebyp=0 → crystal running in oscillator mode.
 
         // Dump LLE+0x2C after init — ch_2c should be 37/38/39 after first adv_event.
         let (lle_2c, _bb04, ctrl) = diag_read();

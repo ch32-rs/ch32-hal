@@ -40,15 +40,17 @@ pub const BB_RF_FLAG_1M: u8 = 0x09;
 ///
 /// `rf_flag`: PHY mode selection. Use `BB_RF_FLAG_1M` for standard BLE 1M.
 pub unsafe fn bb_dev_init(rf_flag: u8) {
-    // CTRL (+0x00): set bit11 (GO strobe to clear any stale state) and bit20.
-    // bit11 is a GO strobe — the hardware auto-clears it after processing.
-    // We set it here to match BB_DevInit in libwchble, then clear it explicitly
-    // so it starts at 0 for subsequent TX bursts.
-    bb_modify(0x00, 0x0000_0000, 0x0000_0800); // bit11 = GO strobe
-    // bit28 = 0x10000000: hardware enable bit (confirmed from BB_DevInit in dtm.elf:
-    // `lui a3,0x10000` → or CTRL,CTRL,a3).  Previously wrong as bit20 (0x100000).
+    // CTRL (+0x00): set bit23 and bit28 as permanent enables.
+    // WCH BB_DevInit asm L69623: `lui a3,0x800` → a3 = 0x800<<12 = 0x0080_0000 = bit23.
+    // Previous code wrongly used 0x0000_0800 (bit11, the TX GO strobe) — lui-shift typo.
+    // bit23 is a baseband enable, NOT a GO strobe; WCH leaves it set permanently.
+    // bit28 = 0x10000000: hardware enable (`lui a3,0x10000` → or CTRL,CTRL,a3).
+    // Neither bit is cleared after init — no "clear strobe" step in WCH asm.
+    bb_modify(0x00, 0x0000_0000, 0x0080_0000); // bit23 = 1 (was wrongly bit11/0x0800)
+    // bit23 is a self-clearing strobe — write bit28 IMMEDIATELY (no intervening code):
+    // WCH bb.o sequence is ~50 ns between bit23 and bit28 writes; any println here would
+    // delay hundreds of µs and make bit23 appear cleared (timing artifact, not a bug).
     bb_modify(0x00, 0x0000_0000, 0x1000_0000); // bit28 = 1
-    bb_modify(0x00, 0x0000_0800, 0x0000_0000); // clear bit11 after strobe
 
     // TIMING (+0x34): default 464 (0x1D0)
     bb_write(0x34, 0x1D0);

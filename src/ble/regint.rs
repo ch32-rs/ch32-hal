@@ -6,13 +6,14 @@
 //   3. RFEND_RXFilter — RX filter self-calibration with hardware poll
 //   4. RFEND_RXAdc    — RX ADC reference configuration
 //
-// Register bases (WCH uses two distinct RFEND address regions):
-//   RFEND_BASE    (rfend.rs)  = 0x40024300  — gptrAESReg, used by RFEND_DevInit only
-//   RFEND_CAL_BASE (this file) = 0x40025000  — gptrRFENDReg, PA bias / PLL / cal tables
+// Register base: 0x40025000 (gptrRFENDReg) — SAME block used by rfend.rs RFEND_DevInit.
+// rfend.rs configures the analog registers (PLL/VCO/loop-filter/bias offsets +0x28..+0x5C);
+// this file triggers calibration (+0x04) and reads calibration results (+0x90..+0xD0).
+// Both files operate on the same 0x40025000 hardware block — they are not separate regions.
 //
-// The 0x40025000 block was confirmed by dumping memory after running official dtm.elf:
-//   wlink dump 0x40025000+0xA0..0xC8 → CO1 table word0=0x45555556 (ch0=6,ch7=4),
-//   CO2 table word0=0x11100000 (ch0=0,ch5=1) — matches RFEND_TXCtune algorithm ✓.
+// Confirmed by ip.o BLE_IPCoreInit reloc: `lui a4, 0x40025` → *gptrRFENDReg=0x40025000.
+// Also confirmed by wlink dump after running official dtm.elf:
+//   0x40025000+0xA0..0xC8 → CO1 table word0=0x45555556 (ch0=6,ch7=4) ✓
 //
 // Register intent map (from disassembly of libwchble.a V1.40, confirmed):
 //   +0x04  bits: bit0=TX_tune_trigger, bit4=TX_cal_mode, bit8=TXF_enable,
@@ -36,11 +37,14 @@
 use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
 
-// gptrRFENDReg: PA bias, PLL, channel lock, calibration tables.
-// Distinct from RFEND_BASE in rfend.rs (0x40024300 = gptrAESReg used by RFEND_DevInit).
+// gptrRFENDReg: PA bias, PLL, calibration trigger, tables.
+// SAME block as RFEND_BASE in rfend.rs (both = 0x40025000 = gptrRFENDReg).
 const RFEND_CAL_BASE: usize = 0x40025000;
 // gptrLLEReg: provides LLE+0x64 countdown register for calibration timeouts.
 const LLE_BASE: usize = 0x40024200;
+// gptrBBReg: link-layer CTRL/GO. Used by BLE_RegInit pre/post-init analog-gate writes.
+// Confirmed by relocation decode of ip.o (BLE_RegInit s4 = gptrBBReg).
+const BB_BASE_REG: usize = 0x40024100;
 
 // Frequency selection codes written to RFEND_CAL_BASE+0x38 bits[15:8].
 // Confirmed from BB_DevInit / RF_DevSetChannel disassembly.
@@ -70,11 +74,53 @@ unsafe fn rmw(off: usize, clear: u32, set: u32) {
 ///
 /// # Safety
 /// Requires the RFEND/LLE peripherals to be initialized and accessible.
+/// RMW helper for BB_BASE (gptrBBReg = 0x40024100).
+/// Used by BLE_RegInit pre/post-init: WCH's +0x00 writes go to BB+0x00, NOT RFEND_CAL+0x00.
+/// Confirmed by ip.o relocation decode: BLE_RegInit s4 = gptrBBReg (2026-05-01, Lucy).
+#[inline(always)]
+unsafe fn bb_rmw(off: usize, clear: u32, set: u32) {
+    let p = (BB_BASE_REG + off) as *mut u32;
+    write_volatile(p, (read_volatile(p as *const u32) & !clear) | set);
+}
+
 pub unsafe fn ble_reg_init() {
+    // ── LLE+0x0C save / clear / fence.i  (WCH BLE_RegInit L71134-71136) ─────────
+    // Saves and clears LLE+0x0C (interrupt/DMA mask) for the duration of calibration.
+    // "delay(13)" = call to phy_status_clear(13) which is a no-op in standalone DTM
+    // (LLE+0x00 & 3 == 0 → immediate return). No actual wait needed.
+    let lle_0c = (LLE_BASE + 0x0C) as *mut u32;
+    let lle_0c_saved = read_volatile(lle_0c);
+    write_volatile(lle_0c, 0);
+    core::arch::asm!("fence.i");
+    // Brief settle (200k iters) — semantically irrelevant (phy_status_clear is no-op here)
+    // but retains ordering margin for any analog settle.
+    for _ in 0..200_000u32 { core::hint::spin_loop(); }
+
+    // ── Pre-init: analog enable (WCH BLE_RegInit L71150-71168, ip.o reloc confirmed) ──
+    //
+    // +0x00 writes go to BB_BASE (gptrBBReg = 0x40024100), NOT RFEND_CAL+0x00.
+    // Confirmed by ip.o objdump -d -r: s4 register = gptrBBReg, used for +0x00 RMWs.
+    bb_rmw(0x00, 0x3000, 0x1000); // BB+0x00: clear bits[13:12], set bit12
+    bb_rmw(0x00, 0x0180, 0);      // BB+0x00: clear bits[8:7]
+    bb_rmw(0x00, 0,      0x0100); // BB+0x00: set bit8
+    //
+    // +0x08 write goes to RFEND_CAL+0x08 (gptrRFENDReg = 0x40025000, s2 in asm).
+    rmw(0x08, 0, 0x0033_0000);    // RFEND_CAL+0x08: enable TX/RX PLL (bits 21+20+17+16)
+    //
+    // LLE+0x50 = 93 (settle timer, s1 = gptrLLEReg = 0x40024200).
+    write_volatile((LLE_BASE + 0x50) as *mut u32, 93);
+
+    // ── 4 calibration routines (WCH BLE_RegInit L71169-71176) ───────────────────
     rfend_tx_ctune();
     rfend_tx_ftune();
     rfend_rx_filter();
     rfend_rx_adc();
+
+    // ── Post-cleanup (WCH BLE_RegInit L71177-71192, ip.o reloc confirmed) ────────
+    bb_rmw(0x00, 0x0180, 0x0080);      // BB+0x00: clear bits[8:7], set bit7
+    rmw(0x08, 0x0032_0000, 0);         // RFEND_CAL+0x08: clear bits 21+20+17 (WCH 0xFFCDFFFF)
+    write_volatile((LLE_BASE + 0x50) as *mut u32, 0); // LLE+0x50 = 0
+    write_volatile(lle_0c, lle_0c_saved); // restore LLE+0x0C
 }
 
 /// RFEND_TXCtune: TX carrier oscillator + gain calibration.
@@ -92,15 +138,24 @@ pub unsafe fn ble_reg_init() {
 /// After calibration, RFEND+0x38 bits[5:0] = nCO2440, bits[30:24] = nGA2440.
 unsafe fn rfend_tx_ctune() {
     // Setup: clear calibration-mode bits, enable TX cal path.
-    rmw(0x04, 1 << 8, 0);  // clear bit8 (TXF enable off during CO tune)
-    rmw(0x28, 1 << 12, 0); // clear bit12 (TX tune mode not yet final)
-    rmw(0x2C, 0xF, 0);     // clear bits[3:0]
-    rmw(0x08, 0, 1 << 17); // set bit17 (TX calibration path enable)
-    rmw(0x04, 0, 1 << 4);  // set bit4 (TX calibration mode)
+    rmw(0x04, 1 << 8, 0);   // clear bit8 (TXF enable off during CO tune)
+    rmw(0x28, 1 << 12, 0);  // clear bit12 (TX tune mode not yet final)
+    rmw(0x2C, 1 << 4, 0);   // clear bit4 (post_cal_enable) — WCH asm: andi a4,a4,-17 (mask 0xFFFFFFEF)
+                              // BUG FIXED: was `0xF` (bits[3:0]) — wrong, matches WCH L75733-36
+    rmw(0x08, 0, 1 << 17);  // set bit17 (TX calibration path enable) — Lucy confirmed: WCH L75738 writes ONLY bit17
+    rmw(0x04, 0, 1 << 4);   // set bit4 (TX calibration mode)
 
-    let (nco2401, nga2401) = tx_tune_measure(FREQ_CODE_2401);
-    let (nco2480, nga2480) = tx_tune_measure(FREQ_CODE_2480);
-    let (nco2440, nga2440) = tx_tune_measure(FREQ_CODE_2440);
+    let (nco2401, nga2401, w2401) = tx_tune_measure(FREQ_CODE_2401);
+    let (nco2480, nga2480, w2480) = tx_tune_measure(FREQ_CODE_2480);
+    let (nco2440, nga2440, w2440) = tx_tune_measure(FREQ_CODE_2440);
+
+    // Calibration result summary (w=u32::MAX means timeout; w=0 may indicate stale state).
+    crate::println!(
+        "rfend_tune: 2401 co={} ga={} w={} | 2480 co={} ga={} w={} | 2440 co={} ga={} w={}",
+        nco2401, nga2401, w2401,
+        nco2480, nga2480, w2480,
+        nco2440, nga2440, w2440,
+    );
 
     // CO table 1 (RFEND+0xA0..0xB0, 5 words, 40 nibbles for ch0..ch39).
     // CO1[ch] = delta_low * (39-ch) / 39  for ch=0..39
@@ -223,53 +278,71 @@ unsafe fn rfend_tx_ctune() {
 
 /// Perform one TX tune measurement at the given frequency code.
 ///
-/// `freq_code`: value with bits[15:8] = frequency select code (e.g. `FREQ_CODE_2401`).
-/// Writes to RFEND+0x38 bits[15:8] (mask 0xFFFE_00FF clears bits[16:8]; bit16 is always 0).
+/// Returns `(CO bits[5:0], GA bits[16:10], wait_iters)` where `wait_iters` is the
+/// number of spin iterations until bits[26:25] of RFEND+0x90 were both set.
+/// `wait_iters == u32::MAX` signals a timeout (bits never became set).
 ///
-/// Returns (CO result bits[5:0], GA result bits[16:10]) after tune completion.
-/// On timeout the function returns whatever stale values are in the result registers.
+/// Trigger: bit0 of RFEND_CAL+0x04 (TX_tune_trigger) deassert → assert pulse.
+/// Requires the pre-init analog enable in ble_reg_init() to have run first:
+/// without `RFEND_CAL+0x08 |= 0x0033_0000` the PLL analog path is unpowered
+/// and the trigger pulse has no effect (confirmed 2026-05-01).
+///
 #[inline]
-unsafe fn tx_tune_measure(freq_code: u32) -> (u8, u8) {
-    rmw(0x04, 1, 0); // deassert previous trigger
+unsafe fn tx_tune_measure(freq_code: u32) -> (u8, u8, u32) {
+    rmw(0x04, 1, 0); // deassert trigger (bit0 of +0x04)
     let v = r(0x38);
     w(0x38, (v & 0xFFFE_00FF) | freq_code); // bits[15:8] ← freq code
-    rmw(0x04, 0, 1); // assert trigger
+    rmw(0x04, 0, 1); // assert trigger (bit0) → PLL starts measurement
 
-    if !rfend_wait_tune() {
-        #[cfg(feature = "defmt")]
-        defmt::warn!("rfend_wait_tune timeout (freq_code={:#06x})", freq_code);
-    }
+    let iters = rfend_wait_tune();
 
     let co = (r(0x90) & 0x3F) as u8;        // bits[5:0]
     let ga = ((r(0x94) >> 10) & 0x7F) as u8; // bits[16:10]
-    (co, ga)
+    (co, ga, iters)
 }
 
-/// Poll for TX tune completion using the LLE countdown timer as timeout.
+/// Poll for TX tune completion — WCH hybrid: LLE+0x64 write + bit-poll on RFEND+0x90.
 ///
-/// Polls RFEND+0x90 bit26 (active phase) + bit25 (done) in a single read per iteration.
-/// Assembly reads them separately (two lw instructions) but the combined check is
-/// functionally identical since we only proceed when both are set simultaneously.
+/// Mirrors WCH `RFEND_WaitTune` (decoded 2026-05-01 by Lucy):
 ///
-/// Returns `true` if tune completed, `false` on timeout (LLE+0x64 reaches 0).
+/// ```asm
+/// *(LLE+0x64) = 6000           // write countdown (also clears stale bits[26:25])
+/// loop:
+///   s = *(RFEND+0x90)          // read +0x90 — may latch GA into +0x94 (read side-effect)
+///   if bit26 set:
+///     s = *(RFEND+0x90)        // double-check
+///     if bit25 set: return     // both set → PLL locked, CO+GA valid
+///   if LLE+0x64 != 0: goto loop
+///   return                     // countdown expired (timeout path)
+/// ```
+///
+/// Two key hardware behaviours discovered empirically (2026-05-01):
+/// 1. **LLE+0x64 write clears stale bits[26:25]**: without it, bits left from the previous
+///    measurement cause rfend_wait_tune to return immediately (w=0) with old CO/GA.
+/// 2. **Reading +0x90 latches GA into +0x94**: fixed-delay paths (no +0x90 reads) leave
+///    GA=64 (hardware default) because the latch is never triggered.
+///
+/// LLE+0x64 does not count down in standalone calibration (no active BLE events), so a
+/// 30_000-iteration software counter is used as the backup timeout (≈ 1.25 ms @96 MHz).
+///
+/// Returns software loop count at exit, or `u32::MAX` on timeout.
 #[inline]
-/// Poll for TX tune completion.
-///
-/// LLE+0x64 is event-driven (ticks only during active BLE events) so a software
-/// iteration counter is used instead of the original LLE countdown timeout.
-/// In practice, RFEND+0x90 bits 26+25 are set immediately after trigger assertion.
-#[inline]
-unsafe fn rfend_wait_tune() -> bool {
-    for _ in 0..200_000u32 {
-        let status = r(0x90);
-        if status & (1 << 26) != 0 && status & (1 << 25) != 0 {
-            return true;
+unsafe fn rfend_wait_tune() -> u32 {
+    // Write LLE+0x64 = 6000 before polling. This matches WCH RFEND_WaitTune and has
+    // the side-effect of clearing stale bits[26:25] in RFEND+0x90 from the previous measurement.
+    write_volatile((LLE_BASE + 0x64) as *mut u32, 6000);
+
+    for i in 0..30_000u32 {
+        let s = r(0x90); // reading +0x90 latches GA into +0x94 (WCH read-side-effect)
+        if s & (1 << 26) != 0 {
+            let s2 = r(0x90); // WCH double-checks bit26 then bit25
+            if s2 & (1 << 25) != 0 {
+                return i;
+            }
         }
         core::hint::spin_loop();
     }
-    #[cfg(feature = "defmt")]
-    defmt::warn!("rfend_wait_tune timeout");
-    false
+    u32::MAX
 }
 
 /// RFEND_TXFtune: enable TX filter.

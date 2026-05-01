@@ -120,11 +120,18 @@ unsafe fn set_channel_freq(freq_khz: u32) {
 static mut TX_BUF: [u8; 39] = [0u8; 39];
 
 /// Fill TX_BUF with a DTM test PDU.
+///
+/// Header layout per BLE Core Spec Vol 6 Part F §3.1.2:
+///   Byte 0: bits[3:0]=PDU_Type, bits[5:4]=RFU, bits[7:6]=Length[1:0]
+///   Byte 1: bits[5:0]=Length[7:2], bits[7:6]=RFU
+///
 /// packet_type: 0=PRBS9, 1=0x0F repeated, 2=0x55 repeated, 3=vendor
 unsafe fn build_dtm_pdu(packet_type: u8, payload_len: u8) {
     let len = payload_len.min(37);
-    TX_BUF[0] = ((packet_type & 0x3) << 6) | (len & 0x3F);
-    TX_BUF[1] = 0x00;
+    // BLE Core Spec Vol 6 Part F §3.1.2 (fixed 2026-05-01; was wrong: had type in bits[7:6]
+    // and length in bits[5:0], which produced 0xA5 for type=2/len=37 → sniffer saw CONNECT_IND)
+    TX_BUF[0] = (packet_type & 0x0F) | ((len & 0x03) << 6);
+    TX_BUF[1] = (len >> 2) & 0x3F;
     let fill = match packet_type {
         1 => 0x0F,
         2 => 0x55,
@@ -166,10 +173,12 @@ unsafe fn dtm_tx_burst(freq_khz: u32) {
     let v = rfend_read(0x2C);
     rfend_write(0x2C, v & !(1 << 1));
 
-    // 8. Channel index: gptrBBReg+0x00 bits[6:0] = (freq_MHz - 2402) / 2.
+    // 8. Channel index: gptrBBReg+0x00 bits[6:0] = (freq_MHz - 2402) / 2 | 0x40.
+    // WCH LL_TransmitterTest asm: `s0 |= 64` before writing bits[6:0].
+    // bit6 is the "test mode marker" — required for correct whitening seed in DTM.
     let channel = (freq_khz / 1000 - 2402) / 2;
     let ctrl = lle_read(0x00);
-    lle_write(0x00, (ctrl & !0x7F) | (channel & 0x7F));
+    lle_write(0x00, (ctrl & !0x7F) | ((channel | 0x40) & 0x7F));
 
     // 9. Access Address: gptrBBReg+0x08.
     lle_write(0x08, DTM_ACCESS_ADDR);
@@ -215,7 +224,41 @@ unsafe fn wait_tx_done() -> bool {
 #[qingke_rt::entry]
 fn main() -> ! {
     hal::debug::SDIPrint::enable();
-    let _p = hal::init(Default::default());
+
+    // Configure 96 MHz from the 32 MHz external crystal (HSE/4 × 12).
+    //
+    // WCH MCU.c / SetSysClockTo96_HSE always runs at 96 MHz before BLE_IPCoreInit.
+    // Running at 8 MHz HSI (Default::default()) leaves the RFEND calibration PLL
+    // unable to complete (rfend_wait_tune times out, CO=0, all calibration tables zero).
+    // HSE 32 MHz → prediv=DIV4 → 8 MHz VCO input → mul=MUL12 → 96 MHz SYSCLK.
+    //
+    // Note: ble_phy_init() internally enables HSE too — with this config HSE is
+    // already running and HSERDY=1 when ble_phy_init() runs; it will skip its own
+    // HSE startup and proceed straight to dev_init / calibration at full speed.
+    let _p = hal::init(hal::Config {
+        rcc: hal::rcc::Config {
+            hse: Some(hal::rcc::Hse {
+                freq: hal::time::Hertz(32_000_000),
+                mode: hal::rcc::HseMode::Oscillator,
+            }),
+            sys: hal::rcc::Sysclk::PLL,
+            pll_src: hal::rcc::PllSource::HSE,
+            pll: Some(hal::rcc::Pll {
+                prediv: hal::rcc::PllPreDiv::DIV4,
+                mul: hal::rcc::PllMul::MUL12,
+            }),
+            pllx: None,
+            ahb_pre: hal::rcc::AHBPrescaler::DIV1,
+            apb1_pre: hal::rcc::APBPrescaler::DIV1,
+            apb2_pre: hal::rcc::APBPrescaler::DIV1,
+            ls: hal::rcc::LsConfig::default_lsi(),
+            hspll_src: hal::rcc::HsPllSource::HSE,
+            hspll: Some(hal::rcc::HsPll {
+                pre: hal::rcc::HsPllPrescaler::DIV2,
+            }),
+        },
+        ..Default::default()
+    });
 
     hal::println!("BLE DTM TX — CH32V208");
     hal::println!("channels: 2406 / 2440 / 2472 MHz (DTM ch2/19/35)");
@@ -230,9 +273,39 @@ fn main() -> ! {
             rcc_ctlr, rcc_cfgr0,
             (rcc_ctlr >> 1) & 1, (rcc_ctlr >> 17) & 1,
             (rcc_ctlr >> 25) & 1, (rcc_cfgr0 >> 2) & 3);
-        hal::println!("  (hserdy must=1, pllrdy must=1, sws must=2 for 144MHz PLL)");
+        hal::println!("  (hserdy must=1, pllrdy must=1, sws must=2 for 96MHz PLL)");
+
+        // ── Pre-init RFEND state (confirms power-on default of +0x90 bits[26:25]) ──
+        // Lucy confirmed: WCH doesn't pre-clear +0x90 before calibration; power-on should be 0.
+        // Reading here (before ble_phy_init) tells us if bits[26:25] are set by h/w reset or
+        // by something in our init sequence (rfend_dev_init / lle_dev_init).
+        let rfend90_pre = read_volatile(0x4002_5090 as *const u32);
+        hal::println!("pre-init: rfend90=0x{rfend90_pre:08x} bits26_25={} (expect 0=power-on-fresh)",
+            (rfend90_pre >> 25) & 3);
 
         hal::ble::ble_phy_init();
+
+        // Post-init HSE diagnostic — same format as ble_adv.rs.
+        // Expected: hseon=1, hserdy=1, hsebyp=0.
+        let rcc_ctlr2 = core::ptr::read_volatile(0x4002_1000 as *const u32);
+        let osc_cal   = core::ptr::read_volatile(0x4002_202C as *const u32);
+        hal::println!("post: ctlr=0x{rcc_ctlr2:08x} hseon={} hserdy={} hsebyp={} osc_cal=0x{osc_cal:08x}",
+            (rcc_ctlr2 >> 16) & 1, (rcc_ctlr2 >> 17) & 1, (rcc_ctlr2 >> 18) & 1);
+
+        // ── RFEND calibration table dump ─────────────────────────────────────
+        // RFEND_CAL_BASE = 0x40025000. After ble_reg_init(), CO tables should be non-zero
+        // if HSE is running and rfend_tx_ctune() completed valid measurements.
+        // Also dump bits[26:25] again to confirm they were 0 before and 1 after first tx_tune_measure.
+        let rfend90 = read_volatile(0x4002_5090 as *const u32);
+        let rfend38 = read_volatile(0x4002_5038 as *const u32);
+        let co_result = rfend90 & 0x3F;
+        let nco2440   = rfend38 & 0x3F;
+        let nga2440   = (rfend38 >> 24) & 0x7F;
+        // CO table 1 first word (should be non-zero if calibration worked)
+        let co_t1_0 = read_volatile(0x4002_50A0 as *const u32);
+        let co_t1_4 = read_volatile(0x4002_50B0 as *const u32);
+        hal::println!("RFEND cal: rfend90=0x{rfend90:08x} co={co_result} rfend38=0x{rfend38:08x} nco2440={nco2440} nga2440={nga2440}");
+        hal::println!("CO1 table: [0..7]=0x{co_t1_0:08x} [32..39]=0x{co_t1_4:08x}  (non-zero = cal OK)");
 
         build_dtm_pdu(2, 37);
 
@@ -283,7 +356,7 @@ fn main() -> ! {
 
             idx = (idx + 1) % CHANNELS.len();
 
-            // ~625 µs at 32 MHz (1 BLE slot).
+            // ~208 µs at 96 MHz (sufficient inter-burst gap for DTM).
             riscv::asm::delay(20_000);
         }
     }
