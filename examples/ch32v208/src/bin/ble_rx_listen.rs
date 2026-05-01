@@ -327,104 +327,92 @@ fn main() -> ! {
             if got_frame {
                 // Settle: wait for DMA to finish writing the rest of the packet.
                 // At 1 Mbps a max ADV (2+37B PDU + 3B CRC = 42B) takes 336 µs on-air.
-                // We detected after the first 32-bit word (~32 µs), so need ~304 µs more.
                 // 40_000 nops @ 96 MHz ≈ 417 µs — covers full packet + margin.
                 for _ in 0..40_000u32 { core::hint::spin_loop(); }
 
                 rx_count += 1;
 
-                // BB IRQ at BBReg+0x38. CRC-OK gate = bit21 set AND bit22 clear AND bit3 clear.
-                // bit21-only bucket + SW-dewhiten@offset9 → type=90.4%, RFU=86.6% (offline analysis).
-                // bit22 ≈ 11.7% — separate path (5-byte prefix, likely AUX_*/ext ADV), deferred subtask.
-                // bit3 ≈ 5% — minor event; excluding avoids mixed buckets polluting the main path.
+                // Read BB IRQ; W1C clear for next window.
+                // bit21 = CRC-OK gate (environment-dependent; confirmed ~9.7% in busy environment).
                 let bb_irq = lle_read(0x38);
-                lle_write(0x38, bb_irq); // W1C clear
+                lle_write(0x38, bb_irq);
 
+                // Snapshot 50 raw bytes from DMA buffer (covers prefix + max PDU + margin).
+                // Done BEFORE any decode so SCN scan and decode see the same snapshot.
+                let mut raw50 = [0u8; 50];
+                for i in 0..50usize {
+                    raw50[i] = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(i));
+                }
+
+                // ── SCN: per-offset LFSR scan ─────────────────────────────────────────────
+                // Runs for EVERY got_frame event (outside CRC gate) so no frames are swallowed.
+                // For each offset 4..=12: fresh LFSR (seed=logical_ch|0x40), decode 2 bytes →
+                //   tT = PDU type (0-9 = valid BLE ADV); rR = bits[7:6]==00 (RFU valid).
+                // Also tests ±1 channel seed at offset 9 (channel-drift detection).
+                {
+                    // Helper closure: dewhiten 2 bytes from raw50 at 'off' with given seed ch.
+                    let dw2 = |off: usize, ch: u8| -> (u8, u8) {
+                        let mut lfsr = ch | 0x40;
+                        let (mut b0, mut b1) = (0u8, 0u8);
+                        for bit in 0..8u8 {
+                            let out = lfsr & 1;
+                            let fb = (lfsr ^ (lfsr >> 4)) & 1;
+                            lfsr = (lfsr >> 1) | (fb << 6);
+                            b0 |= (((raw50[off] >> bit) & 1) ^ out) << bit;
+                        }
+                        for bit in 0..8u8 {
+                            let out = lfsr & 1;
+                            let fb = (lfsr ^ (lfsr >> 4)) & 1;
+                            lfsr = (lfsr >> 1) | (fb << 6);
+                            b1 |= (((raw50[off + 1] >> bit) & 1) ^ out) << bit;
+                        }
+                        (b0 & 0x0F, ((b1 & 0xC0) == 0) as u8)
+                    };
+
+                    hal::print!("SCN#{rx_count} {ch_label} bb={bb_irq:#010x}:");
+                    for off in 4usize..=12 {
+                        let (t, r) = dw2(off, logical_ch);
+                        hal::print!(" o{}=t{}r{}", off, t, r);
+                    }
+                    let ch_m1 = logical_ch.saturating_sub(1);
+                    let ch_p1 = (logical_ch + 1).min(39);
+                    let (tm1, rm1) = dw2(9, ch_m1);
+                    let (t0,  r0)  = dw2(9, logical_ch);
+                    let (tp1, rp1) = dw2(9, ch_p1);
+                    hal::println!(" |o9: ch{}=t{}r{} ch{}=t{}r{} ch{}=t{}r{}",
+                        ch_m1, tm1, rm1, logical_ch, t0, r0, ch_p1, tp1, rp1);
+                }
+
+                // ── CRC gate and full decode ──────────────────────────────────────────────
+                // Channel-specific PDU offset (confirmed 2026-05-01, Cindy ff84770 analysis):
+                //   ch37 → 8-byte HW prefix → PDU at DMA offset 8
+                //   ch38, ch39 → 9-byte HW prefix → PDU at DMA offset 9
+                // ch38 sub-bucket (n=24): 95.8% type+RFU at offset 9 with bit21 gate.
                 let crc_ok = (bb_irq >> 21) & 1 != 0
                     && (bb_irq >> 22) & 1 == 0
                     && (bb_irq >> 3)  & 1 == 0;
 
                 if crc_ok {
-                    // 9-byte HW prefix (raw[0..9]): RSSI / channel-tag / timestamp / LQI.
-                    // Content not yet decoded; printed for offline analysis.
-                    let mut prefix9 = [0u8; 9];
-                    for i in 0..9usize {
-                        prefix9[i] = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(i));
-                    }
+                    let pdu_off: usize = if logical_ch == 37 { 8 } else { 9 };
 
-                    // PDU starts at DMA offset 9.
-                    // HW does NOT dewhiten before DMA (confirmed 2026-05-01: raw without
-                    // SW dewhiten ≈ random; with SW dewhiten → 90%+ type validity).
+                    // Copy raw PDU bytes from snapshot, save first 16 before dewhiten.
                     let mut pdu = [0u8; 41];
-                    for i in 0..pdu.len() {
-                        pdu[i] = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(9 + i));
-                    }
-                    // Save first 16 raw bytes BEFORE dewhiten for LFSR verification.
-                    let mut raw_pdu16 = [0u8; 16];
-                    raw_pdu16.copy_from_slice(&pdu[..16]);
+                    pdu.copy_from_slice(&raw50[pdu_off..pdu_off + 41]);
+                    let mut raw16 = [0u8; 16];
+                    raw16.copy_from_slice(&pdu[..16]);
+                    // HW does NOT dewhiten before DMA (confirmed 2026-05-01, LFSR 35/35 verified).
                     dewhiten_inplace(&mut pdu, logical_ch);
 
                     let pdu_type = pdu[0] & 0x0F;
-                    // Cap at 37: BLE ADV max payload; prevents AD parser from walking off-end.
+                    // Cap at 37: BLE ADV max payload.
                     let real_len = ((pdu[1] & 0x3F) as usize).min(37);
                     let tx_add   = (pdu[0] >> 6) & 1;
                     let rx_add   = (pdu[0] >> 7) & 1;
 
-                    // Debug dump: bb_irq + 9-byte prefix + raw PDU[0..16] (before dewhiten)
-                    // + dewhitened PDU[0..16]. LFSR confirmed correct (86ca6a6, 35/35 match).
-                    hal::println!("DBG#{rx_count} {ch_label} bb={bb_irq:#010x} \
-                        prefix={:02x?} raw={:02x?} pdu={:02x?}",
-                        &prefix9, &raw_pdu16, &pdu[..16]);
-
-                    // Per-offset scan: for each candidate PDU start (offset 4..=12 in DMA buffer),
-                    // apply a FRESH LFSR (seed=channel|0x40) to the raw bytes at that offset and
-                    // decode the first 2 bytes as PDU hdr0 (type) and hdr1 (len/RFU).
-                    // Format: oN=tTrR where T=pdu_type (0-9 valid) and R=RFU00 (1=bits[7:6]==00).
-                    // True PDU start: offset where T is consistently 0-9 AND R=1.
-                    {
-                        // Combine prefix9 + raw_pdu16[0..9] → 18 bytes covering DMA[0..18].
-                        let mut raw18 = [0u8; 18];
-                        raw18[..9].copy_from_slice(&prefix9);
-                        raw18[9..18].copy_from_slice(&raw_pdu16[..9]);
-                        // Helper: dewhiten 2 bytes at raw18[off] with LFSR seed ch|0x40.
-                        // Returns (type_nibble, rfu_ok).
-                        let dw2 = |raw18: &[u8; 18], off: usize, ch: u8| -> (u8, u8) {
-                            let mut lfsr = ch | 0x40;
-                            let mut b0 = 0u8;
-                            let mut b1 = 0u8;
-                            for bit in 0..8u8 {
-                                let out = lfsr & 1;
-                                let fb = (lfsr ^ (lfsr >> 4)) & 1;
-                                lfsr = (lfsr >> 1) | (fb << 6);
-                                b0 |= (((raw18[off] >> bit) & 1) ^ out) << bit;
-                            }
-                            for bit in 0..8u8 {
-                                let out = lfsr & 1;
-                                let fb = (lfsr ^ (lfsr >> 4)) & 1;
-                                lfsr = (lfsr >> 1) | (fb << 6);
-                                b1 |= (((raw18[off + 1] >> bit) & 1) ^ out) << bit;
-                            }
-                            (b0 & 0x0F, ((b1 & 0xC0) == 0) as u8)
-                        };
-
-                        // Per-offset scan with logical_ch seed.
-                        hal::print!("SCN#{rx_count} {ch_label} ch={}:", logical_ch);
-                        for off in 4usize..=12 {
-                            let (t, r) = dw2(&raw18, off, logical_ch);
-                            hal::print!(" o{}=t{}r{}", off, t, r);
-                        }
-
-                        // Channel-drift test at offset 9: try ch-1, ch, ch+1 seeds.
-                        // If a ±1 seed gives better type/RFU than logical_ch → interrupt
-                        // captured logical_ch after channel hop (channel-drift hypothesis).
-                        let ch_m1 = logical_ch.saturating_sub(1);
-                        let ch_p1 = (logical_ch + 1).min(39);
-                        let (tm1, rm1) = dw2(&raw18, 9, ch_m1);
-                        let (t0,  r0 ) = dw2(&raw18, 9, logical_ch);
-                        let (tp1, rp1) = dw2(&raw18, 9, ch_p1);
-                        hal::println!(" |drift@o9: ch{}=t{}r{} ch{}=t{}r{} ch{}=t{}r{}",
-                            ch_m1, tm1, rm1, logical_ch, t0, r0, ch_p1, tp1, rp1);
-                    }
+                    // DBG: raw prefix + raw PDU[0..16] + dewhitened[0..16] for offline analysis.
+                    hal::println!("DBG#{rx_count} {ch_label} off={pdu_off} \
+                        prefix={:02x?} raw={:02x?} dw={:02x?}",
+                        &raw50[..pdu_off], &raw16, &pdu[..16]);
 
                     // AdvA: pdu[2..8] little-endian (on-air LSB first → print MSB first).
                     hal::print!("RX#{rx_count} {ch_label} type={pdu_type} len={real_len} \
@@ -477,11 +465,11 @@ fn main() -> ! {
                         if any { hal::print!("]"); }
                     }
 
-                    hal::println!(" prefix={:02x?}", &prefix9);
+                    hal::println!(" raw50={:02x?}", &raw50[..18]);
                 } else {
                     // CRC failed — brief tally; first 5 + every 100.
                     if rx_count <= 5 || rx_count % 100 == 0 {
-                        hal::println!("  RX#{rx_count} {ch_label} crc=FAIL bb_irq={bb_irq:#010x}");
+                        hal::println!("  RX#{rx_count} {ch_label} crc=FAIL bb={bb_irq:#010x}");
                     }
                 }
 
