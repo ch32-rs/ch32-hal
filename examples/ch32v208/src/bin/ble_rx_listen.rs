@@ -454,7 +454,12 @@ fn main() -> ! {
                     }
                     if any { hal::print!("]"); }
 
-                    hal::println!();
+                    // Raw dewhitened PDU dump: hdr(2) + AdvA(6) + AD section.
+                    // pdu[8]/pdu[9] = first AD length + type bytes; if pdu[8]>31 or 0 →
+                    // parser bails immediately (explains 0 Name/Mfr). Shown separately for easy grep.
+                    let dump_end = (2 + real_len).min(pdu.len());
+                    hal::println!(" ad0={:02x} ad1={:02x} pdu={:02x?}",
+                        pdu[8], pdu[9], &pdu[..dump_end]);
                 } else {
                     // Failed structural gate — suppress most; keep first 5 + every 200.
                     if rx_count <= 5 || rx_count % 200 == 0 {
