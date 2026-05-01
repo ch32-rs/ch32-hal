@@ -229,10 +229,7 @@ unsafe fn rx_window_timer_reload() {
 ///   Step 1: `rx_window_timer_reload()` — equivalent to `llScanProcess .L562`.
 ///     Reload lle64=406 with lle0C mask/restore BEFORE channel switch.
 ///   Step 2: `rx_traverse()` — equivalent to `llScanTraverseaChannel`.
-///     W1C bit13 + bit7/bit8 transitions + channel update. No RX GO.
-///
-/// Canonical sequence is .L562 THEN llScanTraverseaChannel. Previously the timer reload
-/// was at the END of rx_traverse (wrong order). Plan C fixes the ordering.
+///     W1C bit13 + bit7/bit8 transitions + channel update + lle74 restore. No RX GO.
 ///
 /// Root cause of #3.3 failure:
 ///   LL_ScanSetRF every window over-reset the state machine. HW entered SLEEP (state=0x6c)
@@ -242,7 +239,7 @@ unsafe fn rx_arm(logical_ch: u8, freq_khz: u32) {
         SCAN_INITED.store(true, Ordering::Relaxed);
         rx_cold_init(logical_ch, freq_khz);
     } else {
-        rx_window_timer_reload(); // .L562 first: reload timer before channel switch
+        rx_window_timer_reload(); // .L562: mask 0x0C + W1C bit13 + lle64=406 + restore
         rx_traverse(logical_ch, freq_khz);
     }
 }
@@ -306,6 +303,18 @@ unsafe fn rx_cold_init(logical_ch: u8, freq_khz: u32) {
 unsafe fn rx_traverse(logical_ch: u8, freq_khz: u32) {
     // Update RFEND PLL to new channel frequency.
     set_channel_freq(freq_khz);
+
+    // Restore LLE+0x74 to EVT baseline value each window (patch #3.11).
+    //
+    // Single-variable hypothesis (Lucy + Cindy 2026-05-01):
+    //   EVT stall snapshot: lle74=0x83 (working), Rust stall snapshot: lle74=0x4c.
+    //   0x83 and 0x4c are both < 1KB — too small for an SRAM address.
+    //   LLE_DevInit loads lle74 from a global array offset; semantic unknown (HW counter?
+    //   burst control? DMA status?). Writing 0x83 (EVT working value) restores EVT baseline.
+    //
+    // If this fixes SCN > 20 → lle74 confirmed as stuck register, 0x83 is correct restore.
+    // If SCN unchanged → lle74 is a passive status, try lle00 bit7 fix next (#3.12).
+    bb_write(0x74, 0x83);
 
     // llScanTraverseaChannel: W1C bit13 only (not full 0xF00F).
     // The IRQ handler normally W1Cs bit13 (scan-window-done event) per window.
@@ -372,7 +381,7 @@ fn main() -> ! {
     });
 
     hal::println!("BLE RX scanner — CH32V208 bedrock test");
-    hal::println!("Rotating ADV ch37/38/39 (patch #3.10: Plan C — timer reload BEFORE traverse)  Looking for any advertiser...");
+    hal::println!("Rotating ADV ch37/38/39 (patch #3.11: lle74=0x83 restore per window)  Looking for any advertiser...");
 
     unsafe {
         let rcc_ctlr  = read_volatile(0x4002_1000 as *const u32);
@@ -614,8 +623,9 @@ fn main() -> ! {
                 let bb64 = bb_read(0x64);   // LLE+0x64: 0=idle, non-zero=RX in progress
                 let bb1c = bb_read(0x1C);   // LLE state machine
                 let lle00 = bb_read(0x00);  // LLE+0x00: GO/state-bits (watch for SLEEP drift)
+                let lle74 = bb_read(0x74);  // LLE+0x74: diagnostic (EVT=0x83, stall=0x4c)
                 hal::println!("  scan#{scan_count} rx={rx_count} struct={struct_ok_count} {ch_label}: no frame | \
-                    bb_irq={bb38:#010x} lle_irq={bb08:#010x} rxbusy={bb64:#010x} state={bb1c:#04x} lle00={lle00:#010x}");
+                    bb_irq={bb38:#010x} lle_irq={bb08:#010x} rxbusy={bb64:#010x} state={bb1c:#04x} lle00={lle00:#010x} lle74={lle74:#04x}");
             }
 
             // Canonical per-window W1C: replicates lle_irq_process @ L71240 (Lucy d.asm).
