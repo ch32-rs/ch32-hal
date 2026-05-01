@@ -303,12 +303,10 @@ unsafe fn rx_traverse(logical_ch: u8, freq_khz: u32) {
     let c = bb_read(0x00);
     bb_write(0x00, (c & !0x7F) | (logical_ch as u32 & 0x3F));
     // No RX GO write: HW is already in active scan from cold-boot.
-
-    // Reset scan-window countdown so the poll loop gets a fresh ~125ms window.
-    // In WCH's IRQ-driven model the scan timer is managed by the stack; in our
-    // polling model we write SCAN_WINDOW here so each traverse window has a
-    // defined duration before poll exits via `bb_read(0x64) == 0`.
-    bb_write(0x64, SCAN_WINDOW);
+    // No SCAN_WINDOW write here: patch #3.6 showed that writing 0x64 in traverse
+    // (without a paired RX GO) pushes HW into SLEEP after 2 windows — HW interprets
+    // the countdown-to-0 as "window expired, no GO follows → sleep".
+    // Per-window timeout is now a pure software iteration count in the poll loop.
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -345,7 +343,7 @@ fn main() -> ! {
     });
 
     hal::println!("BLE RX scanner — CH32V208 bedrock test");
-    hal::println!("Rotating ADV ch37/38/39 (Plan A2: 0x64 poll, no W1C bit1/2, sw={})  Looking for any advertiser...", SCAN_WINDOW);
+    hal::println!("Rotating ADV ch37/38/39 (Plan A3: SW poll + wtrl gate, no 0x64 in traverse, cold-init sw={})  Looking for any advertiser...", SCAN_WINDOW);
 
     unsafe {
         let rcc_ctlr  = read_volatile(0x4002_1000 as *const u32);
@@ -386,32 +384,34 @@ fn main() -> ! {
 
             // Poll until the HW scan window expires (Plan A2, patch #3.6).
             //
-            // Exit condition: bb_read(0x64) == 0.
-            //   LLE+0x64 is written SCAN_WINDOW before each window (cold-boot and traverse).
-            //   HW counts it down; when it hits 0 the window is "done" — either a frame
-            //   was fully received (DMA complete) OR the window timed out with no packet.
+            // Poll until DMA completes or software timeout (Plan A3, patch #3.7).
+            //
+            // Early exit: RX_BUF[50] != 0 (wtrl position).
+            //   WCH writes a trailer byte (0x80) at RX_BUF[RX_BUF[1]] as the LAST DMA write
+            //   after a full packet. Checking a late buffer position (~50 for typical ADV PDU)
+            //   gives an early exit without reading mid-DMA. RX_BUF[50] is around the trailer
+            //   for typical ADV_IND (prefix 8-9B + PDU ≤39B = ~48B total).
+            //
+            // Fallthrough: 2M software iterations ≈ 62ms — ensures even short/absent packets
+            //   get enough dwell time. got_frame is then set by RX_BUF[1] != 0 (see below).
             //
             // We do NOT poll irq08 bit1/bit2 (patch #3.5 lesson, Lucy 2026-05-01):
             //   bit1/bit2 are sticky "RX-pending" state indicators, NOT per-frame triggers.
-            //   W1C'ing them signals "all consumed" → HW enters full SLEEP (state=0x6c)
-            //   and stops all RX activity (SCN dropped from 2575 to 21 in patch #3.5).
-            //   Leaving them set maintains the "pending" keepalive and keeps SCN alive.
+            //   W1C'ing them signals "all consumed" → HW enters full SLEEP.
             //
-            // After exit: inspect RX_BUF[1] (HW DMA length byte) to distinguish real
-            //   frame (non-zero) from timeout (zero). Safe here because 0x64==0 guarantees
-            //   HW finished writing (unlike checking mid-DMA which caused #3.3 state death).
+            // We do NOT write LLE+0x64 in traverse (patch #3.6 lesson, Lucy 2026-05-01):
+            //   Writing SCAN_WINDOW to 0x64 in traverse triggers HW SLEEP after countdown
+            //   (only 2 windows before state=0x6c). LLE+0x64 is HW-managed; only cold-boot
+            //   writes it (step 1: 0, step 11: SCAN_WINDOW).
             for _ in 0..2_000_000u32 {
-                if bb_read(0x64) == 0 { break; }
+                if read_volatile(addr_of!(RX_BUF).cast::<u8>().add(50)) != 0 { break; }
                 core::hint::spin_loop();
             }
-            // RX_BUF[1] = HW metadata length byte; non-zero = DMA actually wrote data.
+            // After poll: RX_BUF[1] = HW DMA length byte; non-zero = DMA actually wrote data.
+            // Checking here (not mid-loop) avoids re-arming while DMA is in flight (#3.2 lesson).
             let got_frame = read_volatile(addr_of!(RX_BUF).cast::<u8>().add(1)) != 0;
 
             if got_frame {
-                // Extra settle margin. 0x64==0 should already guarantee DMA complete,
-                // but a short spin ensures any pipeline/cache effects are flushed before
-                // we snapshot raw50.
-                for _ in 0..4_000u32 { core::hint::spin_loop(); }
 
                 rx_count += 1;
 
@@ -566,10 +566,13 @@ fn main() -> ! {
                     hal::println!(" pdu={:02x?}", &pdu[..dump_end]);
                 } else {
                     // Failed structural gate — suppress most; keep first 5 + every 200.
+                    // raw16 = raw50[0..16]: HW prefix + PDU start bytes. Helps diagnose
+                    // dewhitening offset errors (type=11/7 seen in #3.6 disc frames).
                     if rx_count <= 5 || rx_count % 200 == 0 {
-                        hal::println!("  disc#{rx_count} {ch_label} type={pdu_type} \
-                            len={real_len} rfu={} bb={bb_irq:#010x}",
+                        hal::print!("  disc#{rx_count} {ch_label} type={pdu_type} \
+                            len={real_len} rfu={} wlen={wch_len} bb={bb_irq:#010x} irq08={irq08:#010x}",
                             rfu_ok as u8);
+                        hal::println!(" raw16={:02x?}", &raw50[..16]);
                     }
                 }
 
