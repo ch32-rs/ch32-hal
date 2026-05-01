@@ -77,16 +77,23 @@ unsafe fn rfend_write(off: usize, v: u32) { write_volatile((RFEND_BASE + off) as
 /// # LFSR spec
 ///
 /// State: 7 bits. Seed = `channel | 0x40` (bit6 always 1).
-/// Each bit: output = state[0]; feedback = state[6] XOR state[3]; state >>= 1; state[6] = feedback.
-/// Applied LSB-first within each byte, MSB-first across bytes is NOT the BLE order —
-/// BLE PDU bits are transmitted LSB first, so we apply LSB-first within each byte.
+/// Each bit: output = state[0] (LSB); new input to state[6] = state[0] XOR state[4].
+/// BLE PDU bits are transmitted LSB first, so we apply the LFSR LSB-first within each byte.
+///
+/// # Polynomial derivation
+///
+/// Polynomial x^7 + x^4 + 1, right-shift Fibonacci LFSR (output from bit 0):
+///   feedback = bit0 XOR bit4   (taps at positions 0 and 4 from the output end)
+///   new_state = (state >> 1) | (feedback << 6)
+///
+/// NOT `bit6 XOR bit3` — that is the left-shift (output from bit6) variant and is WRONG here.
 fn dewhiten_inplace(data: &mut [u8], channel: u8) {
     let mut lfsr = channel | 0x40; // 7-bit LFSR seed (bit6 always 1)
     for byte in data.iter_mut() {
         let mut dw = 0u8;
         for bit in 0..8u8 {
             let out = lfsr & 1;
-            let feedback = ((lfsr >> 6) ^ (lfsr >> 3)) & 1;
+            let feedback = (lfsr ^ (lfsr >> 4)) & 1; // bit0 XOR bit4
             lfsr = (lfsr >> 1) | (feedback << 6);
             let data_bit = (*byte >> bit) & 1;
             dw |= (data_bit ^ out) << bit;
@@ -326,12 +333,16 @@ fn main() -> ! {
 
                 rx_count += 1;
 
-                // BB IRQ at BBReg+0x38. bit21 = CRC-OK (confirmed 2026-05-01, empirical:
-                // bit21-only bucket + SW-dewhiten@offset9 → type=90.4%, RFU=86.6%).
+                // BB IRQ at BBReg+0x38. CRC-OK gate = bit21 set AND bit22 clear AND bit3 clear.
+                // bit21-only bucket + SW-dewhiten@offset9 → type=90.4%, RFU=86.6% (offline analysis).
+                // bit22 ≈ 11.7% — separate path (5-byte prefix, likely AUX_*/ext ADV), deferred subtask.
+                // bit3 ≈ 5% — minor event; excluding avoids mixed buckets polluting the main path.
                 let bb_irq = lle_read(0x38);
                 lle_write(0x38, bb_irq); // W1C clear
 
-                let crc_ok = (bb_irq >> 21) & 1 != 0;
+                let crc_ok = (bb_irq >> 21) & 1 != 0
+                    && (bb_irq >> 22) & 1 == 0
+                    && (bb_irq >> 3)  & 1 == 0;
 
                 if crc_ok {
                     // 9-byte HW prefix (raw[0..9]): RSSI / channel-tag / timestamp / LQI.
