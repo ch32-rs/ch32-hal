@@ -70,7 +70,30 @@ extern "C" {
     static mut gBleLlPara: u8;
     static mut gBleIPPara: u8;
     static mut ble: u8;
+    static mut gptrLLEReg: u32;
+    static mut gptrBBReg: u32;
+    static mut gptrRFENDReg: u32;
+    static mut gptrAESReg: u32;
+    static mut gPaControl: u32;
+    static mut dtmFlag: u8;
 }
+
+// Task #23: Keep BLE_IPCoreInit and its entire lib call-chain in the binary
+// even though ble_ip_core_init() (Rust) is now called instead of the FFI version.
+// Without this anchor, --gc-sections removes ~119KB of lib code (BLE_IPCoreInit +
+// LLE_DevInit + RFEND_DevInit + BB_DevInit + BLE_RegInit + calibration callees),
+// causing a flash layout shift that breaks BLE timing (Iron Law from task #21).
+// Remove this anchor only after task #22 fully replaces BB_IRQLibHandler and the
+// complete lib removal is validated.
+#[used]
+static _KEEP_BLE_IP_CORE_INIT: unsafe extern "C" fn() = BLE_IPCoreInit;
+
+// Task #23 Variant B bisect anchor: keeps ble_ip_core_init() body in flash even
+// when the call site uses the FFI path. Without this, Rust DCE removes the function
+// and the SRAM layout collapses back to baseline (0x20001738), making the bisect
+// equivalent to a baseline re-run rather than a single-variable layout test.
+#[used]
+static _KEEP_RUST_IP_CORE_INIT: unsafe fn() = hal::ble::ble_ip_core_init;
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
@@ -155,6 +178,14 @@ unsafe fn ll_init_safe_prefix() {
 
     // Equivalent of LL_AdvertiseEnalbe's callback table plus the ADV core list
     // head set up by llAdvertiseCreateCore. Use Rust-local addresses.
+    //
+    // Task #21 forensic (2026-05-03): these four vtable slots look unused in
+    // Path C's explicit control flow, but hardware gate showed they must stay
+    // populated. Removing the writes makes `cba` disappear even when a
+    // `#[used]` anchor keeps llAdvertise* symbols and the binary layout at the
+    // 42e57ef baseline. Direct deletion also GC's ~47KB of lib text and shifts
+    // gBleLlPara, which is another unsafe layout change. Keep these writes until
+    // the hidden init/IRQ consumer is fully identified.
     let adv_ctx = core::ptr::addr_of_mut!(RUST_ADV_CTX) as u32;
     write_ll_u32(p, 0x58, adv_ctx);
     write_ll_u32(p, 0x5c, adv_ctx);
@@ -206,6 +237,7 @@ const ISO_MODE: u8 = 0; // ← change this
 // that EVT has in a non-default state at trigger time.
 const DUMP_TIER_A: bool = false;
 const PATHC_REPLACE_TIER0: bool = true;
+const PATHC_USE_RUST_IP_CORE_INIT: bool = true;
 const Y200_SNAPSHOT: bool = false;
 const Z37_SNAPSHOT: bool = false;
 const Z37_TARGET_BURST: u32 = 1; // zero-based: capture burst 2.
@@ -1136,6 +1168,40 @@ unsafe fn dump_state_region(label: &str, addr: usize, len: usize) {
     hal::println!();
 }
 
+unsafe fn dump_current_ble_symbols(tag: &str) {
+    hal::println!("# BLE_SYMBOL_DUMP {} begin", tag);
+    dump_state_region("sym_ble", core::ptr::addr_of!(ble) as usize, 64);
+    dump_state_region("sym_gBleLlPara", core::ptr::addr_of!(gBleLlPara) as usize, 0x80);
+    dump_state_region("sym_gBleIPPara", core::ptr::addr_of!(gBleIPPara) as usize, 0x40);
+    dump_state_region("sym_gptrLLEReg", core::ptr::addr_of!(gptrLLEReg) as usize, 4);
+    dump_state_region("sym_gptrBBReg", core::ptr::addr_of!(gptrBBReg) as usize, 4);
+    dump_state_region("sym_gptrRFENDReg", core::ptr::addr_of!(gptrRFENDReg) as usize, 4);
+    dump_state_region("sym_gptrAESReg", core::ptr::addr_of!(gptrAESReg) as usize, 4);
+    dump_state_region("sym_gPaControl", core::ptr::addr_of!(gPaControl) as usize, 4);
+    dump_state_region("sym_dtmFlag", core::ptr::addr_of!(dtmFlag) as usize, 1);
+    hal::println!("# BLE_SYMBOL_DUMP {} end", tag);
+}
+
+unsafe fn dump_ip_core_mmio(tag: &str) {
+    hal::println!("# IP_CORE_MMIO_DUMP {} begin", tag);
+    match tag {
+        "after_ip_core_init" => {
+            hal::ble::tracer::dump_regs("IP-after_ip-BB   ", BB_BASE as u32, 0x00, 0x80);
+            hal::ble::tracer::dump_regs("IP-after_ip-LLE  ", LLE_BASE as u32, 0x00, 0x80);
+            hal::ble::tracer::dump_regs("IP-after_ip-RFEND", RFEND_BASE as u32, 0x00, 0xD0);
+            hal::ble::tracer::dump_regs("IP-after_ip-AES  ", 0x4002_4300, 0x00, 0x30);
+        }
+        "after_ll_init_safe_prefix" => {
+            hal::ble::tracer::dump_regs("IP-after_ll-BB   ", BB_BASE as u32, 0x00, 0x80);
+            hal::ble::tracer::dump_regs("IP-after_ll-LLE  ", LLE_BASE as u32, 0x00, 0x80);
+            hal::ble::tracer::dump_regs("IP-after_ll-RFEND", RFEND_BASE as u32, 0x00, 0xD0);
+            hal::ble::tracer::dump_regs("IP-after_ll-AES  ", 0x4002_4300, 0x00, 0x30);
+        }
+        _ => {}
+    }
+    hal::println!("# IP_CORE_MMIO_DUMP {} end", tag);
+}
+
 /// Dump all known BLE stack RAM globals for EVT-vs-Rust comparison.
 ///
 /// **Addresses are STUBS** from Lucy's stub-link map (msg 7e201119, 2026-05-02).
@@ -1384,12 +1450,23 @@ fn main() -> ! {
         if PATHC_REPLACE_TIER0 {
             // Path C Plan C: RF_RoleInit hangs in the TMOS registration path here,
             // so call the TMOS-free IP-core init plus LL_Init directly.
-            hal::println!("PathC PlanC: before BLE_IPCoreInit()");
-            BLE_IPCoreInit();
-            hal::println!("PathC PlanC: after BLE_IPCoreInit()");
+            if PATHC_USE_RUST_IP_CORE_INIT {
+                hal::println!("PathC PlanC: before ble_ip_core_init()");
+                hal::ble::ble_ip_core_init();
+                hal::println!("PathC PlanC: after ble_ip_core_init()");
+            } else {
+                // Task #23 bisect: FFI path with Rust replacement retained in flash.
+                hal::println!("PathC bisect: before BLE_IPCoreInit() FFI");
+                BLE_IPCoreInit();
+                hal::println!("PathC bisect: after BLE_IPCoreInit() FFI");
+            }
+            dump_current_ble_symbols("after_ip_core_init");
+            dump_ip_core_mmio("after_ip_core_init");
             hal::println!("PathC PlanD: before ll_init_safe_prefix()");
             ll_init_safe_prefix();
             hal::println!("PathC PlanD: after ll_init_safe_prefix()");
+            dump_current_ble_symbols("after_ll_init_safe_prefix");
+            dump_ip_core_mmio("after_ll_init_safe_prefix");
             seed_ble_bd_addr();
             hal::println!("PathC PlanD: seeded ble[0x18..0x1d] BD addr");
             if PATHC_CALL_LL_HELPERS {
@@ -1400,7 +1477,7 @@ fn main() -> ! {
             } else {
                 hal::println!("PathC PlanB2: LL helper calls skipped");
             }
-            hal::println!("PathC PlanD: BLE_IPCoreInit() + LL_Init safe prefix replaced Rust Tier-0 init");
+            hal::println!("PathC PlanD: BLE IP-core init + LL_Init safe prefix replaced Tier-0 init");
         } else {
         hal::ble::lle_dev_init();
 
@@ -1434,7 +1511,7 @@ fn main() -> ! {
         hal::ble::tracer::dump_regs("S3 LLE  ", LLE_BASE as u32,   0x00, 0x80);
         hal::ble::tracer::dump_regs("S3 RFEND", RFEND_BASE as u32, 0x00, 0xD0);
 
-        hal::ble::ble_reg_init(); // RF calibration — always last
+        hal::ble::ble_reg_init(false); // RF calibration — always last (Phase B RX path, keep clears)
 
         // Path C probe: let WCH's IP-core init populate hidden BLE hardware/RAM latches.
         // ip.o disassembly shows this calls only LLE_DevInit/RFEND_DevInit/BB_DevInit/BLE_RegInit.

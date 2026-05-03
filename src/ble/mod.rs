@@ -175,6 +175,65 @@ pub unsafe fn ble_hw_preamble() {
     }
 }
 
+// ── WCH lib global MMIO pointer cache ────────────────────────────────────────
+//
+// BLE_IPCoreInit writes these BSS variables so BB_IRQLibHandler / LLE_IRQSubHandler
+// can find the hardware base addresses at runtime.  They must be populated before
+// any lib IRQ handler fires — even when we replace BLE_IPCoreInit with Rust code.
+extern "C" {
+    static mut gptrLLEReg:   u32; // set to 0x40024200 (WCH "LLE" = our bb_* range)
+    static mut gptrBBReg:    u32; // set to 0x40024100 (WCH "BB"  = our lle_* range)
+    static mut gptrRFENDReg: u32; // set to 0x40025000
+    static mut gptrAESReg:   u32; // set to 0x40024300
+    static mut gPaControl:   u32;
+    static mut dtmFlag:      u8;
+    static mut gBleIPPara:   u8;  // 40-byte array; access as *mut u8 + byte offset
+}
+
+/// Pure-Rust replacement for WCH `BLE_IPCoreInit`.
+///
+/// Sets the lib global MMIO pointer cache (required by `BB_IRQLibHandler` and
+/// `LLE_IRQSubHandler` at runtime), then calls the four sub-init functions in
+/// WCH order: `LLE_DevInit → RFEND_DevInit → BB_DevInit → BLE_RegInit`.
+///
+/// Once this function succeeds, the `extern "C" fn BLE_IPCoreInit` FFI symbol
+/// is no longer needed and can be removed from the example's extern block.
+///
+/// # Safety
+///
+/// Must be called after [`ble_hw_preamble`] (HSE + BLE clocks enabled) and
+/// before any BLE TX/RX operation or IRQ delivery.
+pub unsafe fn ble_ip_core_init() {
+    use core::ptr::{addr_of_mut, write_volatile};
+
+    // ── Glue: mirror BLE_IPCoreInit steps 1-7 ────────────────────────────────
+    // Steps 1-2: clear dtmFlag + gPaControl (BSS already 0; explicit write for compat)
+    write_volatile(addr_of_mut!(dtmFlag),    0u8);
+    write_volatile(addr_of_mut!(gPaControl), 0u32);
+    // Steps 3-6: MMIO base pointer cache
+    //   BB_IRQLibHandler reads gptrBBReg → 0x40024100 (our lle_* base)
+    //   LLE_IRQSubHandler reads gptrLLEReg → 0x40024200 (our bb_* base)
+    write_volatile(addr_of_mut!(gptrAESReg),   0x4002_4300u32);
+    write_volatile(addr_of_mut!(gptrLLEReg),   0x4002_4200u32);
+    write_volatile(addr_of_mut!(gptrRFENDReg), 0x4002_5000u32);
+    write_volatile(addr_of_mut!(gptrBBReg),    0x4002_4100u32);
+    // Step 7: gBleIPPara[7] = 1 — WCH BLE_RegInit uses this as a run-once guard.
+    //   Our Rust ble_reg_init() does not check it, but write for future-compat.
+    let ip = addr_of_mut!(gBleIPPara) as *mut u8;
+    write_volatile(ip.add(7), 1u8);
+    // Steps 8-9: gBleIPPara[8/9] = ble_ptr+272 / ble_ptr
+    //   WCH LLE_DevInit reads gBleIPPara[9] for its DMA buffer address.
+    //   Our Rust lle_dev_init() uses a local LLE_DMA_BUF static instead.
+    //   `ble` is NULL in our path (BLE_LibInit never called), so these would
+    //   write 0 / 272 — skip to avoid a NULL DMA pointer in gBleIPPara[9].
+
+    // ── Sub-inits in WCH order ────────────────────────────────────────────────
+    lle_dev_init();
+    rfend_dev_init();
+    bb_dev_init(bb::BB_RF_FLAG_1M); // rf_flag = 0x09 = EVT ble[0x14] confirmed
+    ble_reg_init(false);
+}
+
 /// Initialize the BLE PHY hardware layer.
 ///
 /// Enables the HSE 32 MHz external crystal (required by the BLE RF frontend as its
@@ -211,7 +270,8 @@ pub unsafe fn ble_phy_init() {
     bb_dev_init(bb::BB_RF_FLAG_1M);
 
     // RF calibration last — always, unconditionally.
-    ble_reg_init();
+    // skip_phase_b_rx_clears=false: keep Bug #2/#3 clears for Phase B RX listener path.
+    ble_reg_init(false);
 
     // NOTE: BB (IRQn 63) and LLE (IRQn 64) interrupts are NOT enabled here.
     // The DTM polling TX path reads IRQ status directly via register polling.

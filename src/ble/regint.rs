@@ -83,7 +83,14 @@ unsafe fn bb_rmw(off: usize, clear: u32, set: u32) {
     write_volatile(p, (read_volatile(p as *const u32) & !clear) | set);
 }
 
-pub unsafe fn ble_reg_init() {
+/// If `skip_phase_b_rx_clears` is `true`, the two extra post-calibration clears that
+/// were added for the Phase B RX path (Bug #2: RFEND+0x08 bit16, Bug #3: RFEND+0x04
+/// bits 8+12) are omitted, matching the lib BLE_RegInit behavior exactly.
+///
+/// All current callers pass `false` — the clears are harmless for ADV TX (the bits are
+/// re-set by TX-mode setup before GO regardless) and are needed by the RX listener path.
+/// The `true` path is available for future lib-faithful testing or caller-specific control.
+pub unsafe fn ble_reg_init(skip_phase_b_rx_clears: bool) {
     // ── LLE+0x0C save / clear / fence.i  (WCH BLE_RegInit L71134-71136) ─────────
     // Saves and clears LLE+0x0C (interrupt/DMA mask) for the duration of calibration.
     // "delay(13)" = call to phy_status_clear(13) which is a no-op in standalone DTM
@@ -121,10 +128,16 @@ pub unsafe fn ble_reg_init() {
     rmw(0x08, 0x0032_0000, 0);         // RFEND_CAL+0x08: clear bits 21+20+17 (WCH 0xFFCDFFFF)
     // Bug #2 fix: clear bit16 (RX_ADC path enable, set by rfend_rx_adc, not cleared before).
     // Phase B diff: our 0x000119f8 vs EVT 0x000019f8 — bit16 should not remain set post-cal.
-    rmw(0x08, 1 << 16, 0);             // RFEND_CAL+0x08: clear bit16 (RX_ADC path)
     // Bug #3 fix: clear bits 8+12 (TXF_enable + RX_filter_mode, set during cal, never cleared).
     // Phase B diff: our 0x00011100 vs EVT 0x00010000 — bits 8+12 are calibration-only modes.
-    rmw(0x04, (1 << 8) | (1 << 12), 0); // RFEND_CAL+0x04: clear bit8 (TXF) + bit12 (RX_filter)
+    //
+    // NOTE: lib BLE_RegInit does NOT clear these bits. They are RX-path corrections needed
+    // for the Phase B RX listener but HARMFUL for ADV TX (Tier 3 regression confirmed).
+    // Skip when skip_phase_b_rx_clears=true (ADV TX / ble_ip_core_init path).
+    if !skip_phase_b_rx_clears {
+        rmw(0x08, 1 << 16, 0);             // RFEND_CAL+0x08: clear bit16 (RX_ADC path)
+        rmw(0x04, (1 << 8) | (1 << 12), 0); // RFEND_CAL+0x04: clear bit8 (TXF) + bit12 (RX_filter)
+    }
     write_volatile((LLE_BASE + 0x50) as *mut u32, 0); // LLE+0x50 = 0
     write_volatile(lle_0c, lle_0c_saved); // restore LLE+0x0C
 }
@@ -307,14 +320,14 @@ unsafe fn tx_tune_measure(freq_code: u32) -> (u8, u8, u32) {
     (co, ga, iters)
 }
 
-/// Poll for TX tune completion — WCH hybrid: LLE+0x64 write + bit-poll on RFEND+0x90.
+/// Poll for TX tune completion — lib-faithful: LLE+0x64 write + bit-poll on RFEND+0x90.
 ///
-/// Mirrors WCH `RFEND_WaitTune` (decoded 2026-05-01 by Lucy):
+/// Mirrors WCH `RFEND_WaitTune` (decoded 2026-05-01 by Lucy) byte-for-byte:
 ///
 /// ```asm
 /// *(LLE+0x64) = 6000           // write countdown (also clears stale bits[26:25])
 /// loop:
-///   s = *(RFEND+0x90)          // read +0x90 — may latch GA into +0x94 (read side-effect)
+///   s = *(RFEND+0x90)          // read +0x90 — latches GA into +0x94 (read side-effect)
 ///   if bit26 set:
 ///     s = *(RFEND+0x90)        // double-check
 ///     if bit25 set: return     // both set → PLL locked, CO+GA valid
@@ -322,23 +335,29 @@ unsafe fn tx_tune_measure(freq_code: u32) -> (u8, u8, u32) {
 ///   return                     // countdown expired (timeout path)
 /// ```
 ///
-/// Two key hardware behaviours discovered empirically (2026-05-01):
+/// **V_A3 change (2026-05-04)**: Loop control now uses `LLE+0x64 != 0` as the loop condition,
+/// matching lib byte-for-byte. Previous version used a SW `for i in 0..30_000` counter with
+/// `hint::spin_loop()`, which created non-deterministic per-iteration timing (binary layout
+/// sensitive) → 1-LSB ADC sample drift in nGA2440 across builds.
+///
+/// LLE+0x64 does not count down in standalone calibration (no active BLE events), so the
+/// hw countdown path never fires — but the loop structure now matches lib exactly.
+/// A hard SW cap of 300_000 iters guards against any hardware anomaly.
+///
+/// Two key hardware behaviours (unchanged, confirmed 2026-05-01):
 /// 1. **LLE+0x64 write clears stale bits[26:25]**: without it, bits left from the previous
 ///    measurement cause rfend_wait_tune to return immediately (w=0) with old CO/GA.
-/// 2. **Reading +0x90 latches GA into +0x94**: fixed-delay paths (no +0x90 reads) leave
-///    GA=64 (hardware default) because the latch is never triggered.
+/// 2. **Reading +0x90 latches GA into +0x94**: fixed-delay paths leave GA=64 (HW default).
 ///
-/// LLE+0x64 does not count down in standalone calibration (no active BLE events), so a
-/// 30_000-iteration software counter is used as the backup timeout (≈ 1.25 ms @96 MHz).
-///
-/// Returns software loop count at exit, or `u32::MAX` on timeout.
+/// Returns loop count at exit, or `u32::MAX` on SW cap timeout.
 #[inline]
 unsafe fn rfend_wait_tune() -> u32 {
-    // Write LLE+0x64 = 6000 before polling. This matches WCH RFEND_WaitTune and has
-    // the side-effect of clearing stale bits[26:25] in RFEND+0x90 from the previous measurement.
+    // Arm LLE+0x64 countdown = 6000. Matches lib RFEND_WaitTune entry.
+    // Side-effect: clears stale bits[26:25] in RFEND+0x90 from the previous measurement.
     write_volatile((LLE_BASE + 0x64) as *mut u32, 6000);
 
-    for i in 0..30_000u32 {
+    let mut i = 0u32;
+    loop {
         let s = r(0x90); // reading +0x90 latches GA into +0x94 (WCH read-side-effect)
         if s & (1 << 26) != 0 {
             let s2 = r(0x90); // WCH double-checks bit26 then bit25
@@ -346,9 +365,14 @@ unsafe fn rfend_wait_tune() -> u32 {
                 return i;
             }
         }
-        core::hint::spin_loop();
+        // Lib loop condition: LLE+0x64 hardware countdown (matches RFEND_WaitTune control flow).
+        // In standalone mode, LLE+0x64 does not decrement — this path is a safety net.
+        if read_volatile((LLE_BASE + 0x64) as *const u32) == 0 {
+            return u32::MAX; // hw countdown expired
+        }
+        i = i.wrapping_add(1);
+        if i >= 300_000 { return u32::MAX; } // SW safety cap
     }
-    u32::MAX
 }
 
 /// RFEND_TXFtune: enable TX filter.
