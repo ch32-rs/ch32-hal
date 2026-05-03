@@ -116,8 +116,11 @@ pub unsafe fn rfend_dev_init() {
     rfend_modify(0x30, 0x0000_0000, 0x0070_0000); // set bits[22:20]
     rfend_modify(0x30, 0x7000_0000, 0x5000_0000); // clear bits[30:28], set 0b101<<28
 
-    // CFG4 (+0x38): PLL enable — WCH asm L75385-75391
-    rfend_modify(0x38, 0x00F8_0000, 0x0010_0000); // clear bits[23:19], set bit20 (B3: was absent)
+    // CFG4 (+0x38): PLL enable — WCH asm L75385-75391 (d_reloc.asm L99556-99563)
+    // Bug #1 fix (2026-05-02): clear mask was 0x00F8_0000 (bits[23:19]), but lib uses
+    // 0xff080000 - 1 = 0xff07ffff → keeps bits 0-18 + 26-31, clears bits[25:19].
+    // Verified by RegTracer diff: post-init 0x38 had bit 25 wrongly set in fix2.
+    rfend_modify(0x38, 0x03F8_0000, 0x0010_0000); // clear bits[25:19], set bit20
     rfend_modify(0x38, 0x0000_0000, 0x8000_0000); // bit31 = 1
 
 }

@@ -145,15 +145,17 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     // 2. Event timeout counter: BB+0x64 = 160.
     bb_write(0x64, 160);
 
-    // 3. PLL program for ADV channel (DTM-style: RFEND_CAL+0x44).
-    // Lucy confirmed ll_advertise_tx doesn't call this, but the calling context might expect
-    // PLL to be pre-programmed. We use the ADV non-DTM formula: freq_offset = freq-1000.
+    // 3. PLL program for ADV channel (RFEND_CAL+0x44).
+    // Formula (confirmed from RF_DevSetChannel d.asm L71418, DTM-validated 2026-04-30):
+    //   int_div  = (freq_khz / 64000) & 0x1F
+    //   frac_div = ((freq_khz % 64000) << 10) / 250
+    //   mask 0xFE0F_C000 preserves calibration bits + bits[17:14], zeroes int+frac fields
+    // NOTE: old code used `freq_khz - 1_000` offset + 0xFE0C_0000 mask — both wrong.
     {
-        let freq_offset = freq_khz - 1_000;
-        let int_div = (freq_offset / 64_000) & 0x1F;
-        let frac_div = ((freq_offset % 64_000) << 10) / 250;
+        let int_div  = (freq_khz / 64_000) & 0x1F;
+        let frac_div = ((freq_khz % 64_000) << 10) / 250;
         let pll = read_volatile((RFEND_CAL_BASE + 0x44) as *const u32);
-        let pll = (pll & 0xFE0C_0000) | (int_div << 20) | (frac_div & 0x3_FFFF);
+        let pll = (pll & 0xFE0F_C000) | (int_div << 20) | (frac_div & 0x3FFF);
         write_volatile((RFEND_CAL_BASE + 0x44) as *mut u32, pll);
         let v = read_volatile((RFEND_CAL_BASE + 0x2C) as *const u32);
         write_volatile((RFEND_CAL_BASE + 0x2C) as *mut u32, v | (1 << 1)); // set lock
@@ -196,31 +198,30 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     // 11. TX buffer pointer: BB+0x70.
     bb_write(0x70, core::ptr::addr_of!(ADV_TX_BUF) as u32);
 
-    // 12. LLE arm: BB+0x00 = 2 — MUST come before GO bit.
-    // DTM comment: "Without this write the LLE ignores the GO pulse."
-    bb_write(0x00, 2);
+    // Pre-trigger snapshot.
+    let state_pre = bb_read(0x1C); // LLE state; should be 108=Sleep
 
-    // Pre-GO: clear all BB+0x08 IRQ bits (full 32-bit W1C, same as DTM code).
-    // Bits 29+25 (0x22000000) are set by GO when TX fires; clearing here lets irq_post
-    // detect TX fire on a per-channel basis (if they are W1C-able at 32-bit width).
-    bb_write(0x08, 0xFFFF_FFFF);
-    let state_pre = bb_read(0x1C); // LLE state before GO; should be 108=Sleep
+    // 12. ADV-mode flag: BB+0x04 bit0 = 1.
+    // Confirmed from lib `ll_advertise_tx` L39233 (Lucy 2026-05-02).
+    // Lib DTM (`ll_hw_api_tx_direct_test`) clears this bit. Mode selector for HW TX path.
+    bb_write(0x04, bb_read(0x04) | 0x1);
 
-    // 13. GO bit: LLE+0x00 |= 0x800. Clear first to guarantee 0→1 edge.
-    let ctrl = lle_read(0x00);
-    lle_write(0x00, ctrl & !0x800);
-    let ctrl = lle_read(0x00);
-    lle_write(0x00, ctrl | 0x800);
+    // 13. ADV GO: LLE+0x00 |= 0x800000 (bit 23 — NOT bit 11).
+    // Confirmed from lib `ll_advertise_tx` L39276-39280 (`lui a3,0x800` → a3=0x00800000).
+    // Lib DTM does NOT write bit 23; both bit 11 and bit 23 were wrong in old code.
+    lle_write(0x00, lle_read(0x00) | 0x0080_0000);
 
-    // Snapshot immediately after GO — before step 14 clears the arm.
-    // If state_post != state_pre: HW state machine accepted the GO command.
-    // If irq_post & 0xFFFF != 0: TX completion IRQ already fired.
-    let state_post = bb_read(0x1C);
-    let irq_post = bb_read(0x08);
-
-    // 14. Clear TX arm: LLE+0x2C bits[1:0] = 00.
+    // 14. Clear TX arm: LLE+0x2C bits[1:0] = 00 (commit all config before trigger).
     let cfg = lle_read(0x2C);
     lle_write(0x2C, cfg & !0x3);
+
+    // 15. TX trigger — FINAL write: BB+0x00 = 2 (lib L39288-39290).
+    // Must be last; old code had this mid-sequence before GO — incorrect for ADV mode.
+    bb_write(0x00, 2);
+
+    // Post-trigger snapshot.
+    let state_post = bb_read(0x1C);
+    let irq_post   = bb_read(0x08);
 
     (state_pre, state_post, irq_post)
 }
@@ -248,7 +249,7 @@ unsafe fn wait_adv_tx_done() -> (bool, u32, u32, u32) {
 pub unsafe fn diag_read() -> (u32, u32, u32) {
     let lle_2c = lle_read(0x2C);      // channel field bits[30:25], TX arm bits[1:0]
     let bb04 = bb_read(0x04);         // TX armed flag bit0
-    let ctrl = lle_read(0x00);        // channel bits[6:0] + whitening bit6 + GO bit11
+    let ctrl = lle_read(0x00);        // channel bits[6:0] + bit6=whitening + bit23=BLE enable
     (lle_2c, bb04, ctrl)
 }
 

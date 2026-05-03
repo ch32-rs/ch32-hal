@@ -17,14 +17,17 @@
 pub mod adv;
 pub mod bb;
 pub mod lle;
+pub mod listener;
 pub mod rfend;
 pub mod regint;
+pub mod tracer;
 
 pub use regint::ble_reg_init;
-
-use bb::bb_dev_init;
-use lle::lle_dev_init;
-use rfend::rfend_dev_init;
+// Re-export individual init steps so examples can call them with dump points between
+// stages (Phase B multi-stage diff, task #16).
+pub use bb::{bb_dev_init, BB_RF_FLAG_1M};
+pub use lle::lle_dev_init;
+pub use rfend::rfend_dev_init;
 
 // ── Shared BLE TX completion primitive ──────────────────────────────────────
 
@@ -98,6 +101,80 @@ const RCC_AHBPCENR_BLE_CRC_EN: u32 = 0x0003_0040; // bits 6 + 16 + 17
 /// bit16=HSEON, bit17=HSERDY (32 MHz external crystal).
 const RCC_CTLR: *mut u32 = 0x4002_1000 as *mut u32;
 
+/// RCC RSTSCKR register address.
+/// bit0=LSION, bit1=LSIRDY on CH32V20x. ch32-hal's `LsConfig::init()` is not
+/// implemented yet, so BLE examples must force-start LSI here for the BLE slow
+/// scheduling clock domain.
+const RCC_RSTSCKR: *mut u32 = 0x4002_1024 as *mut u32;
+
+/// Enable the 32 MHz HSE crystal oscillator and BLE/CRC peripheral clocks.
+///
+/// This is the clock-setup preamble shared by [`ble_phy_init`] and the Phase B
+/// staged-init path. Extracted so examples can insert `tracer::dump_regs` calls
+/// between individual hardware-init stages without duplicating clock-setup code.
+///
+/// **Idempotent**: the HSE-ready check and the RCC OR-mask are both safe to call
+/// multiple times (HSERDY poll exits immediately if HSE is already running; the
+/// bit-OR of already-set clock bits is a no-op).
+///
+/// # Safety
+///
+/// Must be called before any of `lle_dev_init`, `rfend_dev_init`, `bb_dev_init`,
+/// or `ble_reg_init`. Safe to call before `hal::init` returns, but must be called
+/// from machine-mode context.
+pub unsafe fn ble_hw_preamble() {
+    // ── Step 0: 32 MHz crystal oscillator calibration ────────────────────────
+    // Configure load capacitance (bits[30:28]) and drive current (bits[25:24])
+    // BEFORE enabling HSE so the analog parameters are settled when oscillation
+    // starts. Values from WCHBLE_Init (MCU.c): load = 0x3 << 28, drive = 3 << 24.
+    let osc = core::ptr::read_volatile(OSC_HSE_CAL_CTRL);
+    let osc = (osc & !(0x07 << 28)) | (0x03 << 28);
+    let osc = osc | (3 << 24);
+    core::ptr::write_volatile(OSC_HSE_CAL_CTRL, osc);
+
+    // ── Step 1: ensure HSE (32 MHz external crystal) is running ──────────────
+    // The BLE RF frontend uses HSE as its reference oscillator.
+    // WCH official SDK relies on SystemInit() to enable HSE before BLE init;
+    // our Rust hal::init(Default::default()) leaves HSEON=0 (HSI only).
+    let ctlr = core::ptr::read_volatile(RCC_CTLR);
+    if ctlr & (1 << 17) == 0 {
+        // HSERDY=0 — enable in oscillator mode (HSEBYP=0, crystal on OSC_IN/OUT).
+        // Explicitly clear HSEBYP (bit 18) then set HSEON (bit 16).
+        core::ptr::write_volatile(RCC_CTLR, (ctlr & !(1 << 18)) | (1 << 16));
+        let mut i = 0u32;
+        while core::ptr::read_volatile(RCC_CTLR) & (1 << 17) == 0 {
+            i += 1;
+            if i > 500_000 {
+                // HSE did not start within ~300 ms. Break so the caller's
+                // post-init diagnostic can still print CTLR values.
+                break;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
+    // ── Step 2: Enable BLE controller clocks BEFORE any dev_init ────────────
+    // RCC_AHBPeriph_BLE_CRC (0x00030040) = bits 6 (CRC) + 16 (BLEC) + 17 (BLES).
+    // BB register writes (bit23 analog-enable strobe) are non-retentive without
+    // BLEC/BLES running. Must be set before lle/rfend/bb dev_init calls.
+    let ahb = core::ptr::read_volatile(RCC_AHBPCENR);
+    core::ptr::write_volatile(RCC_AHBPCENR, ahb | RCC_AHBPCENR_BLE_CRC_EN);
+
+    // ── Step 3: Enable LSI slow clock for BLE scheduling ───────────────────
+    // The HAL stores an `LsConfig`, but the v3 RCC init path does not yet
+    // consume it. WCH BLE scheduling depends on a running low-speed clock.
+    let rstsckr = core::ptr::read_volatile(RCC_RSTSCKR);
+    core::ptr::write_volatile(RCC_RSTSCKR, rstsckr | 0x1);
+    let mut i = 0u32;
+    while core::ptr::read_volatile(RCC_RSTSCKR) & 0x2 == 0 {
+        i += 1;
+        if i > 1_000_000 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+}
+
 /// Initialize the BLE PHY hardware layer.
 ///
 /// Enables the HSE 32 MHz external crystal (required by the BLE RF frontend as its
@@ -108,56 +185,16 @@ const RCC_CTLR: *mut u32 = 0x4002_1000 as *mut u32;
 /// called with `Default::default()` (which leaves HSEON=0), this function enables HSE
 /// before proceeding.  The system CPU clock is left unchanged — only HSE is enabled.
 ///
+/// For Phase B staged-init debugging (insert `tracer::dump_regs` between stages),
+/// call [`ble_hw_preamble`] followed by [`lle_dev_init`], [`rfend_dev_init`],
+/// [`bb_dev_init`], and [`ble_reg_init`] individually instead of this function.
+///
 /// # Safety
 ///
 /// Must be called exactly once at startup, before any BLE operation.
 /// Interrupts BB (63) and LLE (64) must have handlers registered before calling.
 pub unsafe fn ble_phy_init() {
-    // ── Step 0: 32 MHz crystal oscillator calibration ────────────────────────
-    // Configure load capacitance (bits[30:28]) and drive current (bits[25:24])
-    // BEFORE enabling HSE, so the analog parameters are settled when oscillation starts.
-    // Values from WCHBLE_Init (MCU.c): load = 0x3 << 28, drive = 3 << 24.
-    // NOTE: If HSE fails to start, try commenting out this block to use reset-default
-    // values — crystal-specific parameters may differ from the WCH reference board.
-    let osc = core::ptr::read_volatile(OSC_HSE_CAL_CTRL);
-    let osc = (osc & !(0x07 << 28)) | (0x03 << 28);
-    let osc = osc | (3 << 24);
-    core::ptr::write_volatile(OSC_HSE_CAL_CTRL, osc);
-
-    // ── Step 1: ensure HSE (32 MHz external crystal) is running ──────────────
-    // The BLE RF frontend uses HSE as its reference oscillator.
-    // WCH official SDK relies on SystemInit() to enable HSE before BLE init;
-    // our Rust hal::init(Default::default()) leaves HSEON=0 (HSI only).
-    // We enable HSE here if not already running.
-    let ctlr = core::ptr::read_volatile(RCC_CTLR);
-    if ctlr & (1 << 17) == 0 {
-        // HSERDY=0 — enable HSE in oscillator mode (HSEBYP=0, crystal on OSC_IN/OUT).
-        // Explicitly clear HSEBYP (bit 18) to guarantee oscillator mode regardless of
-        // any previous state, then set HSEON (bit 16).
-        core::ptr::write_volatile(RCC_CTLR, (ctlr & !(1 << 18)) | (1 << 16));
-        let mut i = 0u32;
-        while core::ptr::read_volatile(RCC_CTLR) & (1 << 17) == 0 {
-            i += 1;
-            if i > 500_000 {
-                // HSE did not start within ~300 ms. Break and let the caller's
-                // post-init diagnostic print the ctlr/hserdy values — panic_halt
-                // would swallow them. Downstream RF will not function, but the
-                // "post: hseon=? hserdy=? hsebyp=? osc_cal=?" line will still appear.
-                break;
-            }
-            core::hint::spin_loop();
-        }
-    }
-
-    // ── Step 2: Enable BLE controller clocks BEFORE any dev_init ────────────
-    // RCC_AHBPeriph_BLE_CRC (0x00030040) = bits 6 (CRC) + 16 (BLEC) + 17 (BLES).
-    // BB register writes (especially the bit23 analog-enable strobe) are
-    // non-retentive without BLEC/BLES running — bit23 self-clears immediately if
-    // the BLE controller clock is gated. Hardware confirmed: with only bit6 (CRC)
-    // enabled, BB+0x00 bit23 latches momentarily but is cleared by the next write.
-    // Must be done BEFORE lle_dev_init / rfend_dev_init / bb_dev_init.
-    let ahb = core::ptr::read_volatile(RCC_AHBPCENR);
-    core::ptr::write_volatile(RCC_AHBPCENR, ahb | RCC_AHBPCENR_BLE_CRC_EN);
+    ble_hw_preamble();
 
     // Init order: LLE → RFEND → BB → ble_reg_init (RF calibration, always last).
     //

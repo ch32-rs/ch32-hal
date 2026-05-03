@@ -119,6 +119,12 @@ pub unsafe fn ble_reg_init() {
     // ── Post-cleanup (WCH BLE_RegInit L71177-71192, ip.o reloc confirmed) ────────
     bb_rmw(0x00, 0x0180, 0x0080);      // BB+0x00: clear bits[8:7], set bit7
     rmw(0x08, 0x0032_0000, 0);         // RFEND_CAL+0x08: clear bits 21+20+17 (WCH 0xFFCDFFFF)
+    // Bug #2 fix: clear bit16 (RX_ADC path enable, set by rfend_rx_adc, not cleared before).
+    // Phase B diff: our 0x000119f8 vs EVT 0x000019f8 — bit16 should not remain set post-cal.
+    rmw(0x08, 1 << 16, 0);             // RFEND_CAL+0x08: clear bit16 (RX_ADC path)
+    // Bug #3 fix: clear bits 8+12 (TXF_enable + RX_filter_mode, set during cal, never cleared).
+    // Phase B diff: our 0x00011100 vs EVT 0x00010000 — bits 8+12 are calibration-only modes.
+    rmw(0x04, (1 << 8) | (1 << 12), 0); // RFEND_CAL+0x04: clear bit8 (TXF) + bit12 (RX_filter)
     write_volatile((LLE_BASE + 0x50) as *mut u32, 0); // LLE+0x50 = 0
     write_volatile(lle_0c, lle_0c_saved); // restore LLE+0x0C
 }
