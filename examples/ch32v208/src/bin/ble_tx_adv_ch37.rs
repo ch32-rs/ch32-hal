@@ -486,6 +486,15 @@ const X1_POLLED_W1C: bool = true;
 /// A3 experiment (2026-05-02) CLOSED: placed at 0x20004344, BB+0x70 readback=0x10D1,
 /// formula (val>>2)&0x1FFF confirmed 13-bit. bleak=0 → BB+0x70 addressing is NOT the
 /// root cause. Reverted to default linker placement (BSS, readback ~0x54f).
+///
+/// T3 Option D (2026-05-04) — BSS gap pre-shift for 16B alignment.
+/// TX_BUF MUST be 16B-aligned: mod16=4 (T3 R1) and mod16=8 (T3-probe-align) both caused cba=0.
+/// Option B (#[repr(C,align(16))] struct): +108B code bloat → ruled out.
+/// Option C (#[link_section=".tx_buf_aligned"] + ALIGN(16)): +64B code (TX_BUF outside
+///   GlobalMerge → separate absolute address load) → ruled out.
+/// Option D: `. += 8` in custom link.x .bss preamble shifts MergedGlobals.180 base by +8B.
+///   TX_BUF sits at offset 0x98 inside MergedGlobals; was mod16=8 (T3PA), now mod16=0. ✓
+///   No type change, no section annotation → LLVM codegen identical to T3PA. BIN=51588B. ✓
 static mut TX_BUF: [u8; 39] = [0u8; 39];
 
 #[ch32_hal::interrupt]
