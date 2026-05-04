@@ -90,12 +90,12 @@ extern "C" {
 // dead PathC call sites at lines ~1718/1769 are LLVM DCE'd (not in final binary).
 // extern decl + dead call sites cleaned up at T8. Total cascade: -544B (empirically measured).
 
-// Task #20: keep the lib LLE IRQ body live without calling it from the IRQ64
-// wrapper. The direct call is unreachable in Path C because IRQ64 is masked, but
-// removing the symbol entirely shifts layout and kills ADV TX. Explicit retention
-// passed the 60s gate (cba=78), so this static is the deliberate anchor.
-#[used]
-static _KEEP_LLE_IRQ_HANDLER: unsafe extern "C" fn() = LLE_IRQSubHandler;
+// Phase D+1 T6 (2026-05-05): LLE_IRQSubHandler anchor REMOVED.
+// LLE_IRQSubHandler (504B) + lle_irq_process (318B) cascade-GC'd by --gc-sections.
+// IRQ64 (LLE interrupt) is NVIC-masked in Path C — LLE_IRQSubHandler is unreachable.
+// lle_irq_process is called exclusively from LLE_IRQSubHandler; no other callers.
+// No --undefined=LLE_IRQSubHandler flag in build.rs; anchor was the sole keeper.
+// Total cascade: -824B (empirically measured from T4 baseline).
 
 // Task #25 D-final.1: retain 4 llAdvertise* lib symbols for code-layout
 // anchoring. These functions are dead code in Path C — the vtable at
@@ -203,10 +203,17 @@ static _T4_PAD: [u8; 216] = [0u8; 216];
 // Phase D+1 T5: size-neutral pad compensating BLE_IPCoreInit cascade GC.
 // BLE_IPCoreInit (118B) + RFEND_DevInit (372B) + RFEND_Reset (52B) + anchor (4B) = -544B.
 // Empirically measured from T4 baseline (probe-build-nm-restore).
-// T6 (#31) will remove _T5_PAD and replace with _T6_PAD when LLE_IRQSubHandler is removed.
 #[used]
 #[link_section = ".rodata"]
 static _T5_PAD: [u8; 544] = [0u8; 544];
+
+// Phase D+1 T6: size-neutral pad compensating LLE_IRQSubHandler cascade GC.
+// LLE_IRQSubHandler (504B) + lle_irq_process (318B) + anchor (4B) = -826B symbol sum.
+// Actual BIN delta from T5 state: -828B (4B linker alignment vs T4-probe -824B estimate).
+// All cumulative pads (_T3+_T4+_T5+_T6) will be consolidated at T7.
+#[used]
+#[link_section = ".rodata"]
+static _T6_PAD: [u8; 828] = [0u8; 828];
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
