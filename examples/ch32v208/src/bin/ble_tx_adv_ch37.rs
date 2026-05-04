@@ -97,26 +97,14 @@ extern "C" {
 // No --undefined=LLE_IRQSubHandler flag in build.rs; anchor was the sole keeper.
 // Total cascade: -824B (empirically measured from T4 baseline).
 
-// Task #25 D-final.1: retain 4 llAdvertise* lib symbols for code-layout
-// anchoring. These functions are dead code in Path C — the vtable at
-// gBleLlPara+0x68..0x74 is never dereferenced at runtime (TMOS scheduler
-// never runs). Removing them causes -22440B linker GC (Iron Law #22).
-// D-1a.0b size-neutral sentinel gate (median=64) confirmed content dead.
-#[used]
-static _KEEP_LL_ADV_CREATE_CORE: unsafe extern "C" fn() = llAdvertiseCreateCore;
-#[used]
-static _KEEP_LL_ADV_SET: unsafe extern "C" fn() = llAdvertiseSet;
-#[used]
-static _KEEP_LL_ADV_START: unsafe extern "C" fn() = llAdvertiseStart;
-#[used]
-static _KEEP_LL_ADV_TRAVERSE: unsafe extern "C" fn() = llAdvTraverseallChannel;
-
-// Task #25 D-final.1: 8B rodata pad to keep BIN size = baseline 51588B.
-// The 4 anchors above add ~16B net; sentinel vtable writes (below) have
-// same instruction count as fn-ptr writes; pad compensates the difference.
-#[used]
-#[link_section = ".rodata"]
-static _PHASE_D_PAD: [u8; 8] = [0u8; 8];
+// Phase D+1 T7 (2026-05-05): 4x llAdvertise* anchors + _PHASE_D_PAD REMOVED.
+// Full ll_advertise.o + transitive lib cascade GC'd by --gc-sections.
+// Actual BIN delta from T6 state: -26,904B (empirical probe).
+// Note: T4-probe estimated -22,432B from T4 state; delta is -4,472B larger here because
+// T5(BLE_IPCoreInit) + T6(LLE_IRQSubHandler) removal exposed lib functions with multi-path
+// dependencies (needed BOTH llAdvertise* AND those anchors removed to cascade).
+// No --undefined=llAdvertise* flags in build.rs; anchors were the sole keepers.
+// Sentinel vtable writes removed; gBleLlPara+0x68..+0x74 zeroed by BSS init (TMOS dead).
 
 // Task #23 Variant B bisect anchor: keeps ble_ip_core_init() body in flash even
 // when the call site uses the FFI path. Without this, Rust DCE removes the function
@@ -214,6 +202,15 @@ static _T5_PAD: [u8; 544] = [0u8; 544];
 #[used]
 #[link_section = ".rodata"]
 static _T6_PAD: [u8; 828] = [0u8; 828];
+
+// Phase D+1 T7: size-neutral pad compensating 4x llAdvertise* cascade GC.
+// Empirical probe from T6 state: -26,904B (anchors + 4 sentinel writes removed).
+// Breakdown: ll_advertise.o functions (~17 direct) + 83 internal lib functions
+// reachable through multi-path deps (T5/T6 removal exposed additional cascade).
+// All cumulative pads (_T3+_T4+_T5+_T6+_T7) removed at T8 when -lwchble ships.
+#[used]
+#[link_section = ".rodata"]
+static _T7_PAD: [u8; 26904] = [0u8; 26904];
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
@@ -334,14 +331,9 @@ unsafe fn ll_init_safe_prefix() {
     write_ll_u32(p, 0x5c, adv_ctx);
     write_ll_u32(p, 0x60, adv_ctx);
     write_ll_u32(p, 0x64, adv_ctx);
-    // D-final.1: vtable dispatch slots marked dead. Path C never invokes
-    // LL_ProcessEvent (TMOS scheduler not running), so these slots are
-    // never dereferenced. Sentinel value 0x12345678 = invalid fn ptr.
-    // Symbols kept live via _KEEP_LL_ADV_* anchors above (layout anchor).
-    write_ll_u32(p, 0x68, 0x1234_5678); // llAdvertiseCreateCore — dead in Path C
-    write_ll_u32(p, 0x6c, 0x1234_5678); // llAdvertiseSet         — dead in Path C
-    write_ll_u32(p, 0x70, 0x1234_5678); // llAdvertiseStart       — dead in Path C
-    write_ll_u32(p, 0x74, 0x1234_5678); // llAdvTraverseallChannel — dead in Path C
+    // Phase D+1 T7: vtable slots 0x68..0x74 (llAdvertise* dispatch) NOT written.
+    // TMOS scheduler never runs in Path C — slots are dead, zeroed by BSS init.
+    // D-final.1 sentinel writes (0x12345678) removed along with the anchors.
     write_ll_u32(p, 0x7c, 0x01cc_0001);
     write_ll_u32(p, 0x88, 0x0000_0700);
     write_ll_u32(p, 0xc0, 0x0000_0300);
