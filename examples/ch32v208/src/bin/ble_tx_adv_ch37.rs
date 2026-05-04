@@ -70,8 +70,7 @@ extern "C" {
     fn llAdvTraverseallChannel();
     static mut gPaControl: u32;
     static mut dtmFlag: u8;
-    // V_T2_a bisect: only `ble` migrated to Rust; these two still from lib BSS COMMON
-    static mut gBleIPPara: u8;
+    // V_T2_b bisect: gBleIPPara now migrated to Rust; gBleLlPara still lib BSS COMMON
     static mut gBleLlPara: u8;
 }
 
@@ -150,14 +149,16 @@ pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration blo
 // causing misaligned u32 reads → undefined behaviour → cba=0.
 // [u32; N/4] forces 4-byte alignment (same as lib COMMON BSS natural alignment).
 #[no_mangle]
-pub static mut ble:        [u32; 16] = [0; 16]; // 64B, u32 for 4-byte alignment — V_T2_a only
+pub static mut ble:        [u32; 16] = [0; 16]; // 64B, u32 for 4-byte alignment
+#[no_mangle]
+pub static mut gBleIPPara: [u32; 16] = [0; 16]; // 64B (lib=40, +24B margin), u32 for 4-byte alignment — V_T2_b
 
 // Phase D+1 T2: rodata size-neutral pad. Moving ble/gBleLlPara/gBleIPPara from lib
 // COMMON BSS to Rust BSS caused linker GC to drop -72B vs baseline. This pad restores
 // BIN to 51588B (Iron Law #22: layout shift → cba=0). Remove or adjust in T8 cleanup.
 #[used]
 #[link_section = ".rodata"]
-static _T2_PAD: [u8; 4] = [0u8; 4]; // V_T2_a: ble-only migration → BIN +68B, pad trimmed to 4B
+static _T2_PAD: [u8; 64] = [0u8; 64]; // V_T2_b: ble+gBleIPPara migration → BIN -60B, pad to restore 51588B
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
