@@ -99,6 +99,27 @@ static _KEEP_BLE_IP_CORE_INIT: unsafe extern "C" fn() = BLE_IPCoreInit;
 #[used]
 static _KEEP_LLE_IRQ_HANDLER: unsafe extern "C" fn() = LLE_IRQSubHandler;
 
+// Task #25 D-final.1: retain 4 llAdvertise* lib symbols for code-layout
+// anchoring. These functions are dead code in Path C — the vtable at
+// gBleLlPara+0x68..0x74 is never dereferenced at runtime (TMOS scheduler
+// never runs). Removing them causes -22440B linker GC (Iron Law #22).
+// D-1a.0b size-neutral sentinel gate (median=64) confirmed content dead.
+#[used]
+static _KEEP_LL_ADV_CREATE_CORE: unsafe extern "C" fn() = llAdvertiseCreateCore;
+#[used]
+static _KEEP_LL_ADV_SET: unsafe extern "C" fn() = llAdvertiseSet;
+#[used]
+static _KEEP_LL_ADV_START: unsafe extern "C" fn() = llAdvertiseStart;
+#[used]
+static _KEEP_LL_ADV_TRAVERSE: unsafe extern "C" fn() = llAdvTraverseallChannel;
+
+// Task #25 D-final.1: 8B rodata pad to keep BIN size = baseline 51588B.
+// The 4 anchors above add ~16B net; sentinel vtable writes (below) have
+// same instruction count as fn-ptr writes; pad compensates the difference.
+#[used]
+#[link_section = ".rodata"]
+static _PHASE_D_PAD: [u8; 8] = [0u8; 8];
+
 // Task #23 Variant B bisect anchor: keeps ble_ip_core_init() body in flash even
 // when the call site uses the FFI path. Without this, Rust DCE removes the function
 // and the SRAM layout collapses back to baseline (0x20001738), making the bisect
@@ -225,10 +246,14 @@ unsafe fn ll_init_safe_prefix() {
     write_ll_u32(p, 0x5c, adv_ctx);
     write_ll_u32(p, 0x60, adv_ctx);
     write_ll_u32(p, 0x64, adv_ctx);
-    write_ll_u32(p, 0x68, llAdvertiseCreateCore as *const () as usize as u32);
-    write_ll_u32(p, 0x6c, llAdvertiseSet as *const () as usize as u32);
-    write_ll_u32(p, 0x70, llAdvertiseStart as *const () as usize as u32);
-    write_ll_u32(p, 0x74, llAdvTraverseallChannel as *const () as usize as u32);
+    // D-final.1: vtable dispatch slots marked dead. Path C never invokes
+    // LL_ProcessEvent (TMOS scheduler not running), so these slots are
+    // never dereferenced. Sentinel value 0x12345678 = invalid fn ptr.
+    // Symbols kept live via _KEEP_LL_ADV_* anchors above (layout anchor).
+    write_ll_u32(p, 0x68, 0x1234_5678); // llAdvertiseCreateCore — dead in Path C
+    write_ll_u32(p, 0x6c, 0x1234_5678); // llAdvertiseSet         — dead in Path C
+    write_ll_u32(p, 0x70, 0x1234_5678); // llAdvertiseStart       — dead in Path C
+    write_ll_u32(p, 0x74, 0x1234_5678); // llAdvTraverseallChannel — dead in Path C
     write_ll_u32(p, 0x7c, 0x01cc_0001);
     write_ll_u32(p, 0x88, 0x0000_0700);
     write_ll_u32(p, 0xc0, 0x0000_0300);
