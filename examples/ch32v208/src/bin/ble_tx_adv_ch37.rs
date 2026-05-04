@@ -68,9 +68,6 @@ extern "C" {
     fn llAdvertiseSet();
     fn llAdvertiseStart();
     fn llAdvTraverseallChannel();
-    static mut gBleLlPara: u8;
-    static mut gBleIPPara: u8;
-    static mut ble: u8;
     static mut gPaControl: u32;
     static mut dtmFlag: u8;
 }
@@ -137,6 +134,26 @@ pub static mut gptrLLEReg:   u32 = 0x4002_4200; // WCH "LLE"  = our bb_* CTRL/GO
 pub static mut gptrAESReg:   u32 = 0x4002_4300; // AES crypto block
 #[no_mangle]
 pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration block
+
+// Phase D+1 T2: BSS struct globals — Rust-defined.
+// Previously COMMON BSS in libwchble.a, zeroed at startup by linker.
+// Sizes verified from lib nm (lib reports: ble=64, gBleLlPara=296, gBleIPPara=40).
+// gBleIPPara uses conservative +24B margin: diagnostic dump reads 0x40=64B and
+// lib anchor functions (BB_IRQLibHandler/BLE_IPCoreInit/LLE_IRQSubHandler) have
+// not been fully audited for gBleIPPara[40..] access — unaudited risk surface.
+#[no_mangle]
+pub static mut ble:        [u8;  64] = [0;  64]; // lib=64
+#[no_mangle]
+pub static mut gBleLlPara: [u8; 296] = [0; 296]; // lib=296
+#[no_mangle]
+pub static mut gBleIPPara: [u8;  64] = [0;  64]; // lib=40, +24B conservative margin
+
+// Phase D+1 T2: rodata size-neutral pad. Moving ble/gBleLlPara/gBleIPPara from lib
+// COMMON BSS to Rust BSS caused linker GC to drop -72B vs baseline. This pad restores
+// BIN to 51588B (Iron Law #22: layout shift → cba=0). Remove or adjust in T8 cleanup.
+#[used]
+#[link_section = ".rodata"]
+static _T2_PAD: [u8; 72] = [0u8; 72];
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
