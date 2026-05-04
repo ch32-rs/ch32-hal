@@ -71,10 +71,6 @@ extern "C" {
     static mut gBleLlPara: u8;
     static mut gBleIPPara: u8;
     static mut ble: u8;
-    static mut gptrLLEReg: u32;
-    static mut gptrBBReg: u32;
-    static mut gptrRFENDReg: u32;
-    static mut gptrAESReg: u32;
     static mut gPaControl: u32;
     static mut dtmFlag: u8;
 }
@@ -126,6 +122,21 @@ static _PHASE_D_PAD: [u8; 8] = [0u8; 8];
 // equivalent to a baseline re-run rather than a single-variable layout test.
 #[used]
 static _KEEP_RUST_IP_CORE_INIT: unsafe fn() = hal::ble::ble_ip_core_init;
+
+// Phase D+1 T1: MMIO register base pointer globals — Rust-defined.
+// Previously COMMON BSS in libwchble.a, written by BLE_IPCoreInit at runtime.
+// Hardcoded to the CH32V208 hardware constants (confirmed from ble_ip_core_init()).
+// WCH naming note: gptrBBReg=0x40024100 is our lle_*/timer range (confusing but correct);
+//                  gptrLLEReg=0x40024200 is our bb_*/CTRL-GO range.
+// ble_ip_core_init() still writes these (redundant; same value), which is harmless.
+#[no_mangle]
+pub static mut gptrBBReg:    u32 = 0x4002_4100; // WCH "BB"   = our lle_* timer/IRQ range
+#[no_mangle]
+pub static mut gptrLLEReg:   u32 = 0x4002_4200; // WCH "LLE"  = our bb_* CTRL/GO range
+#[no_mangle]
+pub static mut gptrAESReg:   u32 = 0x4002_4300; // AES crypto block
+#[no_mangle]
+pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration block
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
