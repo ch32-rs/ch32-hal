@@ -197,6 +197,17 @@ unsafe fn ll_init_safe_prefix() {
     // 42e57ef baseline. Direct deletion also GC's ~47KB of lib text and shifts
     // gBleLlPara, which is another unsafe layout change. Keep these writes until
     // the hidden init/IRQ consumer is fully identified.
+    //
+    // Task #21 R2 empirical lock (2026-05-04): to isolate SYMBOL PRESENCE from
+    // CONTENT, R2 added `#[used] static` anchors for all 4 llAdvertise* symbols
+    // (keeping them in the binary) but commented out these 4 vtable writes
+    // (zeroing slots 0x68/0x6c/0x70/0x74). Gate: cba=0 (60s scan).
+    // Conclusion: lib init/IRQ path reads the FUNCTION ADDRESSES from the vtable,
+    // not just checks whether the symbols exist. `#[used] static` retention is
+    // insufficient here — the CONTENT (concrete Rust fn pointers) must be written.
+    // Boundary of the `#[used] static` pattern: effective when lib checks symbol
+    // presence / code layout (task #20 LLE_IRQSubHandler, cba=78); ineffective
+    // when lib dereferences a function-pointer field (task #21 vtable dispatch).
     let adv_ctx = core::ptr::addr_of_mut!(RUST_ADV_CTX) as u32;
     write_ll_u32(p, 0x58, adv_ctx);
     write_ll_u32(p, 0x5c, adv_ctx);
