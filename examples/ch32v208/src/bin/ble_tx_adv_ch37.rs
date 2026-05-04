@@ -70,6 +70,9 @@ extern "C" {
     fn llAdvTraverseallChannel();
     static mut gPaControl: u32;
     static mut dtmFlag: u8;
+    // V_T2_a bisect: only `ble` migrated to Rust; these two still from lib BSS COMMON
+    static mut gBleIPPara: u8;
+    static mut gBleLlPara: u8;
 }
 
 // Task #22: Keep BB_IRQLibHandler in the binary even though bb_irq_lib_handler()
@@ -141,19 +144,20 @@ pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration blo
 // gBleIPPara uses conservative +24B margin: diagnostic dump reads 0x40=64B and
 // lib anchor functions (BB_IRQLibHandler/BLE_IPCoreInit/LLE_IRQSubHandler) have
 // not been fully audited for gBleIPPara[40..] access — unaudited risk surface.
+//
+// CRITICAL: use [u32; N/4] not [u8; N]. Lib code accesses these as u32* structs.
+// [u8; N] has alignment=1; linker places it at unaligned addresses (mod4=3 observed)
+// causing misaligned u32 reads → undefined behaviour → cba=0.
+// [u32; N/4] forces 4-byte alignment (same as lib COMMON BSS natural alignment).
 #[no_mangle]
-pub static mut ble:        [u8;  64] = [0;  64]; // lib=64
-#[no_mangle]
-pub static mut gBleLlPara: [u8; 296] = [0; 296]; // lib=296
-#[no_mangle]
-pub static mut gBleIPPara: [u8;  64] = [0;  64]; // lib=40, +24B conservative margin
+pub static mut ble:        [u32; 16] = [0; 16]; // 64B, u32 for 4-byte alignment — V_T2_a only
 
 // Phase D+1 T2: rodata size-neutral pad. Moving ble/gBleLlPara/gBleIPPara from lib
 // COMMON BSS to Rust BSS caused linker GC to drop -72B vs baseline. This pad restores
 // BIN to 51588B (Iron Law #22: layout shift → cba=0). Remove or adjust in T8 cleanup.
 #[used]
 #[link_section = ".rodata"]
-static _T2_PAD: [u8; 72] = [0u8; 72];
+static _T2_PAD: [u8; 4] = [0u8; 4]; // V_T2_a: ble-only migration → BIN +68B, pad trimmed to 4B
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
