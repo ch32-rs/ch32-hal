@@ -151,7 +151,7 @@ pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration blo
 #[no_mangle]
 pub static mut ble:        [u32; 16] = [0; 16]; // 64B, u32 for 4-byte alignment
 #[no_mangle]
-pub static mut gBleIPPara: [u32; 16] = [0; 16]; // 64B (lib=40, +24B margin), u32 for 4-byte alignment — V_T2_b
+pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B strict lib size — V_T2_b' (test: does +24B margin cause failure?)
 
 // Phase D+1 T2: rodata size-neutral pad. Moving ble/gBleLlPara/gBleIPPara from lib
 // COMMON BSS to Rust BSS caused linker GC to drop -72B vs baseline. This pad restores
