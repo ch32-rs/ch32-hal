@@ -10,18 +10,18 @@ fn main() {
     // The flag was added before the ip.o→bb.o dependency was understood. Removing it
     // has zero BIN impact; retaining it would be misleading about what keeps bb.o live.
 
-    // T3 Option D (2026-05-04): TX_BUF must be 16B-aligned (hardware DMA requirement).
+    // T4.5 #36 Option C (2026-05-05): TX_BUF strategic 16B alignment.
     //
-    // Root cause: T3 adds gPaControl(4B)+dtmFlag(1B)+3B align = +8B before MergedGlobals.180.
-    // In T2 baseline TX_BUF was at MergedGlobals+0x98 = mod16=0 (cba=57 ✓).
-    // In T3PA (1fb675f) MergedGlobals shifted +8B → TX_BUF at mod16=8 (cba=0 ✗).
+    // History: T3 Option D used `. += 8` BSS gap (tactical). Root cause: LLVM GlobalMerge
+    // puts TX_BUF at MergedGlobals+0x98; BSS layout shifts from T3 gPaControl/dtmFlag
+    // additions caused mod16=8 (cba=0). Option D fixed this by shifting the whole BSS +8B.
     //
-    // Fix: inject `. += 8` at the top of the .bss section in a custom link.x.
-    // This shifts ALL BSS content (TRACE_BUF, MergedGlobals.180, …) by +8B uniformly.
-    // TX_BUF stays at offset 0x98 inside MergedGlobals; base shifts +8B → mod16=0. ✓
-    // No Rust type change → LLVM codegen identical to T3PA → ISR=262B, BIN=51588B. ✓
+    // Option C (T4.5): TX_BUF placed in dedicated .tx_buf_aligned section at ALIGN(16).
+    // TX_BUF is now OUTSIDE GlobalMerge → separate absolute address load in codegen (+64B
+    // code cost, all in main/init, ISR unchanged 262B). Alignment guaranteed regardless of
+    // future T5-T7 GlobalMerge/BSS layout changes. _T4_PAD reduced 280→216 to compensate.
     //
-    // Zero-init: entire .bss (including the 8B gap) is zeroed by startup code. ✓
+    // Zero-init: entire .bss (including .tx_buf_aligned) is zeroed by startup code. ✓
     let out = std::env::var("OUT_DIR").unwrap();
     let link_x = format!("{}/link.x", out);
     std::fs::write(
@@ -107,10 +107,12 @@ SECTIONS
     .bss (NOLOAD) : ALIGN(4)
     {
         PROVIDE( _sbss = .);
-        /* T3 Option D: +8B gap shifts MergedGlobals.180 base by +8B so TX_BUF
-         * (offset 0x98 in MergedGlobals) moves from mod16=8 to mod16=0.
-         * Startup code zeros _sbss.._ebss, covering the gap. */
-        . += 8;
+        /* T4.5 #36 Option C: TX_BUF placed at ALIGN(16) boundary via section annotation.
+         * Strategic: TX_BUF alignment is independent of GlobalMerge layout and survives
+         * T5-T7 BSS shifts. Replaces Option D (`. += 8` tactical gap). */
+        . = ALIGN(16);
+        *(.tx_buf_aligned .tx_buf_aligned.*);
+        . = ALIGN(4);
         *(.sbss .sbss.* .bss .bss.*);
         PROVIDE( _ebss = .);
     } >RAM

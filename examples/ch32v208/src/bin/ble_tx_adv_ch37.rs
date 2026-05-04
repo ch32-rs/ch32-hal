@@ -192,11 +192,11 @@ static _T3_PAD: [u8; 4] = [0u8; 4]; // T3-probe-align: adjust if BIN ≠ 51588B
 // That section was kept ONLY by --undefined=BB_IRQLibHandler (build.rs) and
 // this anchor. With both removed, BB_IRQLibHandler (276B text) is GC'd.
 // Net T4 BIN delta: -276B text (BB_IRQLibHandler) - 4B rodata (anchor) = -280B.
-// Pad 280B restores BIN = 51588B exactly.
-// T4.5 (#36 Option C) will reduce this to 216B to absorb +64B code cost.
+// T4.5 (#36 Option C): reduced from 280 → 216 to absorb +64B code cost of
+// moving TX_BUF out of GlobalMerge into its own .tx_buf_aligned section.
 #[used]
 #[link_section = ".rodata"]
-static _T4_PAD: [u8; 280] = [0u8; 280];
+static _T4_PAD: [u8; 216] = [0u8; 216];
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
@@ -496,14 +496,17 @@ const X1_POLLED_W1C: bool = true;
 /// formula (val>>2)&0x1FFF confirmed 13-bit. bleak=0 → BB+0x70 addressing is NOT the
 /// root cause. Reverted to default linker placement (BSS, readback ~0x54f).
 ///
-/// T3 Option D (2026-05-04) — BSS gap pre-shift for 16B alignment.
+/// T4.5 #36 (2026-05-05) — Strategic TX_BUF 16B alignment via section annotation (Option C).
 /// TX_BUF MUST be 16B-aligned: mod16=4 (T3 R1) and mod16=8 (T3-probe-align) both caused cba=0.
 /// Option B (#[repr(C,align(16))] struct): +108B code bloat → ruled out.
-/// Option C (#[link_section=".tx_buf_aligned"] + ALIGN(16)): +64B code (TX_BUF outside
-///   GlobalMerge → separate absolute address load) → ruled out for T3, accepted as T4.5.
-/// Option D: `. += 8` in custom link.x .bss preamble shifts MergedGlobals.180 base by +8B.
-///   TX_BUF sits at offset 0x98 inside MergedGlobals; was mod16=8 (T3PA), now mod16=0. ✓
-///   No type change, no section annotation → LLVM codegen identical to T3PA. BIN=51588B. ✓
+/// Option D (T3, link.x `. += 8` BSS gap): tactical fix, mod16=0 at T3/T4 baseline.
+///   Fragile: any BSS layout shift (T5-T7) could break alignment again.
+/// Option C (this): #[link_section=".tx_buf_aligned"] + ALIGN(16) in link.x places TX_BUF at
+///   ALIGN(16) boundary independently of GlobalMerge layout. +64B code cost (separate absolute
+///   address load instead of MergedGlobals offset) falls in main/init, NOT ISR.
+///   ISR=262B unchanged ✓. _T4_PAD reduced 280→216 to absorb the +64B. BIN=51588B. ✓
+///   Strategic: alignment guaranteed for all future T5-T7 BSS shifts.
+#[link_section = ".tx_buf_aligned"]
 static mut TX_BUF: [u8; 39] = [0u8; 39];
 
 #[ch32_hal::interrupt]
