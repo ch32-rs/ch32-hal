@@ -69,11 +69,8 @@ extern "C" {
     fn llAdvertiseStart();
     fn llAdvTraverseallChannel();
     // Phase D+1 T3: gPaControl + dtmFlag migrated to Rust BSS (see #[no_mangle] statics below).
-    // Phase D+1 T2 final (Plan C): gBleIPPara + gBleLlPara stay lib COMMON BSS.
-    // gBleIPPara: GlobalMerge folds it into .L_MergedGlobals when Rust BSS → BB ISR -24B → timing break.
-    // gBleLlPara: Rust BSS causes cba=0 via unknown non-ISR timing path (Task #35 forensic).
-    // Both deferred to dedicated forensic tasks (#34, #35).
-    static mut gBleIPPara: u8;
+    // Phase D+1 #34 (2026-05-05): gBleIPPara migrated to Rust BSS (Option 2, section isolation).
+    // Phase D+1 #35: gBleLlPara forensic pending.
     static mut gBleLlPara: u8;
 }
 
@@ -143,6 +140,25 @@ pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration blo
 //   - gBleLlPara: ISR length unchanged (262B) but cba=0 — mechanism unknown (Task #35)
 #[no_mangle]
 pub static mut ble: [u32; 16] = [0; 16]; // 64B (lib size confirmed), u32 for 4-byte alignment — T2 final Plan C
+
+// Phase D+1 #34 (2026-05-05): gBleIPPara → Rust BSS with GlobalMerge isolation.
+// lib COMMON BSS: gBleIPPara = 40B (C type). [u32; 10] for 4-byte alignment.
+//
+// T2 failure root cause: simple `#[no_mangle]` caused LLVM GlobalMerge to fold
+// gBleIPPara into .L_MergedGlobals.180 → BB ISR s0 base encompasses wider range
+// → ISR 262B → 238B (-24B, ~6-8 cycles) → .L6 TX-advance timing break → cba=0.
+//
+// #34 Fix (Option 2 — section isolation):
+// #[link_section = ".bss.gBleIPPara"] places gBleIPPara in a named sub-section.
+// LLVM GlobalMerge only merges statics within the same section name → no fold.
+// Linker script `*(.bss .bss.*)` still includes .bss.gBleIPPara in BSS region.
+// ISR accesses gBleIPPara via absolute address load (separate from MergedGlobals).
+//
+// Probe result (T7 baseline): BIN=51588B ✓, ISR=262B ✓, TX_BUF mod16=0 ✓.
+// Option 1 (no annotation) confirmed broken: ISR 238B — GlobalMerge still folds.
+#[no_mangle]
+#[link_section = ".bss.gBleIPPara"]
+pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
 
 // Phase D+1 T3: simple BSS scalar globals — gPaControl (4B) + dtmFlag (1B).
 // lib COMMON BSS: gPaControl=4B (type=C), dtmFlag=1B (type=C). Access: init-only, no ISR/hot-path.
