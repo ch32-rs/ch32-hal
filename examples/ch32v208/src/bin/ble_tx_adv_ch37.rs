@@ -70,9 +70,9 @@ extern "C" {
     fn llAdvTraverseallChannel();
     static mut gPaControl: u32;
     static mut dtmFlag: u8;
-    // V_T2_b'' bisect: only gBleIPPara migrated; ble + gBleLlPara still lib BSS COMMON
+    // V_T2_d bisect: only gBleLlPara migrated; ble + gBleIPPara still lib BSS COMMON
     static mut ble: u8;
-    static mut gBleLlPara: u8;
+    static mut gBleIPPara: u8;
 }
 
 // Task #22: Keep BB_IRQLibHandler in the binary even though bb_irq_lib_handler()
@@ -141,23 +141,23 @@ pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration blo
 // Phase D+1 T2: BSS struct globals — Rust-defined.
 // Previously COMMON BSS in libwchble.a, zeroed at startup by linker.
 // Sizes verified from lib nm (lib reports: ble=64, gBleLlPara=296, gBleIPPara=40).
-// gBleIPPara uses conservative +24B margin: diagnostic dump reads 0x40=64B and
-// lib anchor functions (BB_IRQLibHandler/BLE_IPCoreInit/LLE_IRQSubHandler) have
-// not been fully audited for gBleIPPara[40..] access — unaudited risk surface.
 //
 // CRITICAL: use [u32; N/4] not [u8; N]. Lib code accesses these as u32* structs.
 // [u8; N] has alignment=1; linker places it at unaligned addresses (mod4=3 observed)
 // causing misaligned u32 reads → undefined behaviour → cba=0.
 // [u32; N/4] forces 4-byte alignment (same as lib COMMON BSS natural alignment).
+//
+// V_T2_d: ONLY gBleLlPara migrated. gBleIPPara stays extern (lib COMMON BSS):
+// Forensic (V_T2_b'') showed moving gBleIPPara to Rust BSS merges it into
+// .L_MergedGlobals, shortening BB ISR by 24B (6-8 cycles). This shifts the .L6
+// TX-advance trigger outside the hardware timing window → cba=0.
+// gBleIPPara MUST stay in lib BSS to preserve ISR code generation.
 #[no_mangle]
-pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B strict lib size — V_T2_b'' (only gBleIPPara, no ble)
+pub static mut gBleLlPara: [u32; 74] = [0; 74]; // 296B (lib size confirmed), u32 for 4-byte alignment — V_T2_d
 
-// Phase D+1 T2: rodata size-neutral pad. Moving ble/gBleLlPara/gBleIPPara from lib
-// COMMON BSS to Rust BSS caused linker GC to drop -72B vs baseline. This pad restores
-// BIN to 51588B (Iron Law #22: layout shift → cba=0). Remove or adjust in T8 cleanup.
-#[used]
-#[link_section = ".rodata"]
-static _T2_PAD: [u8; 60] = [0u8; 60]; // V_T2_b'': only gBleIPPara migrated → BIN +4B vs V_T2_b', pad trimmed to 60B
+// Phase D+1 T2: no rodata pad needed for V_T2_d.
+// V_T2_d (only gBleLlPara migrated) naturally produces BIN = 51588B without extra pad.
+// Iron Law #22 compliance: BIN size-neutral confirmed by probe build (51592 - 4pad = 51588).
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
