@@ -70,9 +70,12 @@ extern "C" {
     fn llAdvTraverseallChannel();
     static mut gPaControl: u32;
     static mut dtmFlag: u8;
-    // V_T2_d bisect: only gBleLlPara migrated; ble + gBleIPPara still lib BSS COMMON
-    static mut ble: u8;
+    // Phase D+1 T2 final (Plan C): gBleIPPara + gBleLlPara stay lib COMMON BSS.
+    // gBleIPPara: GlobalMerge folds it into .L_MergedGlobals when Rust BSS → BB ISR -24B → timing break.
+    // gBleLlPara: Rust BSS causes cba=0 via unknown non-ISR timing path (Task #35 forensic).
+    // Both deferred to dedicated forensic tasks (#34, #35).
     static mut gBleIPPara: u8;
+    static mut gBleLlPara: u8;
 }
 
 // Task #22: Keep BB_IRQLibHandler in the binary even though bb_irq_lib_handler()
@@ -138,7 +141,7 @@ pub static mut gptrAESReg:   u32 = 0x4002_4300; // AES crypto block
 #[no_mangle]
 pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration block
 
-// Phase D+1 T2: BSS struct globals — Rust-defined.
+// Phase D+1 T2: BSS struct globals — Rust-defined (Plan C: ble only).
 // Previously COMMON BSS in libwchble.a, zeroed at startup by linker.
 // Sizes verified from lib nm (lib reports: ble=64, gBleLlPara=296, gBleIPPara=40).
 //
@@ -147,17 +150,18 @@ pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration blo
 // causing misaligned u32 reads → undefined behaviour → cba=0.
 // [u32; N/4] forces 4-byte alignment (same as lib COMMON BSS natural alignment).
 //
-// V_T2_d: ONLY gBleLlPara migrated. gBleIPPara stays extern (lib COMMON BSS):
-// Forensic (V_T2_b'') showed moving gBleIPPara to Rust BSS merges it into
-// .L_MergedGlobals, shortening BB ISR by 24B (6-8 cycles). This shifts the .L6
-// TX-advance trigger outside the hardware timing window → cba=0.
-// gBleIPPara MUST stay in lib BSS to preserve ISR code generation.
+// T2 gate: V_T2_a cba=57 (3-round), size-neutral BIN=51588B.
+// gBleIPPara/gBleLlPara deferred to Tasks #34/#35 due to timing break mechanisms:
+//   - gBleIPPara: LLVM GlobalMerge folds into .L_MergedGlobals → BB ISR -24B (-6-8 cycles)
+//   - gBleLlPara: ISR length unchanged (262B) but cba=0 — mechanism unknown (Task #35)
 #[no_mangle]
-pub static mut gBleLlPara: [u32; 74] = [0; 74]; // 296B (lib size confirmed), u32 for 4-byte alignment — V_T2_d
+pub static mut ble: [u32; 16] = [0; 16]; // 64B (lib size confirmed), u32 for 4-byte alignment — T2 final Plan C
 
-// Phase D+1 T2: no rodata pad needed for V_T2_d.
-// V_T2_d (only gBleLlPara migrated) naturally produces BIN = 51588B without extra pad.
-// Iron Law #22 compliance: BIN size-neutral confirmed by probe build (51592 - 4pad = 51588).
+// Phase D+1 T2: rodata size-neutral pad (probe required after each T2 variant).
+// Iron Law #22: BIN must equal 51588B (baseline D-final.1). Pad adjusted per probe.
+#[used]
+#[link_section = ".rodata"]
+static _T2_PAD: [u8; 4] = [0u8; 4]; // T2 final: probe value, adjust if BIN ≠ 51588B
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
