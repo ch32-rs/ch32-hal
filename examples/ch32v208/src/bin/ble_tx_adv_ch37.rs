@@ -208,6 +208,18 @@ unsafe fn ll_init_safe_prefix() {
     // Boundary of the `#[used] static` pattern: effective when lib checks symbol
     // presence / code layout (task #20 LLE_IRQSubHandler, cba=78); ineffective
     // when lib dereferences a function-pointer field (task #21 vtable dispatch).
+    //
+    // 2026-05-04 15:38 UPDATE (Task #25 D-1a.0b — above conclusion REVISED):
+    // D-1a.0b padding-neutral test (4 #[used] anchors + 4 sentinel writes +
+    // 8B rodata pad, BIN exact 51588B): 3-round 60s cba=[68,64,54], median=64.
+    // R2 cba=0 was the -40B BIN delta triggering Iron Law #22 layout shift,
+    // NOT vtable content consumption. In Path C the vtable content at
+    // gBleLlPara+0x68..0x74 is never dereferenced (TMOS scheduler never runs;
+    // LL_ProcessEvent is never invoked, so the jalr dispatch never fires).
+    // Cross-validation: anchor-less sentinel caused -22440B GC, proving
+    // 4 llAdvertise* + transitive call tree (~22kB) has no other Rust ref.
+    // `#[used] static` retention IS effective here — size-neutral suffices.
+    // See notes/ch32-rs/ll-advertise-create-core-disasm.md §6 for full audit.
     let adv_ctx = core::ptr::addr_of_mut!(RUST_ADV_CTX) as u32;
     write_ll_u32(p, 0x58, adv_ctx);
     write_ll_u32(p, 0x5c, adv_ctx);
