@@ -25,7 +25,7 @@ pub mod tracer;
 pub use regint::ble_reg_init;
 // Re-export individual init steps so examples can call them with dump points between
 // stages (Phase B multi-stage diff, task #16).
-pub use bb::{bb_dev_init, BB_RF_FLAG_1M};
+pub use bb::{bb_dev_init, bb_irq_lib_handler, BB_RF_FLAG_1M};
 pub use lle::lle_dev_init;
 pub use rfend::rfend_dev_init;
 

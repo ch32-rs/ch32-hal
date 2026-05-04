@@ -78,13 +78,16 @@ extern "C" {
     static mut dtmFlag: u8;
 }
 
-// Task #23: Keep BLE_IPCoreInit and its entire lib call-chain in the binary
-// even though ble_ip_core_init() (Rust) is now called instead of the FFI version.
-// Without this anchor, --gc-sections removes ~119KB of lib code (BLE_IPCoreInit +
-// LLE_DevInit + RFEND_DevInit + BB_DevInit + BLE_RegInit + calibration callees),
-// causing a flash layout shift that breaks BLE timing (Iron Law from task #21).
-// Remove this anchor only after task #22 fully replaces BB_IRQLibHandler and the
-// complete lib removal is validated.
+// Task #22: Keep BB_IRQLibHandler in the binary even though bb_irq_lib_handler()
+// (Rust) is now called instead. Without this anchor, --gc-sections removes ~119KB
+// of lib code including LLE_IRQSubHandler and fnGetClockCBs, which are still needed
+// until full lib removal is validated (Iron Law from #21: layout shift breaks timing).
+// Remove once task #22 gate passes and full lib removal is in progress.
+#[used]
+static _KEEP_BB_IRQ_LIB_HANDLER: unsafe extern "C" fn() = BB_IRQLibHandler;
+
+// Task #23: BLE_IPCoreInit anchor — same reason as above. Both anchors needed
+// until complete lib removal validation.
 #[used]
 static _KEEP_BLE_IP_CORE_INIT: unsafe extern "C" fn() = BLE_IPCoreInit;
 
@@ -246,6 +249,15 @@ const PATHC_CALL_LL_HELPERS: bool = false;
 const PATHC_LIB_IRQ: bool = true;
 const PATHC_ENABLE_LLE_IRQ: bool = false;
 const PATHC_MANUAL_L6: bool = false;
+// Task #22 V1.1 probe: true = Rust bb_irq_lib_handler (testing), false = FFI BB_IRQLibHandler (V_A3 reference).
+// Set false to build V_A3+probe for comparative trace without changing the ISR register snapshot.
+const PATHC_USE_RUST_BB_IRQ: bool = true;
+// Task #22 V1.2 bisect: controls how much of the Rust BB handler runs.
+//   0 = reads only (blk/ip4/bb08 recorded, no writes — confirm no exception from just reading)
+//   1 = + W1C bit6 (write 0x60 to WCH_BBR+0x38, first peripheral write)
+//   2 = + .L6 block writes (WCH_LLER+0x08=0x2000, WCH_LLER+0x64=timer)
+//   3 = full handler (all paths, same as V1.1)
+const BB_HANDLER_STAGE: u8 = 5; // 5+ = full hal::ble::bb_irq_lib_handler()
 const PATHC_BIT0_PULSE: bool = false;
 static mut TIER_A_DONE: bool = false;
 static mut Y200_DUMPED: bool = false;
@@ -273,9 +285,20 @@ static mut BB_IRQ_ENTRY: u32 = 0;
 static mut BB_IRQ_EXIT: u32 = 0;
 static mut LLE_IRQ_ENTRY: u32 = 0;
 static mut LLE_IRQ_EXIT: u32 = 0;
+// V1.2 staged bisect: counter + per-stage statics (observable from main loop even if IRQ storms).
+// Stage 0 (reads-only): auto-disables BB IRQ after BB_STUB_MAX_ENTRIES to let main loop print.
+const BB_STUB_MAX_ENTRIES: u32 = 50;
+static mut BB_STUB_ENTER_COUNT: u32 = 0;
+static mut BB_STUB_BLK: [u32; 4] = [0; 4];   // LLE_BASE+0x38 sampled at handler start
+static mut BB_STUB_IP4: [u8; 4] = [0; 4];    // gBleIPPara[4] at handler start
+static mut BB_STUB_BB08: [u32; 4] = [0; 4];  // BB_BASE+0x08 at handler start (= WCH_LLER+0x08)
 static mut BB_IRQ_STATUS: [u32; 4] = [0; 4];
 static mut BB_IRQ_IP4: [u8; 4] = [0; 4];
 static mut BB_IRQ_LLE38: [u32; 4] = [0; 4];
+// V1.1 probe: BB_BASE+0x38 = 0x40024238 (WCH_LLER+0x38, naming-inversion sanity check).
+// We expect this differs from LLE_BASE+0x38 (0x40024138); if alt38 shows bit6 when lle38=0,
+// that pinpoints a base inversion in bb_irq_lib_handler.
+static mut BB_IRQ_ALT38: [u32; 4] = [0; 4];
 static mut BB_IRQ_SNAP_COUNT: usize = 0;
 static mut MANUAL_L6_HIT: bool = false;
 static mut MANUAL_L6_WAIT: u32 = 0;
@@ -351,20 +374,106 @@ static mut TX_BUF: [u8; 39] = [0u8; 39];
 #[ch32_hal::interrupt]
 fn BB() {
     unsafe {
-        if BB_IRQ_SNAP_COUNT < 4 {
-            let idx = BB_IRQ_SNAP_COUNT;
-            BB_IRQ_STATUS[idx] = read_volatile((BB_BASE + 0x08) as *const u32);
-            BB_IRQ_IP4[idx] = read_volatile((core::ptr::addr_of!(gBleIPPara) as *const u8).add(4));
-            BB_IRQ_LLE38[idx] = read_volatile((LLE_BASE + 0x38) as *const u32);
-            BB_IRQ_SNAP_COUNT = idx + 1;
-        }
         BB_IRQ_ENTRY = BB_IRQ_ENTRY.wrapping_add(1);
-        BB_IRQLibHandler();
-        let lle38 = read_volatile((LLE_BASE + 0x38) as *const u32);
-        let lle38_mask = lle38 & 0xD0;
-        if lle38_mask != 0 {
-            write_volatile((LLE_BASE + 0x38) as *mut u32, lle38_mask);
+        // Task #22 V1.2 staged bisect.
+        // PATHC_USE_RUST_BB_IRQ=false → FFI BB_IRQLibHandler (V_A3 reference)
+        // PATHC_USE_RUST_BB_IRQ=true  → Rust handler at BB_HANDLER_STAGE:
+        //   0: reads-only stub (no writes; expects IRQ storm, auto-disables after BB_STUB_MAX_ENTRIES)
+        //   1: + W1C bit6 (write 0x60 to LLE_BASE+0x38)
+        //   2: + .L6 SRAM writes (gBleIPPara[4,5] only; NO hardware writes)
+        //   3: + WCH_LLER+0x08=0x2000 write (BB_BASE+0x08 = 0x40024208, advances PHY 0x33→0x37)
+        //      also reads ip[16] as u32 (alignment check) but does NOT write WCH_LLER+0x64
+        //   4: + WCH_LLER+0x64=timer write (BB_BASE+0x64 = 0x40024264, full .L6)
+        //   5+: full Rust handler via hal::ble::bb_irq_lib_handler() (same as V1.1)
+        if PATHC_USE_RUST_BB_IRQ {
+            match BB_HANDLER_STAGE {
+                0 => {
+                    // Reads-only stub. Captures blk/ip4/bb08 for up to 4 IRQs, then
+                    // auto-disables BB IRQ so main loop can print the results.
+                    let blk  = read_volatile((LLE_BASE + 0x38) as *const u32);
+                    let ip4v = read_volatile((core::ptr::addr_of!(gBleIPPara) as *const u8).add(4));
+                    let b08  = read_volatile((BB_BASE + 0x08) as *const u32);
+                    let idx = BB_STUB_ENTER_COUNT as usize;
+                    if idx < 4 {
+                        BB_STUB_BLK[idx]  = blk;
+                        BB_STUB_IP4[idx]  = ip4v;
+                        BB_STUB_BB08[idx] = b08;
+                    }
+                    BB_STUB_ENTER_COUNT = BB_STUB_ENTER_COUNT.wrapping_add(1);
+                    // Without W1C of bit6, hardware immediately reasserts IRQ → storm.
+                    // Disable after BB_STUB_MAX_ENTRIES so main loop can run and print.
+                    if BB_STUB_ENTER_COUNT >= BB_STUB_MAX_ENTRIES {
+                        qingke::pfic::disable_interrupt(63);
+                    }
+                }
+                1 => {
+                    // Stage 1: + W1C bit6 (first peripheral write).
+                    let blk = read_volatile((LLE_BASE + 0x38) as *const u32);
+                    if blk & (1 << 6) != 0 {
+                        write_volatile((LLE_BASE + 0x38) as *mut u32, 0x60); // W1C bits 5+6
+                    }
+                }
+                2 => {
+                    // Stage 2: + .L6 SRAM writes (gBleIPPara[4,5] only).
+                    let blk = read_volatile((LLE_BASE + 0x38) as *const u32);
+                    if blk & (1 << 6) != 0 {
+                        write_volatile((LLE_BASE + 0x38) as *mut u32, 0x60);
+                        let ip4v = read_volatile((core::ptr::addr_of!(gBleIPPara) as *const u8).add(4));
+                        if ip4v & 0x40 == 0 {
+                            write_volatile((core::ptr::addr_of_mut!(gBleIPPara) as *mut u8).add(5), 1u8);
+                            write_volatile((core::ptr::addr_of_mut!(gBleIPPara) as *mut u8).add(4), 0xC0u8);
+                        }
+                    }
+                }
+                3 => {
+                    // Stage 3a: + WCH_LLER+0x08=0x2000 (BB_BASE+0x08 = 0x40024208).
+                    // Also reads ip[16] as u32 to test alignment. Does NOT write WCH_LLER+0x64 yet.
+                    // If hang here: write(0x40024208, 0x2000) triggers IRQ re-entry or fault.
+                    let blk = read_volatile((LLE_BASE + 0x38) as *const u32);
+                    if blk & (1 << 6) != 0 {
+                        write_volatile((LLE_BASE + 0x38) as *mut u32, 0x60);
+                        let ip4v = read_volatile((core::ptr::addr_of!(gBleIPPara) as *const u8).add(4));
+                        if ip4v & 0x40 == 0 {
+                            write_volatile((core::ptr::addr_of_mut!(gBleIPPara) as *mut u8).add(5), 1u8);
+                            // WCH_LLER+0x08 = BB_BASE+0x08 = 0x40024208: advance PHY 0x33→0x37
+                            write_volatile((BB_BASE + 0x08) as *mut u32, 0x2000);
+                            write_volatile((core::ptr::addr_of_mut!(gBleIPPara) as *mut u8).add(4), 0xC0u8);
+                            // Read ip[16] as u32 (alignment test; no hardware write yet)
+                            let _timer = read_volatile((core::ptr::addr_of!(gBleIPPara) as *const u8).add(16) as *const u32);
+                        }
+                    }
+                }
+                4 => {
+                    // Stage 3b: + WCH_LLER+0x64=timer (BB_BASE+0x64 = 0x40024264). Full .L6.
+                    // If hang here but not in stage 3a: write(0x40024264, timer) is the fault.
+                    let blk = read_volatile((LLE_BASE + 0x38) as *const u32);
+                    if blk & (1 << 6) != 0 {
+                        write_volatile((LLE_BASE + 0x38) as *mut u32, 0x60);
+                        let ip4v = read_volatile((core::ptr::addr_of!(gBleIPPara) as *const u8).add(4));
+                        if ip4v & 0x40 == 0 {
+                            write_volatile((core::ptr::addr_of_mut!(gBleIPPara) as *mut u8).add(5), 1u8);
+                            write_volatile((BB_BASE + 0x08) as *mut u32, 0x2000); // WCH_LLER+0x08
+                            write_volatile((core::ptr::addr_of_mut!(gBleIPPara) as *mut u8).add(4), 0xC0u8);
+                            let timer = read_volatile((core::ptr::addr_of!(gBleIPPara) as *const u8).add(16) as *const u32);
+                            write_volatile((BB_BASE + 0x64) as *mut u32, timer); // WCH_LLER+0x64
+                        }
+                    }
+                }
+                _ => {
+                    // Stage 5+: full Rust handler via library function (same as V1.1)
+                    hal::ble::bb_irq_lib_handler();
+                }
+            }
+        } else {
+            BB_IRQLibHandler();
         }
+        // Bug A removed: post-handler W1C of lle38 bits[4,6,7] deleted.
+        // WCH BB_IRQLibHandler does NOT have this extra W1C. It was a historical
+        // debug artifact that raced against .L4/.L8: if bit4/7 arrived after the
+        // .L4/.L8 re-reads inside bb_irq_lib_handler, this W1C would clear them
+        // without writing ip[4]=1, causing ip[4] to stay at 0xC0 (stuck).
+        // With it removed, late bit4/7 cause a second IRQ entry where .L4/.L8
+        // correctly catches them — exactly matching WCH library behavior.
         BB_IRQ_EXIT = BB_IRQ_EXIT.wrapping_add(1);
     }
 }
@@ -497,7 +606,13 @@ unsafe fn ble_set_phy_tx_mode_1mbps(pdu_body_len: u8) {
     trace_w(BB_BASE as u32 + 0x08, 0x2000);
     bb_write(0x08, 0x2000);
 
-    // Step 5: gBleIPPara[4] = 0x80 — lib internal struct flag, skipped.
+    // Step 5: gBleIPPara[4] = 0x80 — restored (was skipped; now mirrors WCH BLE_SetPHYTxMode).
+    // Root cause fix (task #22 lifecycle probe): if the post-handler W1C in BB() clears a
+    // "late" bit4/7 in lle38 without the ip[4]=1 re-arm (because .L4/.L8 re-read found 0),
+    // ip[4] stays at 0xC0. Since step5 was skipped, ip[4]=0xC0 persisted to the next burst,
+    // blocking .L6 (0xC0 & 0x40 ≠ 0). WCH's BLE_SetPHYTxMode resets ip[4]=0x80 every burst,
+    // so it is immune. Adding step5 back makes our path immune too.
+    write_volatile((addr_of!(gBleIPPara) as *mut u8).add(4), 0x80u8);
 
     // Step 6: TX slot timer (lib asm L91852-91856, exact decode by Lucy msg=83cacb1f).
     //   formula: (((pdu_len_plus_1 + 11) << 2) + (gBleIPPara[0xa] + 158)) << 1
@@ -919,7 +1034,12 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
 
                     let bb_status = bb_read(0x08);
                     if i < 4 {
-                        hal::println!("# PATHC_ALIVE x1-after-bb08 {} {:#010x}", i, bb_status);
+                        let ip4_v  = read_volatile((core::ptr::addr_of!(gBleIPPara) as *const u8).add(4));
+                        let lle38_v = read_volatile((LLE_BASE + 0x38) as *const u32);
+                        hal::println!(
+                            "# PATHC_ALIVE x1-after-bb08 {} {:#010x} ip4={:#04x} lle38={:#010x} irq#{}",
+                            i, bb_status, ip4_v, lle38_v, BB_IRQ_ENTRY
+                        );
                     }
                     if (bb_status & 0xFF00_0000) == 0x3900_0000 && !Y4_039_LOGGED {
                         Y4_039_LOGGED = true;
@@ -1024,12 +1144,16 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
                     PATHC_MANUAL_L6, MANUAL_L6_HIT, MANUAL_L6_WAIT, MANUAL_L6_BEFORE, MANUAL_L6_AFTER);
                 hal::println!("# PATHC_MANUAL_L6_IP4 before={:#04x} after={:#04x}",
                     MANUAL_L6_IP4_BEFORE, MANUAL_L6_IP4_AFTER);
-                hal::println!("# PATHC_BB_IRQ_SNAPSHOT count={} s0={:#010x}/ip4={:#04x}/lle38={:#010x} s1={:#010x}/ip4={:#04x}/lle38={:#010x} s2={:#010x}/ip4={:#04x}/lle38={:#010x} s3={:#010x}/ip4={:#04x}/lle38={:#010x}",
+                // V1.1 probe: lle38=LLE_BASE+0x38=0x40024138 (WCH_BBR+0x38, gate register in bb_irq_lib_handler)
+                //             alt38=BB_BASE+0x38=0x40024238 (WCH_LLER+0x38, naming-inversion check)
+                // If alt38 has bit6 set when lle38 does not → base names swapped in bb_irq_lib_handler.
+                // If both stay 0x001e800f → neither base has bit6; revisit asm decode.
+                hal::println!("# PATHC_BB_IRQ_SNAPSHOT count={} s0={:#010x}/ip4={:#04x}/lle38={:#010x}/alt38={:#010x} s1={:#010x}/ip4={:#04x}/lle38={:#010x}/alt38={:#010x} s2={:#010x}/ip4={:#04x}/lle38={:#010x}/alt38={:#010x} s3={:#010x}/ip4={:#04x}/lle38={:#010x}/alt38={:#010x}",
                     BB_IRQ_SNAP_COUNT,
-                    BB_IRQ_STATUS[0], BB_IRQ_IP4[0], BB_IRQ_LLE38[0],
-                    BB_IRQ_STATUS[1], BB_IRQ_IP4[1], BB_IRQ_LLE38[1],
-                    BB_IRQ_STATUS[2], BB_IRQ_IP4[2], BB_IRQ_LLE38[2],
-                    BB_IRQ_STATUS[3], BB_IRQ_IP4[3], BB_IRQ_LLE38[3]);
+                    BB_IRQ_STATUS[0], BB_IRQ_IP4[0], BB_IRQ_LLE38[0], BB_IRQ_ALT38[0],
+                    BB_IRQ_STATUS[1], BB_IRQ_IP4[1], BB_IRQ_LLE38[1], BB_IRQ_ALT38[1],
+                    BB_IRQ_STATUS[2], BB_IRQ_IP4[2], BB_IRQ_LLE38[2], BB_IRQ_ALT38[2],
+                    BB_IRQ_STATUS[3], BB_IRQ_IP4[3], BB_IRQ_LLE38[3], BB_IRQ_ALT38[3]);
             }
             if Y200_DUMPED && !Y200_PRINTED {
                 Y200_PRINTED = true;
@@ -1720,6 +1844,17 @@ fn main() -> ! {
                 hal::println!(
                     "# PATHC_IRQ counters BB={}/{} LLE={}/{}",
                     bb_irq_entry, bb_irq_exit, lle_irq_entry, lle_irq_exit,
+                );
+                // V1.2 staged bisect: print stub results (visible only if BB_HANDLER_STAGE=0 or
+                // stage 1/2 that returns cleanly — confirms handler can enter+exit without fault).
+                // Stage 0 (no W1C): expect BB_STUB_ENTER_COUNT=BB_STUB_MAX_ENTRIES (50), then auto-disable.
+                // Stage 1+: expect BB_STUB_ENTER_COUNT=0 (stub statics unused; full path runs).
+                hal::println!(
+                    "# BB_STUB stage={} enter_count={} blk0={:#010x}/ip4={:#04x}/bb08={:#010x} blk1={:#010x}/ip4={:#04x}/bb08={:#010x}",
+                    BB_HANDLER_STAGE,
+                    BB_STUB_ENTER_COUNT,
+                    BB_STUB_BLK[0], BB_STUB_IP4[0], BB_STUB_BB08[0],
+                    BB_STUB_BLK[1], BB_STUB_IP4[1], BB_STUB_BB08[1],
                 );
                 // NOTE: all SDI diagnostics (done/state/irq) are self-report only and
                 // may not reflect actual air TX. Acceptance gate = nRF/HackRF visible packet.
