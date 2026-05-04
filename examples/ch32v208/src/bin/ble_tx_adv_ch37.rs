@@ -83,10 +83,12 @@ extern "C" {
 // extern decl + dead else-branch cleaned up at T8 (LLVM already DCE'd, zero runtime impact).
 // fnGetClockCBs (4B BSS, 14+ other lib refs) survives until T8 -lwchble removal.
 
-// Task #23: BLE_IPCoreInit anchor — same reason as above. Both anchors needed
-// until complete lib removal validation.
-#[used]
-static _KEEP_BLE_IP_CORE_INIT: unsafe extern "C" fn() = BLE_IPCoreInit;
+// Phase D+1 T5 (2026-05-05): BLE_IPCoreInit anchor REMOVED.
+// BLE_IPCoreInit lib copy (118B) + RFEND_DevInit (372B) + RFEND_Reset (52B) cascade-GC'd.
+// Rust ble_ip_core_init() is the sole implementation (called in Path C init).
+// The lib copy was kept only by this anchor (no --undefined flag in build.rs).
+// dead PathC call sites at lines ~1718/1769 are LLVM DCE'd (not in final binary).
+// extern decl + dead call sites cleaned up at T8. Total cascade: -544B (empirically measured).
 
 // Task #20: keep the lib LLE IRQ body live without calling it from the IRQ64
 // wrapper. The direct call is unreachable in Path C because IRQ64 is masked, but
@@ -197,6 +199,14 @@ static _T3_PAD: [u8; 4] = [0u8; 4]; // T3-probe-align: adjust if BIN ≠ 51588B
 #[used]
 #[link_section = ".rodata"]
 static _T4_PAD: [u8; 216] = [0u8; 216];
+
+// Phase D+1 T5: size-neutral pad compensating BLE_IPCoreInit cascade GC.
+// BLE_IPCoreInit (118B) + RFEND_DevInit (372B) + RFEND_Reset (52B) + anchor (4B) = -544B.
+// Empirically measured from T4 baseline (probe-build-nm-restore).
+// T6 (#31) will remove _T5_PAD and replace with _T6_PAD when LLE_IRQSubHandler is removed.
+#[used]
+#[link_section = ".rodata"]
+static _T5_PAD: [u8; 544] = [0u8; 544];
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
