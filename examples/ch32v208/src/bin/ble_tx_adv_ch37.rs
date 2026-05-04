@@ -158,20 +158,36 @@ pub static mut ble: [u32; 16] = [0; 16]; // 64B (lib size confirmed), u32 for 4-
 
 // Phase D+1 T3: simple BSS scalar globals — gPaControl (4B) + dtmFlag (1B).
 // lib COMMON BSS: gPaControl=4B (type=C), dtmFlag=1B (type=C). Access: init-only, no ISR/hot-path.
-// GlobalMerge risk: NONE — not accessed in BB ISR → ISR timing unaffected.
-// ble_ip_core_init() (src/ble/mod.rs) writes both to 0; BSS zero-init makes writes redundant.
-// mod.rs extern "C" declaration kept; linker resolves to these Rust definitions.
+//
+// T3-probe-align (forensic-driven fix, 2026-05-04):
+// T3 R1 gate failed (cba=0): LLVM GlobalMerge inserted gPaControl at
+// .L_MergedGlobals.180+64 inside ble_ip_core_init(), shifting TX_BUF from
+// 0x200016a0 (mod16=0, 16B-aligned) to 0x200016a4 (mod16=4). Hardware DMA
+// buffer at BB+0x70 requires 16B-aligned TX_BUF → alignment loss → cba=0.
+//
+// Fix: #[link_section = ".bss.zz_*"] places gPaControl/dtmFlag in a DIFFERENT
+// BSS sub-section that LLVM GlobalMerge cannot merge with the main .bss region.
+// The linker script pattern *(.bss .bss.*) places .bss.zz_* AFTER main .bss
+// (wildcard ordering), so TX_BUF stays at its T2-baseline 16B-aligned address.
+//
+// Iron Law (new): LLVM GlobalMerge can shift hardware-DMA buffers indirectly.
+// When adding new BSS statics, nm-verify all hardware-DMA buffer addresses mod16.
+// Do NOT rely on ISR size as a proxy — GlobalMerge can affect non-ISR functions.
 #[no_mangle]
+#[link_section = ".bss.zz_gpa"]
 pub static mut gPaControl: u32 = 0; // T3: 4B, init-only — PA control (CH32V208 has integrated PA)
 #[no_mangle]
+#[link_section = ".bss.zz_dtm"]
 pub static mut dtmFlag: u8 = 0;     // T3: 1B, init-only — DTM mode flag
 
-// Phase D+1 T3: rodata size-neutral pad (probe required after T3 build).
-// Iron Law #22: BIN must equal 51588B (baseline D-final.1). Pad adjusted per probe.
-// T2 baseline: _T2_PAD=[u8;4] → BIN=51588B. T3 probe value TBD after build.
+// Phase D+1 T3: rodata size-neutral pad.
+// T3-probe-align shifts gPaControl/dtmFlag OUT of main .bss, so BIN size may
+// change vs. T3 R1. Pad adjusted to maintain BIN = 51588B (Iron Law #22).
+// T3 R1 (pre-align): _T3_PAD=[u8;4], BIN=51588B.
+// T3-probe-align: re-probe required; start at [u8;4] and adjust ±4 per delta.
 #[used]
 #[link_section = ".rodata"]
-static _T3_PAD: [u8; 4] = [0u8; 4]; // T3: probe value — adjust if BIN ≠ 51588B
+static _T3_PAD: [u8; 4] = [0u8; 4]; // T3-probe-align: adjust if BIN ≠ 51588B
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
