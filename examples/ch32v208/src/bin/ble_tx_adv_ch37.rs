@@ -58,6 +58,9 @@ use {ch32_hal as hal, panic_halt as _};
 
 extern "C" {
     fn BLE_IPCoreInit();
+    fn LL_CoreInit();
+    fn LL_WhitelistInit();
+    fn LL_ResolvinglistInit();
     fn LLE_IRQSubHandler();
     fn BB_IRQLibHandler();
     fn llAdvertiseCreateCore();
@@ -242,6 +245,7 @@ const Y200_SNAPSHOT: bool = false;
 const Z37_SNAPSHOT: bool = false;
 const Z37_TARGET_BURST: u32 = 1; // zero-based: capture burst 2.
 const GBLELL_SNAPSHOT: bool = false;
+const PATHC_CALL_LL_HELPERS: bool = false;
 const PATHC_LIB_IRQ: bool = true;
 const PATHC_ENABLE_LLE_IRQ: bool = false;
 const PATHC_MANUAL_L6: bool = false;
@@ -1584,6 +1588,14 @@ fn main() -> ! {
             dump_ip_core_mmio("after_ll_init_safe_prefix");
             seed_ble_bd_addr();
             hal::println!("PathC PlanD: seeded ble[0x18..0x1d] BD addr");
+            if PATHC_CALL_LL_HELPERS {
+                LL_CoreInit();
+                LL_WhitelistInit();
+                LL_ResolvinglistInit();
+                hal::println!("PathC PlanB2: LL_CoreInit + LL_WhitelistInit + LL_ResolvinglistInit returned");
+            } else {
+                hal::println!("PathC PlanB2: LL helper calls skipped");
+            }
             hal::println!("PathC PlanD: BLE IP-core init + LL_Init safe prefix replaced Tier-0 init");
         } else {
         hal::ble::lle_dev_init();
