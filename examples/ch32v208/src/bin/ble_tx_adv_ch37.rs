@@ -68,8 +68,7 @@ extern "C" {
     fn llAdvertiseSet();
     fn llAdvertiseStart();
     fn llAdvTraverseallChannel();
-    static mut gPaControl: u32;
-    static mut dtmFlag: u8;
+    // Phase D+1 T3: gPaControl + dtmFlag migrated to Rust BSS (see #[no_mangle] statics below).
     // Phase D+1 T2 final (Plan C): gBleIPPara + gBleLlPara stay lib COMMON BSS.
     // gBleIPPara: GlobalMerge folds it into .L_MergedGlobals when Rust BSS → BB ISR -24B → timing break.
     // gBleLlPara: Rust BSS causes cba=0 via unknown non-ISR timing path (Task #35 forensic).
@@ -157,11 +156,22 @@ pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration blo
 #[no_mangle]
 pub static mut ble: [u32; 16] = [0; 16]; // 64B (lib size confirmed), u32 for 4-byte alignment — T2 final Plan C
 
-// Phase D+1 T2: rodata size-neutral pad (probe required after each T2 variant).
+// Phase D+1 T3: simple BSS scalar globals — gPaControl (4B) + dtmFlag (1B).
+// lib COMMON BSS: gPaControl=4B (type=C), dtmFlag=1B (type=C). Access: init-only, no ISR/hot-path.
+// GlobalMerge risk: NONE — not accessed in BB ISR → ISR timing unaffected.
+// ble_ip_core_init() (src/ble/mod.rs) writes both to 0; BSS zero-init makes writes redundant.
+// mod.rs extern "C" declaration kept; linker resolves to these Rust definitions.
+#[no_mangle]
+pub static mut gPaControl: u32 = 0; // T3: 4B, init-only — PA control (CH32V208 has integrated PA)
+#[no_mangle]
+pub static mut dtmFlag: u8 = 0;     // T3: 1B, init-only — DTM mode flag
+
+// Phase D+1 T3: rodata size-neutral pad (probe required after T3 build).
 // Iron Law #22: BIN must equal 51588B (baseline D-final.1). Pad adjusted per probe.
+// T2 baseline: _T2_PAD=[u8;4] → BIN=51588B. T3 probe value TBD after build.
 #[used]
 #[link_section = ".rodata"]
-static _T2_PAD: [u8; 4] = [0u8; 4]; // T2 final: probe value, adjust if BIN ≠ 51588B
+static _T3_PAD: [u8; 4] = [0u8; 4]; // T3: probe value — adjust if BIN ≠ 51588B
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
