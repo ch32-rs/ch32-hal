@@ -58,6 +58,10 @@ use {ch32_hal as hal, panic_halt as _};
 
 extern "C" {
     fn BLE_IPCoreInit();
+    // Task #20 forensic (2026-05-04):
+    // IRQ64 stays masked in Path C (`PATHC_ENABLE_LLE_IRQ=false`). The lib body
+    // is retained explicitly by `_KEEP_LLE_IRQ_HANDLER` below; removing both the
+    // call and symbol retention GC'd ~840B and failed the 60s BLE gate (cba=0).
     fn LLE_IRQSubHandler();
     fn BB_IRQLibHandler();
     fn llAdvertiseCreateCore();
@@ -76,10 +80,10 @@ extern "C" {
 }
 
 // Task #22: Keep BB_IRQLibHandler in the binary even though bb_irq_lib_handler()
-// (Rust) is now called instead. Without this anchor, --gc-sections removes ~119KB
-// of lib code including LLE_IRQSubHandler and fnGetClockCBs, which are still needed
-// until full lib removal is validated (Iron Law from #21: layout shift breaks timing).
-// Remove once task #22 gate passes and full lib removal is in progress.
+// (Rust) is now called instead. Without this anchor, --gc-sections removes a large
+// libwchble.a subtree and shifts timing-sensitive code. LLE_IRQSubHandler is an
+// independent IRQ64 body and is anchored separately by `_KEEP_LLE_IRQ_HANDLER`.
+// Remove once full lib removal is validated.
 #[used]
 static _KEEP_BB_IRQ_LIB_HANDLER: unsafe extern "C" fn() = BB_IRQLibHandler;
 
@@ -87,6 +91,13 @@ static _KEEP_BB_IRQ_LIB_HANDLER: unsafe extern "C" fn() = BB_IRQLibHandler;
 // until complete lib removal validation.
 #[used]
 static _KEEP_BLE_IP_CORE_INIT: unsafe extern "C" fn() = BLE_IPCoreInit;
+
+// Task #20: keep the lib LLE IRQ body live without calling it from the IRQ64
+// wrapper. The direct call is unreachable in Path C because IRQ64 is masked, but
+// removing the symbol entirely shifts layout and kills ADV TX. Explicit retention
+// passed the 60s gate (cba=78), so this static is the deliberate anchor.
+#[used]
+static _KEEP_LLE_IRQ_HANDLER: unsafe extern "C" fn() = LLE_IRQSubHandler;
 
 // Task #23 Variant B bisect anchor: keeps ble_ip_core_init() body in flash even
 // when the call site uses the FFI path. Without this, Rust DCE removes the function
@@ -478,7 +489,8 @@ fn BB() {
 fn LLE() {
     unsafe {
         LLE_IRQ_ENTRY = LLE_IRQ_ENTRY.wrapping_add(1);
-        LLE_IRQSubHandler();
+        // IRQ64 is masked in Path C. Keep the vector stub and counters alive, but
+        // leave the lib body as an explicit retention anchor above.
         LLE_IRQ_EXIT = LLE_IRQ_EXIT.wrapping_add(1);
     }
 }
