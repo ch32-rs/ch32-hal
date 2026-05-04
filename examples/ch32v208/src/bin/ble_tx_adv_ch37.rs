@@ -77,13 +77,11 @@ extern "C" {
     static mut gBleLlPara: u8;
 }
 
-// Task #22: Keep BB_IRQLibHandler in the binary even though bb_irq_lib_handler()
-// (Rust) is now called instead. Without this anchor, --gc-sections removes a large
-// libwchble.a subtree and shifts timing-sensitive code. LLE_IRQSubHandler is an
-// independent IRQ64 body and is anchored separately by `_KEEP_LLE_IRQ_HANDLER`.
-// Remove once full lib removal is validated.
-#[used]
-static _KEEP_BB_IRQ_LIB_HANDLER: unsafe extern "C" fn() = BB_IRQLibHandler;
+// Phase D+1 T4 (2026-05-04): BB_IRQLibHandler anchor REMOVED.
+// BB_IRQLibHandler lib copy (276B text) GC'd by --gc-sections; Rust bb_irq_lib_handler()
+// is the sole ISR impl (inline in BB() via hal::ble::bb_irq_lib_handler()).
+// extern decl + dead else-branch cleaned up at T8 (LLVM already DCE'd, zero runtime impact).
+// fnGetClockCBs (4B BSS, 14+ other lib refs) survives until T8 -lwchble removal.
 
 // Task #23: BLE_IPCoreInit anchor — same reason as above. Both anchors needed
 // until complete lib removal validation.
@@ -188,6 +186,17 @@ pub static mut dtmFlag: u8 = 0;     // T3: 1B, init-only — DTM mode flag
 #[used]
 #[link_section = ".rodata"]
 static _T3_PAD: [u8; 4] = [0u8; 4]; // T3-probe-align: adjust if BIN ≠ 51588B
+
+// Phase D+1 T4: size-neutral pad compensating BB_IRQLibHandler GC.
+// bb.o uses -ffunction-sections: BB_IRQLibHandler is in its own section.
+// That section was kept ONLY by --undefined=BB_IRQLibHandler (build.rs) and
+// this anchor. With both removed, BB_IRQLibHandler (276B text) is GC'd.
+// Net T4 BIN delta: -276B text (BB_IRQLibHandler) - 4B rodata (anchor) = -280B.
+// Pad 280B restores BIN = 51588B exactly.
+// T4.5 (#36 Option C) will reduce this to 216B to absorb +64B code cost.
+#[used]
+#[link_section = ".rodata"]
+static _T4_PAD: [u8; 280] = [0u8; 280];
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
@@ -491,7 +500,7 @@ const X1_POLLED_W1C: bool = true;
 /// TX_BUF MUST be 16B-aligned: mod16=4 (T3 R1) and mod16=8 (T3-probe-align) both caused cba=0.
 /// Option B (#[repr(C,align(16))] struct): +108B code bloat → ruled out.
 /// Option C (#[link_section=".tx_buf_aligned"] + ALIGN(16)): +64B code (TX_BUF outside
-///   GlobalMerge → separate absolute address load) → ruled out.
+///   GlobalMerge → separate absolute address load) → ruled out for T3, accepted as T4.5.
 /// Option D: `. += 8` in custom link.x .bss preamble shifts MergedGlobals.180 base by +8B.
 ///   TX_BUF sits at offset 0x98 inside MergedGlobals; was mod16=8 (T3PA), now mod16=0. ✓
 ///   No type change, no section annotation → LLVM codegen identical to T3PA. BIN=51588B. ✓

@@ -5,7 +5,10 @@ fn main() {
     // Path C: link the WCH BLE library for BLE_IPCoreInit and the BB IRQ sub-handler.
     println!("cargo:rustc-link-search=/Users/mono/Elec/WCH/CH32V20xEVT-2.31/EXAM/BLE/LIB");
     println!("cargo:rustc-link-lib=static=wchble");
-    println!("cargo:rustc-link-arg=--undefined=BB_IRQLibHandler");
+    // Phase D+1 T4 (2026-05-04): --undefined=BB_IRQLibHandler removed (was redundant).
+    // ip.o (BLE_RegInit) → BB_DevInit → bb.o keeps BB_IRQLibHandler alive regardless.
+    // The flag was added before the ip.o→bb.o dependency was understood. Removing it
+    // has zero BIN impact; retaining it would be misleading about what keeps bb.o live.
 
     // T3 Option D (2026-05-04): TX_BUF must be 16B-aligned (hardware DMA requirement).
     //
