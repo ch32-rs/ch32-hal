@@ -208,9 +208,13 @@ static _T3_PAD: [u8; 4] = [0u8; 4]; // T3-probe-align: adjust if BIN ≠ 51588B
 // v7-probe.3-fix (2026-05-05): 288→316 — remove 2nd PATHC_LIB_IRQ block (-28B text).
 // production (2026-05-05): 316→688 — remove 3 bisect ok=0/1/2 markers (-372B text+rodata).
 //   BIN=51588B ✓.
+// v7-probe.3-fix2 (2026-05-05): 688→752 — add W1C+two 72k delay fixes (+64B text code growth).
+//   BIN=51588B ✓.
+// Note (2026-05-06): fnGetClockCBs Rust strong BSS attempted (#34 gate) → cba=0 regression
+//   (Iron Law #22 layout shift). Reverted. fnGetClockCBs stays lib COMMON BSS until T8.
 #[used]
 #[link_section = ".rodata"]
-static _T4_PAD: [u8; 688] = [0u8; 688];
+static _T4_PAD: [u8; 752] = [0u8; 752];
 
 // Phase D+1 T5: size-neutral pad compensating BLE_IPCoreInit cascade GC.
 // BLE_IPCoreInit (118B) + RFEND_DevInit (372B) + RFEND_Reset (52B) + anchor (4B) = -544B.
@@ -1120,6 +1124,11 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
                     bb_read(0x64)
                 );
                 bb_write(0x08, 0x0000_FFFF);
+                // v7-probe.3-fix2 (2026-05-05): W1C-clear 0x40024138 (WCH_BBR+0x38) bit6 before
+                // enabling IRQ 63. Without this, a stale bit6 (timer expired, bb64=0) triggers
+                // an immediate ISR fire on enable_interrupt(63) → ISR storm before GO strobe.
+                // bb_write(0x38,...) writes to BB_BASE+0x38 = 0x40024138 = WCH_BBR+0x38. ✓
+                bb_write(0x38, 0xFF);
                 lle_write(0x38, 0x0000_00F0);
                 qingke::pfic::unpend_interrupt(63);
                 qingke::pfic::unpend_interrupt(64);
@@ -1132,6 +1141,11 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
                 } else {
                     hal::println!("# PATHC_IRQ_MARK skip-enable64");
                 }
+                // v7-probe.3-fix2 (2026-05-05): explicit pre-GO settle delay.
+                // Replaces the ~435µs UART delay that ok=1 marker accidentally provided.
+                // At 144MHz @4 cycles/iter: 72_000 ≈ 500µs — covers any residual ISR
+                // activity from enable_interrupt(63) before the GO strobe fires.
+                qingke::riscv::asm::delay(72_000);
             }
 
             // v7-probe.3-fix (2026-05-05): second PATHC_LIB_IRQ refresh block REMOVED.
@@ -1143,7 +1157,13 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
             bb_write(0x00, 2); // T=0: GO strobe
             hal::println!("# PATHC_IRQ_MARK post-go");
             for alive in 0..3 {
-                qingke::riscv::asm::delay(240);
+                // v7-probe.3-fix2 (2026-05-05): 240→72_000 cycles.
+                // Without production markers (ok=1 etc.), the ISR had no time to settle
+                // before the alive loop tried to print. The v7-probe.3-fix binary's
+                // ok=1 println provided ~435µs of accidental UART delay that masked this.
+                // 72_000 @144MHz @4 cycles/iter ≈ 500µs — lets BB ISR complete its
+                // TX-advance sequence (776-unit timer + TX air time + .L4 cleanup).
+                qingke::riscv::asm::delay(72_000);
                 hal::println!("# PATHC_ALIVE post-go {}", alive);
             }
             if PATHC_MANUAL_L6 {
