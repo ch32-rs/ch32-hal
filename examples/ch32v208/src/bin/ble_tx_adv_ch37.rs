@@ -69,8 +69,11 @@ extern "C" {
     fn llAdvertiseStart();
     fn llAdvTraverseallChannel();
     // Phase D+1 T3: gPaControl + dtmFlag migrated to Rust BSS (see #[no_mangle] statics below).
-    // Phase D+1 #34 (2026-05-05): gBleIPPara migrated to Rust BSS (Option 2, section isolation).
-    // Phase D+1 #35: gBleLlPara forensic pending.
+    // Phase D+1 T2 final (Plan C): gBleIPPara + gBleLlPara stay lib COMMON BSS.
+    // gBleIPPara: GlobalMerge folds it into .L_MergedGlobals when Rust BSS → BB ISR -24B → timing break.
+    // gBleLlPara: Rust BSS causes cba=0 via unknown non-ISR timing path (Task #35 forensic).
+    // Both deferred to dedicated forensic tasks (#34, #35).
+    static mut gBleIPPara: u8;
     static mut gBleLlPara: u8;
 }
 
@@ -141,25 +144,6 @@ pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration blo
 #[no_mangle]
 pub static mut ble: [u32; 16] = [0; 16]; // 64B (lib size confirmed), u32 for 4-byte alignment — T2 final Plan C
 
-// Phase D+1 #34 (2026-05-05): gBleIPPara → Rust BSS with GlobalMerge isolation.
-// lib COMMON BSS: gBleIPPara = 40B (C type). [u32; 10] for 4-byte alignment.
-//
-// T2 failure root cause: simple `#[no_mangle]` caused LLVM GlobalMerge to fold
-// gBleIPPara into .L_MergedGlobals.180 → BB ISR s0 base encompasses wider range
-// → ISR 262B → 238B (-24B, ~6-8 cycles) → .L6 TX-advance timing break → cba=0.
-//
-// #34 Fix (Option 2 — section isolation):
-// #[link_section = ".bss.gBleIPPara"] places gBleIPPara in a named sub-section.
-// LLVM GlobalMerge only merges statics within the same section name → no fold.
-// Linker script `*(.bss .bss.*)` still includes .bss.gBleIPPara in BSS region.
-// ISR accesses gBleIPPara via absolute address load (separate from MergedGlobals).
-//
-// Probe result (T7 baseline): BIN=51588B ✓, ISR=262B ✓, TX_BUF mod16=0 ✓.
-// Option 1 (no annotation) confirmed broken: ISR 238B — GlobalMerge still folds.
-#[no_mangle]
-#[link_section = ".bss.gBleIPPara"]
-pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
-
 // Phase D+1 T3: simple BSS scalar globals — gPaControl (4B) + dtmFlag (1B).
 // lib COMMON BSS: gPaControl=4B (type=C), dtmFlag=1B (type=C). Access: init-only, no ISR/hot-path.
 //
@@ -200,9 +184,16 @@ static _T3_PAD: [u8; 4] = [0u8; 4]; // T3-probe-align: adjust if BIN ≠ 51588B
 // Net T4 BIN delta: -276B text (BB_IRQLibHandler) - 4B rodata (anchor) = -280B.
 // T4.5 (#36 Option C): reduced from 280 → 216 to absorb +64B code cost of
 // moving TX_BUF out of GlobalMerge into its own .tx_buf_aligned section.
+// #34 v3 (2026-05-05): reduced 216→208 for +8B ISR (scan-mode pre-arm writes).
+// v7-probe (2026-05-05): 216→132 — SDI instrumentation removed from .L6 and main
+//   loop (SDI_DUMP/SDI_ALIVE/ip0 println, ISR pre/post captures). BIN=51588B ✓.
+// v7-probe.3 (2026-05-05): 612→288 — unconditional ok=0/ok=1/ok=2 markers (+324B text).
+// v7-probe.3-fix (2026-05-05): 288→316 — remove 2nd PATHC_LIB_IRQ block (-28B text).
+// production (2026-05-05): 316→688 — remove 3 bisect ok=0/1/2 markers (-372B text+rodata).
+//   BIN=51588B ✓.
 #[used]
 #[link_section = ".rodata"]
-static _T4_PAD: [u8; 216] = [0u8; 216];
+static _T4_PAD: [u8; 688] = [0u8; 688];
 
 // Phase D+1 T5: size-neutral pad compensating BLE_IPCoreInit cascade GC.
 // BLE_IPCoreInit (118B) + RFEND_DevInit (372B) + RFEND_Reset (52B) + anchor (4B) = -544B.
@@ -391,6 +382,9 @@ const ISO_MODE: u8 = 0; // ← change this
 // Comparing both outputs reveals any register not written by our 15-step sequence
 // that EVT has in a non-default state at trigger time.
 const DUMP_TIER_A: bool = false;
+// v7-probe.1: disable 184-line PREGO register dump so post-go heartbeat fits within
+// the wlink 779-line capture buffer. Set true to restore for forensic register diffs.
+const DUMP_PREGO_REGS: bool = false;
 const PATHC_REPLACE_TIER0: bool = true;
 const PATHC_USE_RUST_IP_CORE_INIT: bool = true;
 const Y200_SNAPSHOT: bool = false;
@@ -451,12 +445,31 @@ static mut BB_IRQ_LLE38: [u32; 4] = [0; 4];
 // that pinpoints a base inversion in bb_irq_lib_handler.
 static mut BB_IRQ_ALT38: [u32; 4] = [0; 4];
 static mut BB_IRQ_SNAP_COUNT: usize = 0;
+
+// ── SDI (Serial Debug Instrumentation) — ISR-entry snapshot ──────────────
+// Captured in BB() before calling bb_irq_lib_handler(). Printed in main loop.
+// Answers: (a) does bit6 fire? (b) what is ip4/ip0? (c) what is LLE+0x08 pre-write?
+// Stored globally (no println! in ISR — timing must be preserved).
+static mut SDI_IRQ_N: u32 = 0;         // number of ISR entries captured
+static mut SDI_DONE: bool = false;      // printed flag
+static mut SDI_BB38: [u32; 6] = [0; 6];   // LLE_BASE+0x38 at ISR entry
+static mut SDI_IP0: [u8; 6] = [0; 6];     // gBleIPPara[0] at ISR entry
+static mut SDI_IP4: [u8; 6] = [0; 6];     // gBleIPPara[4] at ISR entry
+static mut SDI_LLE08: [u32; 6] = [0; 6];  // BB_BASE+0x08 at ISR entry (WCH_LLER+0x08)
+static mut SDI_IP4_POST: [u8; 6] = [0; 6]; // gBleIPPara[4] after bb_irq_lib_handler
 static mut MANUAL_L6_HIT: bool = false;
 static mut MANUAL_L6_WAIT: u32 = 0;
 static mut MANUAL_L6_BEFORE: u32 = 0;
 static mut MANUAL_L6_AFTER: u32 = 0;
 static mut MANUAL_L6_IP4_BEFORE: u8 = 0;
 static mut MANUAL_L6_IP4_AFTER: u8 = 0;
+
+// v7-probe (2026-05-05): expB/expC SDI instrumentation removed (production binary).
+// expB result: LLE+0x1C = connection SM, stays 0x6c throughout ADV TX — wrong register.
+// expC result: 5 candidates (BB+{0x18,0x24,0x30,0x3C}+RFEND+0x90) PRE=POST in ip0=0x00
+//   failing mode — .L6 write sequence has no observable effect on these registers.
+// probe-A (ip0=0x60): cba=66 confirmed; ISR starvation prevented SDI_C data collection.
+// Conclusion: gBleIPPara[0]=0x60 (scan-mode init) is the close path — see v7 init below.
 
 #[link_section = ".bss"]
 static mut Y200_BB: [u32; 64] = [0; 64];
@@ -539,6 +552,7 @@ fn BB() {
     unsafe {
         BB_IRQ_ENTRY = BB_IRQ_ENTRY.wrapping_add(1);
         // Task #22 V1.2 staged bisect.
+        // v7-probe (2026-05-05): SDI ISR-entry capture removed (production binary).
         // PATHC_USE_RUST_BB_IRQ=false → FFI BB_IRQLibHandler (V_A3 reference)
         // PATHC_USE_RUST_BB_IRQ=true  → Rust handler at BB_HANDLER_STAGE:
         //   0: reads-only stub (no writes; expects IRQ storm, auto-disables after BB_STUB_MAX_ENTRIES)
@@ -638,6 +652,7 @@ fn BB() {
         // With it removed, late bit4/7 cause a second IRQ entry where .L4/.L8
         // correctly catches them — exactly matching WCH library behavior.
         BB_IRQ_EXIT = BB_IRQ_EXIT.wrapping_add(1);
+        // v7-probe (2026-05-05): SDI post-handler capture removed (production binary).
     }
 }
 
@@ -1048,24 +1063,29 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
             if !ADV_CTX_PRINTED {
                 ADV_CTX_PRINTED = true;
                 ADV_CTX_DUMPED = true;
-                let adv_base = core::ptr::addr_of!(RUST_ADV_CTX) as usize;
-                let tx_base = core::ptr::addr_of!(TX_BUF) as usize;
-                hal::println!(
-                    "# PATHC_PREGO regs bb70_readback={:#010x} bb70_addr=0x{:08x} lle08_aa={:#010x} lle04_crc={:#010x} lle00={:#010x} bb04={:#010x} rust_adv_ctx=0x{:08x} tx_buf=0x{:08x}",
-                    bb_read(0x70),
-                    0x2000_0000u32 + ((bb_read(0x70) & 0x3fff) << 2),
-                    lle_read(0x08),
-                    lle_read(0x04),
-                    lle_read(0x00),
-                    bb_read(0x04),
-                    adv_base,
-                    tx_base
-                );
-                hal::ble::tracer::dump_regs("PATHC-PREGO-BB   ", BB_BASE as u32, 0x00, 0xFC);
-                hal::ble::tracer::dump_regs("PATHC-PREGO-LLE  ", LLE_BASE as u32, 0x00, 0xFC);
-                hal::ble::tracer::dump_regs("PATHC-PREGO-RFEND", RFEND_BASE as u32, 0x00, 0xD0);
-                dump_state_region("RUST_ADV_CTX_PREGO", adv_base, 192);
-                dump_state_region("TX_BUF_PREGO", tx_base, 64);
+                // v7-probe.1: DUMP_PREGO_REGS=false skips 184-line dump so post-go
+                // heartbeat fits within the 779-line wlink capture buffer.
+                // Set DUMP_PREGO_REGS=true to restore for forensic register diffs.
+                if DUMP_PREGO_REGS {
+                    let adv_base = core::ptr::addr_of!(RUST_ADV_CTX) as usize;
+                    let tx_base = core::ptr::addr_of!(TX_BUF) as usize;
+                    hal::println!(
+                        "# PATHC_PREGO regs bb70_readback={:#010x} bb70_addr=0x{:08x} lle08_aa={:#010x} lle04_crc={:#010x} lle00={:#010x} bb04={:#010x} rust_adv_ctx=0x{:08x} tx_buf=0x{:08x}",
+                        bb_read(0x70),
+                        0x2000_0000u32 + ((bb_read(0x70) & 0x3fff) << 2),
+                        lle_read(0x08),
+                        lle_read(0x04),
+                        lle_read(0x00),
+                        bb_read(0x04),
+                        adv_base,
+                        tx_base
+                    );
+                    hal::ble::tracer::dump_regs("PATHC-PREGO-BB   ", BB_BASE as u32, 0x00, 0xFC);
+                    hal::ble::tracer::dump_regs("PATHC-PREGO-LLE  ", LLE_BASE as u32, 0x00, 0xFC);
+                    hal::ble::tracer::dump_regs("PATHC-PREGO-RFEND", RFEND_BASE as u32, 0x00, 0xD0);
+                    dump_state_region("RUST_ADV_CTX_PREGO", adv_base, 192);
+                    dump_state_region("TX_BUF_PREGO", tx_base, 64);
+                }
             }
 
             if PATHC_LIB_IRQ {
@@ -1097,14 +1117,11 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
                 }
             }
 
-            if PATHC_LIB_IRQ {
-                // BB+0x64 is an active down-counter; SDI logging above can let it
-                // expire before GO. Refresh it as the final pre-GO MMIO write.
-                let ip = core::ptr::addr_of_mut!(gBleIPPara) as *mut u8;
-                write_volatile(ip.add(16) as *mut u32, 776);
-                bb_write(0x08, 0x0000_2000);
-                bb_write(0x64, 776);
-            }
+            // v7-probe.3-fix (2026-05-05): second PATHC_LIB_IRQ refresh block REMOVED.
+            // Root cause: bb_write(0x08, 0x2000) ran AFTER enable_interrupt(63), triggering
+            // an ISR storm before the GO strobe. T7 baseline (adeb4d2) never had this block
+            // and reaches post-go cleanly. gBleIPPara[16..19] and bb64 are already set by
+            // the first PATHC_LIB_IRQ block + ble_set_phy_tx_mode_1mbps step 6. Removed.
             trace_w(BB_BASE as u32 + 0x00, 2);
             bb_write(0x00, 2); // T=0: GO strobe
             hal::println!("# PATHC_IRQ_MARK post-go");
@@ -1112,7 +1129,6 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
                 qingke::riscv::asm::delay(240);
                 hal::println!("# PATHC_ALIVE post-go {}", alive);
             }
-
             if PATHC_MANUAL_L6 {
                 let mut waited = 0u32;
                 let mut status = 0u32;
@@ -1906,6 +1922,20 @@ fn main() -> ! {
             hal::println!("WARNING: co=0 — RF calibration failed. No output expected.");
         }
 
+        // ── v7-probe: gBleIPPara[0] = 0x60 — libwchble scan-mode equivalent init ──
+        // Iron Law #27: BB ISR bit5 path fires 0x8000→WCH_LLER+0x08 and
+        // ip20<<1→WCH_LLER+0x6c BEFORE .L6 when ip0 bit5 is set. This is the
+        // mechanism that arms TX. BSS ip0=0x00 never fires this path → cba=0.
+        // Forensic proof: probe-A (ip0=0x60) R1=56, 3×60s median=53 (2026-05-05).
+        //
+        // gBleIPPara[20..24] = 0: BSS zero-initialized at startup. ip20=0 means
+        // WCH_LLER+0x6c ← 0<<1 = 0 (scan-mode commit equivalent with zero value).
+        // No explicit write needed — BSS init guarantees this.
+        {
+            let ip_base = core::ptr::addr_of_mut!(gBleIPPara) as *mut u8;
+            write_volatile(ip_base, 0x60u8); // gBleIPPara[0] = 0x60 (bit5+bit6)
+        }
+
         // ── BLE stack RAM state dump ──────────────────────────────────────────
         // Hook point: after ble_phy_init() equivalent, before first TX burst.
         // EVT equivalent: after Broadcaster_Init() / BLE_LibInit() returns.
@@ -1997,6 +2027,9 @@ fn main() -> ! {
                     "# PATHC_IRQ counters BB={}/{} LLE={}/{}",
                     bb_irq_entry, bb_irq_exit, lle_irq_entry, lle_irq_exit,
                 );
+                // Liveness heartbeat: every 100 bursts ≈ 10s @100ms/burst.
+                // Confirms main loop is advancing and not stalled by ISR storm.
+                hal::println!("# tx_heartbeat tx_n={} ok={}", tx_n, ok_n);
                 // V1.2 staged bisect: print stub results (visible only if BB_HANDLER_STAGE=0 or
                 // stage 1/2 that returns cleanly — confirms handler can enter+exit without fault).
                 // Stage 0 (no W1C): expect BB_STUB_ENTER_COUNT=BB_STUB_MAX_ENTRIES (50), then auto-disable.

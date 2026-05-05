@@ -142,6 +142,11 @@ pub unsafe fn bb_irq_lib_handler() {
         // W1C bits 5+6 of gptrBBReg+0x38
         write_volatile((WCH_BBR + 0x38) as *mut u32, 0x60);
 
+        // ── Experiment B (2026-05-05): 0x8000/0x6c/0x2000 moved into .L6; ──
+        // state-machine reads capture WCH_LLER+0x1C before/after each write.
+        // v4–v6 all cba=0 with ~110–249 ns natural gap → timing hypothesis exhausted;
+        // LLE state-machine context is the new investigation target.
+
         // gBleIPPara[0] bit6: clock callback pending (not set in ADV TX path)
         let ip0 = read_volatile(ip);
         if ip0 & 0x40 != 0 {
@@ -167,13 +172,19 @@ pub unsafe fn bb_irq_lib_handler() {
         // ── .L6: TX advance path ─────────────────────────────────────────────
         // Fire only when gBleIPPara[4] bit6 is clear (armed but not yet fired).
         // BLE_SetPHYTxMode sets gBleIPPara[4] = 0x80 (bit7=1, bit6=0) to arm .L6.
+        //
+        // v7-probe (2026-05-05): scan-mode pre-arm writes (0x8000 + ip20<<1) removed
+        // from .L6. These writes (v4-v6 explicit MMIO path) all gave cba=0.
+        // The active-scan mode arm fires via the ip0 bit5 path BEFORE .L6, triggered
+        // by gBleIPPara[0]=0x60 set at init time. Plain .L6 = standard TX advance only.
+        // expB/expC SDI instrumentation removed (production binary).
         let ip4 = read_volatile(ip.add(4));
         if ip4 & 0x40 == 0 {
             write_volatile(ip.add(5), 1u8);                                  // gBleIPPara[5] = 1
-            write_volatile((WCH_LLER + 0x08) as *mut u32, 0x2000);          // advance 0x33→0x37
+            write_volatile((WCH_LLER + 0x08) as *mut u32, 0x2000);          // advance (W1C bit13)
             write_volatile(ip.add(4), 0xC0u8);  // 0xC0 = bits 7+6; block .L6 re-entry on next IRQ
             let timer = read_volatile(ip.add(16).cast::<u32>());             // gBleIPPara[16..19]
-            write_volatile((WCH_LLER + 0x64) as *mut u32, timer);           // bb+0x64 timer (no shift)
+            write_volatile((WCH_LLER + 0x64) as *mut u32, timer);           // bb+0x64 timer
         }
     }
 
