@@ -71,8 +71,8 @@ extern "C" {
     // Phase D+1 T3: gPaControl + dtmFlag migrated to Rust BSS (see #[no_mangle] statics below).
     // Phase D+1 #34 DONE (0f918cc+Q commit): gBleIPPara migrated to Rust strong BSS
     //   (see #[no_mangle] static below). extern "C" removed from this block.
-    // Phase D+1 #35 forensic pending: gBleLlPara stays lib COMMON BSS.
-    static mut gBleLlPara: u8;
+    // Phase D+1 #35 DONE: gBleLlPara migrated to Rust strong BSS (see #[no_mangle] below).
+    //   extern "C" declaration removed.
 }
 
 // Phase D+1 T4 (2026-05-04): BB_IRQLibHandler anchor REMOVED.
@@ -165,6 +165,25 @@ pub static mut gPaControl: u32 = 0; // T3: 4B, init-only — PA control (CH32V20
 #[no_mangle]
 #[link_section = ".bss.zz_dtm"]
 pub static mut dtmFlag: u8 = 0;     // T3: 1B, init-only — DTM mode flag
+
+// Phase D+1 #35 (2026-05-06): gBleLlPara → Rust strong BSS with GlobalMerge isolation.
+// lib COMMON BSS: gBleLlPara = 296B = 74 u32 words. Phase A forensic confirmed:
+//   - ISR (bb_irq_lib_handler) NEVER accesses gBleLlPara — only gBleIPPara + MMIO.
+//   - All lib functions that write timing constants (LL_Init) are never called in our path.
+//   - All lib functions that read gBleLlPara (llAdvertise*, lle_irq_process) are GC'd (T7).
+//   - Stale-RAM hazard: NONE — main() explicit write_bytes(0, 296) covers all fields.
+//   - No additional explicit field inits needed: all fields stay 0 for ADV TX path.
+//
+// GlobalMerge isolation: #[link_section=".bss.gBleLlPara"] defeats LLVM GlobalMerge folding.
+// Migration moves gBleLlPara from outside _ebss (lib COMMON at 0x20001b58) INTO _sbss.._ebss
+// (startup-zeroed). The existing write_bytes in main() becomes redundant but is kept for
+// belt-and-suspenders clarity (no-op when BSS already zero, safe to keep).
+//
+// Iron Law #22: gBleLlPara is 296B; _ebss moves +296B; fnGetClockCBs (lib COMMON, 4B) shifts.
+// Adjust _T4_PAD for BIN=51588B after migration.
+#[no_mangle]
+#[link_section = ".bss.gBleLlPara"]
+pub static mut gBleLlPara: [u32; 74] = [0u32; 74]; // 296B — lib size confirmed
 
 // Phase D+1 #34 (Q commit, 2026-05-05): gBleIPPara → Rust strong BSS with GlobalMerge isolation.
 // lib COMMON BSS: gBleIPPara = 40B (C type, [u32; 10] for 4-byte alignment).
