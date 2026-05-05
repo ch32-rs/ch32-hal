@@ -69,11 +69,9 @@ extern "C" {
     fn llAdvertiseStart();
     fn llAdvTraverseallChannel();
     // Phase D+1 T3: gPaControl + dtmFlag migrated to Rust BSS (see #[no_mangle] statics below).
-    // Phase D+1 T2 final (Plan C): gBleIPPara + gBleLlPara stay lib COMMON BSS.
-    // gBleIPPara: GlobalMerge folds it into .L_MergedGlobals when Rust BSS → BB ISR -24B → timing break.
-    // gBleLlPara: Rust BSS causes cba=0 via unknown non-ISR timing path (Task #35 forensic).
-    // Both deferred to dedicated forensic tasks (#34, #35).
-    static mut gBleIPPara: u8;
+    // Phase D+1 #34 DONE (0f918cc+Q commit): gBleIPPara migrated to Rust strong BSS
+    //   (see #[no_mangle] static below). extern "C" removed from this block.
+    // Phase D+1 #35 forensic pending: gBleLlPara stays lib COMMON BSS.
     static mut gBleLlPara: u8;
 }
 
@@ -167,6 +165,25 @@ pub static mut gPaControl: u32 = 0; // T3: 4B, init-only — PA control (CH32V20
 #[no_mangle]
 #[link_section = ".bss.zz_dtm"]
 pub static mut dtmFlag: u8 = 0;     // T3: 1B, init-only — DTM mode flag
+
+// Phase D+1 #34 (Q commit, 2026-05-05): gBleIPPara → Rust strong BSS with GlobalMerge isolation.
+// lib COMMON BSS: gBleIPPara = 40B (C type, [u32; 10] for 4-byte alignment).
+//
+// Root cause (task #34 forensic): gBleIPPara[0]=0x60 (bit5+bit6) is required so
+// the BB ISR scan-mode path fires before .L6. BSS zero-init (ip0=0x00) skips this
+// path entirely → no TX arm → cba=0. Fix = explicit ip0=0x60 init in main().
+//
+// GlobalMerge isolation (same as T3 gPaControl workaround):
+// #[link_section = ".bss.gBleIPPara"] places gBleIPPara in a named sub-section.
+// LLVM GlobalMerge only merges statics within the same section name → no fold.
+// ISR accesses gBleIPPara via absolute address (separate from MergedGlobals) → 262B ✓.
+//
+// Section coverage: linker script *(.bss .bss.*) includes .bss.gBleIPPara → BSS region.
+// T8 readiness: Rust strong symbol overrides lib COMMON; -lwchble removal no longer
+// leaves gBleIPPara unresolved. (Q decision: Andelf 2026-05-05)
+#[no_mangle]
+#[link_section = ".bss.gBleIPPara"]
+pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
 
 // Phase D+1 T3: rodata size-neutral pad.
 // T3-probe-align shifts gPaControl/dtmFlag OUT of main .bss, so BIN size may
