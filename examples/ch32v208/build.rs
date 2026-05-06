@@ -147,6 +147,22 @@ SECTIONS
     .eh_frame (INFO) : { KEEP(*(.eh_frame)) }
     .eh_frame_hdr (INFO) : { *(.eh_frame_hdr) }
 }
+
+/* Iron Law #37 (D-pre, 2026-05-06): explicit address pins for ROM-expected BSS layout.
+ * Addresses confirmed from T8/f27c394 attempt-15 (byte-identical to bisect-3g).
+ * Link fails with a clear message if any symbol drifts — prevents silent GlobalMerge
+ * regressions like the Iron Law #34 violation caught in task #43 Phase C (Cindy 2026-05-06).
+ *
+ * dtmFlag    @ 0x20000750 — 1B DTM mode flag (init-only, not in ISR hot path)
+ * gPaControl @ 0x20000754 — 4B PA control (CH32V208 integrated PA; init-only)
+ * gBleIPPara @ 0x20000758 — 40B BLE IP parameter block (ISR hot path; MUST NOT drift)
+ *
+ * If any ASSERT fires: check LLVM GlobalMerge BSS clustering for the example binary.
+ * See notes/ch32-rs/lib-dependency-removal.md §Iron Laws for remediation steps.
+ */
+ASSERT(dtmFlag    == 0x20000750, "Iron Law #37: dtmFlag must be at 0x20000750 (BSS drift)")
+ASSERT(gPaControl == 0x20000754, "Iron Law #37: gPaControl must be at 0x20000754 (BSS drift)")
+ASSERT(gBleIPPara == 0x20000758, "Iron Law #37: gBleIPPara must be at 0x20000758 (BSS drift)")
 "#,
     )
     .unwrap();
