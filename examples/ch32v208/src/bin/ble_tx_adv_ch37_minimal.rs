@@ -27,17 +27,22 @@ use {ch32_hal as hal, panic_halt as _};
 #[no_mangle] pub static mut gptrAESReg:   u32 = 0x4002_4300;
 #[no_mangle] pub static mut gptrRFENDReg: u32 = 0x4002_5000;
 
-// T2: BSS globals — sizes must match lib COMMON (ble=64B, gBleLlPara=296B, gBleIPPara=40B).
-#[no_mangle] pub static mut ble: [u32; 16] = [0u32; 16]; // 64B
+// T2: BSS globals — sizes must match ROM-hardcoded BSS contract (Iron Law #34, post-T44.E gate).
+// ROM PC-relative loads these symbols at absolute addresses during BLE init.
+// -lwchble removal does NOT lift this constraint (Cindy F1 T44.E confirmed cba=0 when misplaced).
+// ble @ 0x20001858: KEEP in link.x forces retention + exact placement even with no live Rust refs.
+#[no_mangle] #[link_section = ".bss.ble"] #[used] pub static mut ble: [u32; 16] = [0u32; 16]; // 64B
 
 // T3: scalars with GlobalMerge isolation (zz_* sub-section suffix, placed after main .bss).
 #[no_mangle] #[link_section = ".bss.zz_gpa"] pub static mut gPaControl: u32 = 0; // 4B
 #[no_mangle] #[link_section = ".bss.zz_dtm"] pub static mut dtmFlag:    u8  = 0; // 1B
 
-// #35: gBleLlPara — GlobalMerge isolation via named sub-section.
-#[no_mangle] #[link_section = ".bss.gBleLlPara"] pub static mut gBleLlPara: [u32; 74] = [0u32; 74]; // 296B
+// #35: gBleLlPara @ 0x20000508 — ROM-hardcoded BSS contract (Iron Law #34, post-T44.E gate).
+// KEEP in link.x forces retention + exact placement even with no live Rust refs in minimal path.
+#[no_mangle] #[link_section = ".bss.gBleLlPara"] #[used] pub static mut gBleLlPara: [u32; 74] = [0u32; 74]; // 296B
 
-// #34: gBleIPPara @ 0x20000758 — Iron Law #37. GlobalMerge isolation required (Iron Law #34).
+// #34: gBleIPPara @ 0x20000758 — ROM-hardcoded BSS contract (Iron Law #34, post-T44.E gate).
+// All BLE binaries sharing this link.x must place this at exactly 0x20000758.
 #[no_mangle] #[link_section = ".bss.gBleIPPara"] pub static mut gBleIPPara: [u32; 10] = [0u32; 10]; // 40B
 
 // T8: fnGetClockCBs @ 0x20001c78 — outside _ebss boundary.
