@@ -5,13 +5,18 @@
 // Derived from BB_DevInit() / BB_IRQLibHandler() in libwchble.a V1.40 (bb.o)
 
 use core::ptr::{read_volatile, write_volatile};
+use crate::ble::types::PfnGetSysClock;
 
 // ── WCH lib BSS globals used by BB_IRQLibHandler ─────────────────────────────
 extern "C" {
-    /// Indirect function pointer for BB clock callbacks.
-    /// Installed by BLE_LibInit → bleClock_RegisterCB; NULL (BSS) in our standalone
-    /// ADV TX path since BLE_LibInit is never called (Path C).
-    static mut fnGetClockCBs: u32;
+    /// Indirect tick-counter callback for BB clock dispatch.
+    ///
+    /// Type: `Option<PfnGetSysClock>` = `Option<unsafe extern "C" fn() -> u32>`.
+    /// NPO guarantees same 4-byte layout as the prior `u32` declaration.
+    ///
+    /// Installed by BLE_LibInit → bleClock_RegisterCB; `None` (NULL/0) in our
+    /// standalone ADV TX path (Path C, boundary mode — see Iron Law #35).
+    static mut fnGetClockCBs: Option<PfnGetSysClock>;
 }
 
 // gptrBBReg in WCH naming: link-layer CTRL, GO, ACCESS_ADDR, CRC_INIT, TX mode, CFG, MODE.
@@ -150,11 +155,12 @@ pub unsafe fn bb_irq_lib_handler() {
         // gBleIPPara[0] bit6: clock callback pending (not set in ADV TX path)
         let ip0 = read_volatile(ip);
         if ip0 & 0x40 != 0 {
-            let fn_addr = read_volatile(addr_of_mut!(fnGetClockCBs) as *const u32);
-            if fn_addr != 0 {
-                // Safety: fn_addr is a valid function pointer installed by lib init.
-                let cb: unsafe extern "C" fn() -> u32 = core::mem::transmute(fn_addr as usize);
-                let ret = cb();
+            // Safety: fnGetClockCBs is a valid Option<PfnGetSysClock>; None (0) is
+            // the boundary-mode default. If Some, the fn ptr was installed by lib
+            // init or ROM; calling it is safe per the PfnGetSysClock ABI contract.
+            let cb = read_volatile(core::ptr::addr_of!(fnGetClockCBs));
+            if let Some(f) = cb {
+                let ret = f();
                 write_volatile(ip.add(0x1c).cast::<u32>(), ret); // gBleIPPara+28
             }
             write_volatile(ip, read_volatile(ip) & !0x40u8); // clear bit6

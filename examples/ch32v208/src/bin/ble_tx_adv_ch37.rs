@@ -54,6 +54,7 @@
 #![no_main]
 
 use core::ptr::{addr_of, read_volatile, write_volatile};
+use hal::ble::types::PfnGetSysClock;
 use {ch32_hal as hal, panic_halt as _};
 
 // T8 (2026-05-06): extern "C" block removed. All 7 symbols were compile-time-dead:
@@ -217,13 +218,16 @@ pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
 // See wchble.h: pfnGetSysClock = uint32_t (*)(void); returns sys clock in Hz. Returning 0 = safe
 // (lib treats NULL/0-return as "use HSE default"). Confirmed by wchble.h fnGetClock doc:
 // "if NULL select HSE as the clock source".
-/// fnGetClockCBs: 4B function pointer at EXACTLY 0x20001c78 (Phase C lib COMMON address).
-/// Uses dedicated .fnGetClockCBs section — placed at `. = 0x20001c78` inside standard .bss
-/// (T11/T12 Option C), so it's startup-zeroed by qingke-rt loop (_sbss.._ebss covers it).
-/// NULL = safe: lib/ROM null-checks and uses HSE default when fn ptr = 0. ✓
+/// `fnGetClockCBs`: ROM-pinned tick-counter callback at EXACTLY 0x20001c78.
+///
+/// Typed as `Option<PfnGetSysClock>` (NPO guarantees 4B = same ABI as prior `u32`).
+/// `None` = boundary mode: qingke-rt startup zero-init stops at `_ebss = 0x20001c78`
+/// (exclusive), so this slot is NOT zeroed. ROM installs its default `0x420B000A`
+/// during BLE init when it finds a non-NULL value (random SRAM cold-boot or prior
+/// `0x420B000A` warm-boot). See Iron Law #35 and `t8-final-strip-plan.md` §12.
 #[no_mangle]
 #[link_section = ".fnGetClockCBs"]
-pub static mut fnGetClockCBs: u32 = 0;
+pub static mut fnGetClockCBs: Option<PfnGetSysClock> = None;
 // T12: FNGETCLOCKCBS_CALL_COUNT removed (minimal — no diagnostics).
 // Rationale: H5 timing hypothesis — diagnotic println! may delay BLE init past
 // a critical timing window. attempt-12 removes all probe code to test this.
