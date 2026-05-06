@@ -222,9 +222,10 @@ pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
 ///
 /// Typed as `Option<PfnGetSysClock>` (NPO guarantees 4B = same ABI as prior `u32`).
 /// `None` = boundary mode: qingke-rt startup zero-init stops at `_ebss = 0x20001c78`
-/// (exclusive), so this slot is NOT zeroed. ROM installs its default `0x420B000A`
-/// during BLE init when it finds a non-NULL value (random SRAM cold-boot or prior
-/// `0x420B000A` warm-boot). See Iron Law #35 and `t8-final-strip-plan.md` §12.
+/// (exclusive), so this slot is NOT zeroed. ROM unconditionally installs its
+/// default `0x420B000A` during BLE init; whether the slot started as random SRAM
+/// (cold-boot) or retained `0x420B000A` (warm-boot), the post-init value
+/// converges to `0x420B000A`. See Iron Law #35 and `t8-final-strip-plan.md` §12.
 #[no_mangle]
 #[link_section = ".fnGetClockCBs"]
 pub static mut fnGetClockCBs: Option<PfnGetSysClock> = None;
