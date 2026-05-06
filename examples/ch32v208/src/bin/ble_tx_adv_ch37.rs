@@ -1809,6 +1809,8 @@ fn main() -> ! {
         //   Do NOT install a non-NULL callback unless it returns the correct system clock in Hz.
         //
         // Path B-null: write NULL explicitly for warm-reset safety (.bss_compat not startup-zeroed).
+        // Reset COUNT too so diagnostic reads are fresh per run (not warm-reset stale).
+        core::ptr::write_volatile(&raw mut FNGETCLOCKCBS_CALL_COUNT, 0u32);
         core::ptr::write_volatile(&raw mut fnGetClockCBs, 0u32);
         hal::println!(
             "# PATH_B_NULL fnGetClockCBs@0x{:08x}=0x{:08x} (NULL=HSE-default)",
