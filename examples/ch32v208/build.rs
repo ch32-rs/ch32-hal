@@ -7,10 +7,12 @@ fn main() {
     // externs were already GC'd by --gc-sections; their decl block also removed.
     // Previously: cargo:rustc-link-search=.../EXAM/BLE/LIB + cargo:rustc-link-lib=static=wchble
     //
-    // bisect-3g (2026-05-06): re-link -lwchble to restore fnGetClockCBs as lib COMMON.
-    // Rust strong symbol removed → lib COMMON wins → fnGetClockCBs outside _ebss (Phase C layout).
-    println!("cargo:rustc-link-search=/Users/mono/Elec/WCH/CH32V20xEVT-2.31/EXAM/BLE/LIB");
-    println!("cargo:rustc-link-lib=static=wchble");
+    // T8 attempt-8 Path B (2026-05-06): -lwchble fully removed. fnGetClockCBs provided
+    // by Rust strong symbol in .bss_compat section at 0x20001c78 (Phase C lib COMMON address).
+    // bisect-3g (2026-05-06) previously: re-link -lwchble to restore fnGetClockCBs as lib COMMON.
+    // Path B removes this dependency; fnGetClockCBs lives in .bss_compat instead.
+    // println!("cargo:rustc-link-search=/Users/mono/Elec/WCH/CH32V20xEVT-2.31/EXAM/BLE/LIB");
+    // println!("cargo:rustc-link-lib=static=wchble");
 
     // T4.5 #36 Option C (2026-05-05): TX_BUF strategic 16B alignment.
     //
@@ -117,6 +119,28 @@ SECTIONS
         . = ALIGN(4);
         *(.sbss .sbss.* .bss .bss.*);
         PROVIDE( _ebss = .);
+    } >RAM
+
+    /* T8 attempt-8 (2026-05-06): Path B — fnGetClockCBs forced to Phase C address.
+     * 0x20001c78 = Phase C lib COMMON address (at _ebss boundary, outside startup-zero range).
+     * Root cause: the 4B BSS shift from fnGetClockCBs inside _ebss moves gBleIPPara from
+     * 0x20000758 (Phase C, ROM-expected?) to 0x2000075c (+4B) → RF failure.
+     * By forcing fnGetClockCBs to 0x20001c78 (outside _ebss), gBleIPPara stays at 0x20000758.
+     *
+     * Layout within this section (8B total):
+     *   +0x00: fnGetClockCBs   (4B, .fnGetClockCBs sub-section — placed FIRST = at 0x20001c78)
+     *   +0x04: FNGETCLOCKCBS_CALL_COUNT (4B, .bss_compat sub-section — probe counter)
+     *
+     * WARNING: NOT zeroed by startup BSS-zero (_sbss.._ebss range).
+     * Safe because: ADV-only path (gBleIPPara[0]=0x60 bit6=0) → Path C unreachable
+     * → fnGetClockCBs is never called from any linked function in the RF gate run.
+     * Active probe: Rust sets fnGetClockCBs = &rust_fnGetClockCBs_probe in main() before
+     * BLE init. If ROM/lib deref's it, FNGETCLOCKCBS_CALL_COUNT increments.
+     * Cold-reset: RAM = 0 (safe NULL default before main() sets probe fn ptr).
+     * Warm-reset: main() resets count to 0 and sets probe fn ptr before BLE init. */
+    .bss_compat 0x20001c78 (NOLOAD) : {
+        KEEP(*(.fnGetClockCBs));            /* fnGetClockCBs MUST be at 0x20001c78 */
+        KEEP(*(.bss_compat .bss_compat.*)); /* CALL_COUNT follows at 0x20001c7c */
     } >RAM
 
     .stack ORIGIN(RAM)+LENGTH(RAM) (NOLOAD) :
