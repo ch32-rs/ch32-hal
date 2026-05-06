@@ -118,27 +118,19 @@ SECTIONS
         *(.tx_buf_aligned .tx_buf_aligned.*);
         . = ALIGN(4);
         *(.sbss .sbss.* .bss .bss.*);
-        /* T11 Option C (2026-05-06): fnGetClockCBs placed at absolute 0x20001c78 INSIDE
-         * standard .bss, before PROVIDE(_ebss). This ensures qingke-rt startup BSS-zero
-         * loop (_sbss.._ebss) covers fnGetClockCBs and CALL_COUNT on every reset.
+        /* T12 minimal (2026-05-06): fnGetClockCBs at absolute 0x20001c78 inside standard .bss.
+         * T11 Option C had FNGETCLOCKCBS_CALL_COUNT too (both symbols, _ebss=0x20001c80).
+         * T12 removes CALL_COUNT — fnGetClockCBs only, _ebss=0x20001c7c.
+         * H5 test: removing all diagnostic code (probe, println, write_volatile) to check
+         * if timing delay was root cause of attempt-9/10/11 failure (cba=0 despite NULL ptr).
          *
-         * Root cause of T8 attempt-9/10 failure: .bss_compat NOLOAD section at 0x20001c78
-         * was OUTSIDE _sbss.._ebss → NOT startup-zeroed. Forensic (2026-05-06) confirmed:
-         * all BLE-critical code (BB/LLE ISR, init, BSS layout) is byte-identical to
-         * bisect-3g; the only runtime difference is this section placement.
+         * Layout (4B only):
+         *   0x20001c78: fnGetClockCBs (4B, .fnGetClockCBs section — Phase C address)
+         *   _ebss = 0x20001c7c (was 0x20001c78 in attempt-10, 0x20001c80 in attempt-11)
          *
-         * Option C layout (8B inside standard .bss):
-         *   0x20001c78: fnGetClockCBs   (4B, .fnGetClockCBs sub-section — Phase C address)
-         *   0x20001c7c: FNGETCLOCKCBS_CALL_COUNT (4B, .bss_compat)
-         *   _ebss = 0x20001c80 (was 0x20001c78; +8B, both symbols now startup-zeroed)
-         *
-         * gBleIPPara stays at 0x20000758 — no symbol before it changes. ✓
-         * ble stays at 0x20001858. ✓
-         * NOTE: `. = 0x20001c78;` works because standard .bss content fills exactly to
-         * this address (empirically confirmed via nm/objdump). */
+         * gBleIPPara @ 0x20000758 ✓, ble @ 0x20001858 ✓ */
         . = 0x20001c78;
-        KEEP(*(.fnGetClockCBs));            /* fnGetClockCBs at 0x20001c78, startup-zeroed */
-        KEEP(*(.bss_compat .bss_compat.*)); /* CALL_COUNT at 0x20001c7c, startup-zeroed */
+        KEEP(*(.fnGetClockCBs));  /* fnGetClockCBs at 0x20001c78, startup-zeroed */
         PROVIDE( _ebss = .);
     } >RAM
 

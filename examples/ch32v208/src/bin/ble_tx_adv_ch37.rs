@@ -217,29 +217,16 @@ pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
 // See wchble.h: pfnGetSysClock = uint32_t (*)(void); returns sys clock in Hz. Returning 0 = safe
 // (lib treats NULL/0-return as "use HSE default"). Confirmed by wchble.h fnGetClock doc:
 // "if NULL select HSE as the clock source".
-/// Active probe for fnGetClockCBs deref detection.
-/// Matches pfnGetSysClock signature: uint32_t (*)(void).
-/// Returns 0 — safe default (lib uses HSE when fnGetClock returns 0 / is NULL).
-/// Increments FNGETCLOCKCBS_CALL_COUNT to detect any ROM/lib deref.
-#[no_mangle]
-unsafe extern "C" fn rust_fnGetClockCBs_probe() -> u32 {
-    FNGETCLOCKCBS_CALL_COUNT = FNGETCLOCKCBS_CALL_COUNT.wrapping_add(1);
-    0
-}
-
 /// fnGetClockCBs: 4B function pointer at EXACTLY 0x20001c78 (Phase C lib COMMON address).
-/// Uses dedicated .fnGetClockCBs section — placed FIRST in .bss_compat by link.x so its
-/// address is 0x20001c78 regardless of CALL_COUNT or future .bss_compat additions.
-/// NOT zeroed by startup BSS-zero (outside _sbss.._ebss). Set in main() before BLE init.
+/// Uses dedicated .fnGetClockCBs section — placed at `. = 0x20001c78` inside standard .bss
+/// (T11/T12 Option C), so it's startup-zeroed by qingke-rt loop (_sbss.._ebss covers it).
+/// NULL = safe: lib/ROM null-checks and uses HSE default when fn ptr = 0. ✓
 #[no_mangle]
 #[link_section = ".fnGetClockCBs"]
 pub static mut fnGetClockCBs: u32 = 0;
-
-/// Probe call counter — placed in .bss_compat after fnGetClockCBs (= at 0x20001c7c).
-/// Not startup-zeroed; reset to 0 explicitly in main() before probe installation.
-#[no_mangle]
-#[link_section = ".bss_compat"]
-pub static mut FNGETCLOCKCBS_CALL_COUNT: u32 = 0;
+// T12: FNGETCLOCKCBS_CALL_COUNT removed (minimal — no diagnostics).
+// Rationale: H5 timing hypothesis — diagnotic println! may delay BLE init past
+// a critical timing window. attempt-12 removes all probe code to test this.
 
 // T8 (2026-05-06): _T3_PAD..._T7_PAD removed (29,032 B compensator total).
 // They padded BIN back to 51,588 B while -lwchble was still linked but its
@@ -1179,11 +1166,7 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
                 qingke::riscv::asm::delay(72_000);
                 hal::println!("# PATHC_ALIVE post-go {}", alive);
             }
-            // T8 attempt-8 Path B: report probe call count after each burst's alive loop.
-            hal::println!(
-                "# FNGETCLOCKCBS_CALL_COUNT={}",
-                core::ptr::read_volatile(&raw const FNGETCLOCKCBS_CALL_COUNT),
-            );
+            // T12: FNGETCLOCKCBS_CALL_COUNT print removed (minimal Path B — no probe diagnostics).
             if PATHC_MANUAL_L6 {
                 let mut waited = 0u32;
                 let mut status = 0u32;
@@ -1794,29 +1777,11 @@ fn main() -> ! {
         //   GAPRole_BroadcasterInit / TMOS_Init).  Phase B confirms which stage
         //   diverges and which registers are actually touched by dev_inits.
 
-        // T8 attempt-8 Path B-null: fnGetClockCBs = NULL (0) — matches Phase C/bisect-3g.
-        //
-        // Probe result (attempt-8 active probe, 2026-05-06):
-        //   - COUNT=1: something calls fnGetClockCBs exactly once during init (non-NULL path).
-        //   - Probe returned 0 Hz → lib used 0 as sys clock freq → BLE timing broken → cba=0.
-        //   - wchble.h doc: "if NULL select HSE as the clock source" — NULL is the safe value.
-        //   - Pattern: lib checks `if (fnGetClockCBs != NULL) clock = fnGetClockCBs(); else HSE`.
-        //   - NULL → skips call → uses HSE default → correct timing → cba≥52 (Phase C confirmed).
-        //
-        // New Iron Law #33 (T8): fnGetClockCBs must be NULL in our ADV-only path.
-        //   Non-NULL with 0-return breaks BLE timing (caller uses return as sys clock Hz).
-        //   NULL → lib uses HSE default clock (correct for CH32V208 @96MHz HSE setup).
-        //   Do NOT install a non-NULL callback unless it returns the correct system clock in Hz.
-        //
-        // Path B-null: write NULL explicitly for warm-reset safety (.bss_compat not startup-zeroed).
-        // Reset COUNT too so diagnostic reads are fresh per run (not warm-reset stale).
-        core::ptr::write_volatile(&raw mut FNGETCLOCKCBS_CALL_COUNT, 0u32);
-        core::ptr::write_volatile(&raw mut fnGetClockCBs, 0u32);
-        hal::println!(
-            "# PATH_B_NULL fnGetClockCBs@0x{:08x}=0x{:08x} (NULL=HSE-default)",
-            &raw const fnGetClockCBs as u32,
-            core::ptr::read_volatile(&raw const fnGetClockCBs),
-        );
+        // T12 (minimal Path B): fnGetClockCBs = NULL (0) via startup-zero + Rust strong symbol.
+        // No explicit write_volatile or PATH_B_NULL print — matches 3g main() timing.
+        // fnGetClockCBs is startup-zeroed (inside _sbss.._ebss = 0x20000020..0x20001c7c).
+        // NULL → lib/ROM null-check skips call → HSE default clock (correct behavior). ✓
+        // (H5 test: removing these ~3ms of diagnostic prints to check if timing is root cause)
 
         hal::ble::ble_hw_preamble(); // HSE 32 MHz + RCC BLE/CRC clocks
 
