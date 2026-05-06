@@ -15,18 +15,24 @@
 //!
 //! # Iron Law #35 — fnGetClockCBs / PfnGetSysClock protocol
 //!
-//! `PfnGetSysClock` (= `fnGetClockCBs` runtime storage) returns a **monotonically
-//! increasing tick counter** (e.g. `RTC_GetCounter`), NOT Hz. The ROM default at
-//! `0x420B000A` is an execute-only function that reads an internal BLE controller
-//! timing counter; it cannot be reverse-engineered via data reads (triple-path probe
-//! 2026-05-06: wlink SBA + CPU lw clock-off + CPU lw clock-on all return all-zero).
+//! `PfnGetSysClock` (= `fnGetClockCBs` ROM-pinned RAM slot at 0x20001c78) returns a
+//! **monotonically increasing tick counter** (e.g. `RTC_GetCounter`), NOT Hz. The ROM
+//! default at `0x420B000A` is an execute-only function that reads an internal BLE
+//! controller timing counter; it cannot be reverse-engineered via data reads
+//! (triple-path probe 2026-05-06: wlink SBA + CPU lw clock-off + CPU lw clock-on,
+//! all return all-zero — ROM body is statically read-as-zero on data path).
 //!
 //! Returning a constant Hz value (e.g. 96_000_000) as attempted in T8 attempt-14
-//! causes BLE timing failure (cba=0). The ROM treats the return as a counter delta;
-//! a constant returns delta=0, stalling the BLE scheduler.
+//! causes BLE timing failure (cba=0). **Hypothesis** (unverified — ROM body is
+//! execute-only per triple-path probe): the ROM treats the return as a counter delta
+//! sample; a constant returns delta=0, stalling the BLE scheduler. **Empirical fact**:
+//! a Rust fn returning a constant Hz value causes cba=0 (T8 attempt-14 falsified).
 //!
-//! **Recommendation**: leave `fnGetClockCBs = NULL` (boundary mode, startup-zero
-//! excluded) so ROM installs its own default. See `t8-final-strip-plan.md` §12.
+//! **Recommendation**: leave the slot uninitialized — boundary mode skips
+//! qingke-rt startup zero-init for `_ebss = 0x20001c78` (Rust strong symbol in
+//! `.fnGetClockCBs` section, T8 boundary mode). Cold boot → random SRAM → ROM
+//! auto-installs default `0x420B000A`; warm reboot → prior `0x420B000A` persists.
+//! See `t8-final-strip-plan.md` §12 (Iron Law #35).
 
 // ── TMOS primitive type aliases ───────────────────────────────────────────────
 // wchble.h L42-56
@@ -142,8 +148,15 @@ pub type PfnGetSysClock = unsafe extern "C" fn() -> u32;
 /// | 16     | (end)            |                 |      |
 #[repr(C)]
 pub struct BleClockConfig {
-    /// Tick counter callback. `None` (NULL) → ROM selects HSE as clock source
-    /// and installs its own default (`0x420B000A`) during BLE init.
+    /// Tick counter callback consumed by `TMOS_TimerInit(&conf)`. `None` (NULL)
+    /// means no caller-supplied clock function in the C-lib path.
+    ///
+    /// **Note**: this field does NOT directly write to the ROM-pinned RAM slot
+    /// at `0x20001c78` (`fnGetClockCBs`). In the original C lib, `lib startup`
+    /// copies `conf.getClockValue` into that slot; in the Rust port (T8+) that
+    /// lib startup path is removed — the slot is managed separately via boundary
+    /// mode (see Iron Law #35). Constructing `BleClockConfig` with `None` here
+    /// has no effect on `fnGetClockCBs` unless the caller explicitly propagates it.
     pub get_clock_value: Option<PfnGetSysClock>,
     /// Maximum counter value before wrap-around (typically `0xFFFF_FFFF`).
     pub clock_max_count: u32,
