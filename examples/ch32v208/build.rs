@@ -118,29 +118,28 @@ SECTIONS
         *(.tx_buf_aligned .tx_buf_aligned.*);
         . = ALIGN(4);
         *(.sbss .sbss.* .bss .bss.*);
+        /* T11 Option C (2026-05-06): fnGetClockCBs placed at absolute 0x20001c78 INSIDE
+         * standard .bss, before PROVIDE(_ebss). This ensures qingke-rt startup BSS-zero
+         * loop (_sbss.._ebss) covers fnGetClockCBs and CALL_COUNT on every reset.
+         *
+         * Root cause of T8 attempt-9/10 failure: .bss_compat NOLOAD section at 0x20001c78
+         * was OUTSIDE _sbss.._ebss → NOT startup-zeroed. Forensic (2026-05-06) confirmed:
+         * all BLE-critical code (BB/LLE ISR, init, BSS layout) is byte-identical to
+         * bisect-3g; the only runtime difference is this section placement.
+         *
+         * Option C layout (8B inside standard .bss):
+         *   0x20001c78: fnGetClockCBs   (4B, .fnGetClockCBs sub-section — Phase C address)
+         *   0x20001c7c: FNGETCLOCKCBS_CALL_COUNT (4B, .bss_compat)
+         *   _ebss = 0x20001c80 (was 0x20001c78; +8B, both symbols now startup-zeroed)
+         *
+         * gBleIPPara stays at 0x20000758 — no symbol before it changes. ✓
+         * ble stays at 0x20001858. ✓
+         * NOTE: `. = 0x20001c78;` works because standard .bss content fills exactly to
+         * this address (empirically confirmed via nm/objdump). */
+        . = 0x20001c78;
+        KEEP(*(.fnGetClockCBs));            /* fnGetClockCBs at 0x20001c78, startup-zeroed */
+        KEEP(*(.bss_compat .bss_compat.*)); /* CALL_COUNT at 0x20001c7c, startup-zeroed */
         PROVIDE( _ebss = .);
-    } >RAM
-
-    /* T8 attempt-8 (2026-05-06): Path B — fnGetClockCBs forced to Phase C address.
-     * 0x20001c78 = Phase C lib COMMON address (at _ebss boundary, outside startup-zero range).
-     * Root cause: the 4B BSS shift from fnGetClockCBs inside _ebss moves gBleIPPara from
-     * 0x20000758 (Phase C, ROM-expected?) to 0x2000075c (+4B) → RF failure.
-     * By forcing fnGetClockCBs to 0x20001c78 (outside _ebss), gBleIPPara stays at 0x20000758.
-     *
-     * Layout within this section (8B total):
-     *   +0x00: fnGetClockCBs   (4B, .fnGetClockCBs sub-section — placed FIRST = at 0x20001c78)
-     *   +0x04: FNGETCLOCKCBS_CALL_COUNT (4B, .bss_compat sub-section — probe counter)
-     *
-     * WARNING: NOT zeroed by startup BSS-zero (_sbss.._ebss range).
-     * Safe because: ADV-only path (gBleIPPara[0]=0x60 bit6=0) → Path C unreachable
-     * → fnGetClockCBs is never called from any linked function in the RF gate run.
-     * Active probe: Rust sets fnGetClockCBs = &rust_fnGetClockCBs_probe in main() before
-     * BLE init. If ROM/lib deref's it, FNGETCLOCKCBS_CALL_COUNT increments.
-     * Cold-reset: RAM = 0 (safe NULL default before main() sets probe fn ptr).
-     * Warm-reset: main() resets count to 0 and sets probe fn ptr before BLE init. */
-    .bss_compat 0x20001c78 (NOLOAD) : {
-        KEEP(*(.fnGetClockCBs));            /* fnGetClockCBs MUST be at 0x20001c78 */
-        KEEP(*(.bss_compat .bss_compat.*)); /* CALL_COUNT follows at 0x20001c7c */
     } >RAM
 
     .stack ORIGIN(RAM)+LENGTH(RAM) (NOLOAD) :
