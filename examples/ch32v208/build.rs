@@ -118,20 +118,19 @@ SECTIONS
         *(.tx_buf_aligned .tx_buf_aligned.*);
         . = ALIGN(4);
         *(.sbss .sbss.* .bss .bss.*);
-        /* T12 minimal (2026-05-06): fnGetClockCBs at absolute 0x20001c78 inside standard .bss.
-         * T11 Option C had FNGETCLOCKCBS_CALL_COUNT too (both symbols, _ebss=0x20001c80).
-         * T12 removes CALL_COUNT — fnGetClockCBs only, _ebss=0x20001c7c.
-         * H5 test: removing all diagnostic code (probe, println, write_volatile) to check
-         * if timing delay was root cause of attempt-9/10/11 failure (cba=0 despite NULL ptr).
+        /* T15 (2026-05-06): _ebss = 0x20001c78, matching bisect-3g layout EXACTLY.
+         * fnGetClockCBs placed AT _ebss boundary — BSS-zero loop (_sbss.._ebss exclusive)
+         * does NOT zero fnGetClockCBs. ROM writes 0x420B000A (valid fn ptr) to this address
+         * during BLE init; retaining that value enables correct BLE clock Hz.
+         * Rust strong symbol provides linker definition (no -lwchble needed).
          *
-         * Layout (4B only):
-         *   0x20001c78: fnGetClockCBs (4B, .fnGetClockCBs section — Phase C address)
-         *   _ebss = 0x20001c7c (was 0x20001c78 in attempt-10, 0x20001c80 in attempt-11)
+         * Layout: _ebss = 0x20001c78; fnGetClockCBs at 0x20001c78 (NOT startup-zeroed)
+         * Expected: binary byte-identical to bisect-3g (_ebss immediate 0x1c78 = 0x45 restored).
          *
          * gBleIPPara @ 0x20000758 ✓, ble @ 0x20001858 ✓ */
         . = 0x20001c78;
-        KEEP(*(.fnGetClockCBs));  /* fnGetClockCBs at 0x20001c78, startup-zeroed */
         PROVIDE( _ebss = .);
+        KEEP(*(.fnGetClockCBs));  /* fnGetClockCBs at 0x20001c78, NOT startup-zeroed (ROM manages) */
     } >RAM
 
     .stack ORIGIN(RAM)+LENGTH(RAM) (NOLOAD) :
