@@ -53,6 +53,101 @@ use {ch32_hal as hal, panic_halt as _};
 /// AdvA: 6-byte BD address, LE order. On-air displays as C2:21:43:65:87:12 (random static).
 const ADDR: [u8; 6] = [0x12, 0x87, 0x65, 0x43, 0x21, 0xC2];
 
+// ── gBleLlPara init context ──────────────────────────────────────────────────
+//
+// Fix #4 (T44.E): mirror frozen binary's ll_init_safe_prefix() + seed_ble_bd_addr().
+// gBleLlPara is 296B (74×u32) at 0x20000508. ISR (bb_irq_lib_handler) does NOT directly
+// read gBleLlPara, but some ROM/lib paths during init may. Frozen binary populates
+// ~30 fields before the TX loop; minimal binary leaves all as BSS zero.
+//
+// MINIMAL_ADV_CTX: 192B scratch buffer equivalent to RUST_ADV_CTX in frozen binary.
+// Written to gBleLlPara+0x58..0x64 (pAdvCtx pointer slots) by ll_gblellpara_init.
+// D-1a.0b forensic (2026-05-04): vtable slots 0x68..0x74 are never dereferenced in Path C;
+// 0x58..0x64 (adv_ctx) slots included for parity with frozen binary's init sequence.
+#[link_section = ".bss"]
+static mut MINIMAL_ADV_CTX: [u8; 192] = [0u8; 192];
+
+#[inline(always)]
+unsafe fn wll_u32(p: *mut u8, off: usize, v: u32) {
+    core::ptr::write_volatile(p.add(off) as *mut u32, v);
+}
+#[inline(always)]
+unsafe fn wll_u16(p: *mut u8, off: usize, v: u16) {
+    core::ptr::write_volatile(p.add(off) as *mut u16, v);
+}
+#[inline(always)]
+unsafe fn wll_u8(p: *mut u8, off: usize, v: u8) {
+    core::ptr::write_volatile(p.add(off), v);
+}
+
+/// Mirror of frozen binary's ll_init_safe_prefix() + seed_ble_bd_addr().
+///
+/// Populates gBleLlPara with the timing/frequency/vtable fields that WCH LL_Init
+/// writes. The frozen binary (ble_tx_adv_ch37.rs) calls this before the TX loop and
+/// achieves cba=72. Minimal binary leaves gBleLlPara as BSS zeros; this fixes that gap.
+///
+/// Field values derived directly from frozen binary ll_init_safe_prefix() (line 292).
+unsafe fn ll_gblellpara_init(addr: &[u8; 6]) {
+    let p = core::ptr::addr_of_mut!(gBleLlPara) as *mut u8;
+
+    // ── LL timing / frequency parameters (from WCH LL_Init safe prefix) ─────
+    wll_u32(p, 0x00, 0x0000_0004);
+    wll_u32(p, 0x14, 0x07d7_000d);
+    wll_u32(p, 0x18, 0x0d0d_b140);
+    wll_u32(p, 0x1c, 0x07d7_b140);
+    wll_u16(p, 0x20, 0xb140);
+    wll_u16(p, 0x22, 27);
+    wll_u32(p, 0x24, 0x0148_0528);
+    wll_u32(p, 0x28, 0x001b_0528);
+    wll_u32(p, 0x2c, 0x001b_0528);
+    wll_u32(p, 0x30, 0x0000_0528);
+    wll_u32(p, 0x34, 0x0015_f900);
+    wll_u32(p, 0xe0, 31);
+    wll_u32(p, 0xe4, 0);
+    wll_u32(p, 0xd0, 0x072d_79ff);
+    wll_u32(p, 0xd4, 0x0000_1b9e);
+    wll_u32(p, 0xd8, 0x072d_79ff);
+    wll_u32(p, 0xdc, 0x0000_1b9e);
+    wll_u8(p, 0xc1, 0);
+    wll_u8(p, 0xc9, 0);
+    wll_u16(p, 0x106, 0xdfff);
+    wll_u16(p, 0x108, 0xdfff);
+    wll_u8(p, 0x10a, 31);
+    wll_u8(p, 0x39, 0);
+    wll_u16(p, 0x3a, 0x0f0f);
+    wll_u32(p, 0x3c, 0x0101_0f0f);
+    wll_u32(p, 0x40, 0x0003_01cc);
+    wll_u8(p, 0x03, 0);
+    wll_u16(p, 0x7e, 460);
+    wll_u8(p, 0x3f, 1);
+    wll_u8(p, 0x89, 0);
+    wll_u16(p, 0x42, 3);
+    wll_u32(p, 0x44, 0);
+    wll_u32(p, 0x48, 0x0607_1440);
+
+    // ── pAdvCtx pointer slots (gBleLlPara+0x58..0x64) ────────────────────────
+    // Frozen binary writes RUST_ADV_CTX address here. Slots 0x68..0x74 (llAdvertise*
+    // dispatch) omitted — D-1a.0b proved they are never dereferenced in Path C.
+    let adv_ctx = core::ptr::addr_of_mut!(MINIMAL_ADV_CTX) as u32;
+    wll_u32(p, 0x58, adv_ctx);
+    wll_u32(p, 0x5c, adv_ctx);
+    wll_u32(p, 0x60, adv_ctx);
+    wll_u32(p, 0x64, adv_ctx);
+
+    // ── Other config/vtable slots ─────────────────────────────────────────────
+    wll_u32(p, 0x7c, 0x01cc_0001);
+    wll_u32(p, 0x88, 0x0000_0700);
+    wll_u32(p, 0xc0, 0x0000_0300);
+    wll_u32(p, 0xc8, 0x0000_0300);
+
+    // ── BD address → gBleLlPara+0xE8 (seed_ble_bd_addr equivalent) ──────────
+    // Frozen binary: LL_AddrInit copies ble[0x18..0x1d] → gBleLlPara+0xE8 via tmos_memcpy.
+    // In minimal path (no LL_AddrInit): write directly.
+    for (i, b) in addr.iter().enumerate() {
+        core::ptr::write_volatile(p.add(0xe8 + i), *b);
+    }
+}
+
 // ── ISR handlers ─────────────────────────────────────────────────────────────
 /// BB IRQ (IRQn 63): drives .L6 TX-advance path (gBleIPPara[4] state machine).
 /// Without this handler the PHY stays at warmup (0x33) and no packet is emitted.
@@ -106,6 +201,11 @@ fn main() -> ! {
         // H19: RFEND+0x04 bits[12:8] = TX-path analog enable (EVT post-init confirmed).
         let r = core::ptr::read_volatile(0x4002_5004 as *const u32);
         core::ptr::write_volatile(0x4002_5004 as *mut u32, r | 0x0000_1100);
+
+        // Fix #4 (T44.E): populate gBleLlPara and gBleLlPara+0xE8 BD address.
+        // Frozen binary calls ll_init_safe_prefix() + seed_ble_bd_addr() before TX loop.
+        // Minimal binary was leaving gBleLlPara as BSS zeros — fixed here.
+        ll_gblellpara_init(&ADDR);
 
         // gBleIPPara[0] = 0x60 (bit5+bit6): arms scan-mode ISR path (Iron Law #27).
         // Without this, BB ISR bit5 path never fires → .L6 never triggers → cba=0.

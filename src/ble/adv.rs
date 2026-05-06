@@ -137,12 +137,16 @@ pub fn ad_complete_name<'a>(buf: &'a mut [u8], name: &[u8]) -> usize {
 /// irq_post_go: BB+0x08 bits[15:0] immediately after GO; non-zero = TX IRQ fired
 ///   (bits 29+25 = 0x22000000 are always-set hardware constants, masked out here).
 unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
-    // 1. TX arm: LLE+0x2C bits[1:0] = 01.
-    //    Also update LLE+0x2C bits[30:25] = ch_idx (channel field used by HW for whitening/CRC LUT).
-    //    bb_dev_init leaves this at 9; without this write all ADV channels would use channel-9
-    //    whitening instead of the actual channel (37/38/39), causing CRC failure on receivers.
+    // 1. TX arm: LLE+0x2C bit0 = 1 (TX mode arm).
+    //    LLE+0x2C bits[30:25] = BB_RF_FLAG_1M (0x09) — PHY mode configuration written by
+    //    bb_dev_init. These bits are rf_flag (PHY mode = 1Mbps), NOT the BLE channel for
+    //    whitening. Writing ch_idx (37/38/39) here CORRUPTS the PHY mode bits → TX fails.
+    //    Frozen binary hardcodes `9u32 << 25` (= BB_RF_FLAG_1M, confirmed from adv_tx_burst_ch37
+    //    "ble[0x14] state (EVT=9)" which equals rf_flag). (T44.E root-cause fix, fix #5).
+    //    Whitening channel is set separately in step 8 via LLE+0x00 bits[5:0].
+    const BB_RF_FLAG_1M_SHIFT: u32 = 9u32 << 25; // rf_flag=0x09 in bits[30:25]
     let cfg = lle_read(0x2C);
-    let cfg = (cfg & 0x81FF_FFFF) | ((ch_idx as u32 & 0x3F) << 25) | 0x1;
+    let cfg = (cfg & 0x81FF_FFFF) | BB_RF_FLAG_1M_SHIFT | 0x1;
     lle_write(0x2C, cfg);
 
     // 2. Event timeout counter: BB+0x64 = 160.
