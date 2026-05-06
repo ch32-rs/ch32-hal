@@ -200,6 +200,20 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     // Lib DTM (`ll_hw_api_tx_direct_test`) clears this bit. Mode selector for HW TX path.
     bb_write(0x04, bb_read(0x04) | 0x1);
 
+    // 12.5. PHY rate select + lock: BLE_SetPHYTxMode step1 + step4 (d.asm L91784, T44.E fix #3).
+    //
+    // Step 1: LLE+0x00 bits[13:12] = 00 → select 1 Mbps PHY rate.
+    //   Without this, hardware may warmup in wrong PHY mode → TX sends at wrong rate → nRF
+    //   cannot decode. ble_ip_core_init may leave bits[13:12] non-zero (2M or Coded PHY default).
+    //
+    // Step 4: BB+0x08 = 0x2000 → PHY rate lock (W1C-clears bit13 timer IRQ).
+    //   Critical step (Lucy d.asm L91836 comment): "without it nRF will not decode the packet".
+    //   ISR .L6 repeats this write post-GO, but the pre-GO rate select ensures hardware warmup
+    //   starts in the correct mode. ADV_NONCONN_IND burst cba=0 without this despite fix #1+#2.
+    let ctrl = lle_read(0x00);
+    lle_write(0x00, ctrl & !0x3000); // bits[13:12]=0 → 1Mbps PHY rate
+    bb_write(0x08, 0x2000);          // PHY rate lock (BLE_SetPHYTxMode step4)
+
     // 13. ADV GO: LLE+0x00 |= 0x800000 (bit 23 — NOT bit 11).
     // Confirmed from lib `ll_advertise_tx` L39276-39280 (`lui a3,0x800` → a3=0x00800000).
     // Lib DTM does NOT write bit 23; both bit 11 and bit 23 were wrong in old code.
