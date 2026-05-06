@@ -186,9 +186,10 @@ extern "C" {
     static mut gptrBBReg:    u32; // set to 0x40024100 (WCH "BB"  = our lle_* range)
     static mut gptrRFENDReg: u32; // set to 0x40025000
     static mut gptrAESReg:   u32; // set to 0x40024300
-    static mut gPaControl:   u32;
-    static mut dtmFlag:      u8;
+    static mut gPaControl:   u32; // ROM-expected 0x20000754; Iron Law #37 (ASSERT-pinned, build.rs)
+    static mut dtmFlag:      u8;  // ROM-expected 0x20000750; Iron Law #37 (ASSERT-pinned, build.rs)
     static mut gBleIPPara:   u8;  // 40-byte array; access as *mut u8 + byte offset
+                                  // ROM-expected 0x20000758; Iron Law #37 (ASSERT-pinned, build.rs)
 }
 
 /// Pure-Rust replacement for WCH `BLE_IPCoreInit`.

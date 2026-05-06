@@ -158,9 +158,11 @@ pub static mut ble: [u32; 16] = [0; 16]; // 64B — bisect-3f: no link_section (
 #[no_mangle]
 #[link_section = ".bss.zz_gpa"]
 pub static mut gPaControl: u32 = 0; // T3: 4B, init-only — PA control (CH32V208 has integrated PA)
+                                    // ROM-expected 0x20000754; Iron Law #37 (ASSERT-pinned, build.rs)
 #[no_mangle]
 #[link_section = ".bss.zz_dtm"]
 pub static mut dtmFlag: u8 = 0;     // T3: 1B, init-only — DTM mode flag
+                                    // ROM-expected 0x20000750; Iron Law #37 (ASSERT-pinned, build.rs)
 
 // Phase D+1 #35 (2026-05-06): gBleLlPara → Rust strong BSS with GlobalMerge isolation.
 // lib COMMON BSS: gBleLlPara = 296B = 74 u32 words. Phase A forensic confirmed:
@@ -199,6 +201,7 @@ pub static mut gBleLlPara: [u32; 74] = [0u32; 74]; // 296B — lib size confirme
 #[no_mangle]
 #[link_section = ".bss.gBleIPPara"]
 pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
+                                                 // ROM-expected 0x20000758; Iron Law #37 (ASSERT-pinned, build.rs)
 
 // T8 attempt-8 (2026-05-06): Path B — fnGetClockCBs in custom .bss_compat section at 0x20001c78.
 // -lwchble fully removed. fnGetClockCBs forced to Phase C lib COMMON address via link.x .bss_compat.

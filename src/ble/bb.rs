@@ -13,7 +13,8 @@ extern "C" {
     ///
     /// Declared as `u32` (not `Option<PfnGetSysClock>`) to preserve LLVM GlobalMerge
     /// clustering — changing the LLVM type shifts gBleIPPara off its ROM-expected
-    /// address 0x20000758 (Iron Law #34). Read as u32, transmute before calling.
+    /// address 0x20000758 (Iron Law #34; Iron Law #37 ASSERT-pins this address).
+    /// Read as u32, transmute before calling.
     ///
     /// Installed by BLE_LibInit → bleClock_RegisterCB; `0` (NULL) in our standalone
     /// ADV TX path since BLE_LibInit is never called (Path C / boundary mode).
