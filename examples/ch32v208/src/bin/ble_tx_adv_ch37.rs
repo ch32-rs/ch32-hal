@@ -1794,21 +1794,26 @@ fn main() -> ! {
         //   GAPRole_BroadcasterInit / TMOS_Init).  Phase B confirms which stage
         //   diverges and which registers are actually touched by dev_inits.
 
-        // T8 attempt-8 Path B: install fnGetClockCBs probe fn ptr before any BLE init.
-        // fnGetClockCBs sits at 0x20001c78 (.fnGetClockCBs sub-section, NOLOAD).
-        // FNGETCLOCKCBS_CALL_COUNT sits at 0x20001c7c (.bss_compat, NOLOAD).
-        // Both are NOT startup-zeroed — reset count and install ptr explicitly here
-        // so both cold-reset and warm-reset produce a clean probe run.
-        core::ptr::write_volatile(&raw mut FNGETCLOCKCBS_CALL_COUNT, 0u32);
-        core::ptr::write_volatile(
-            &raw mut fnGetClockCBs,
-            rust_fnGetClockCBs_probe as u32,
-        );
+        // T8 attempt-8 Path B-null: fnGetClockCBs = NULL (0) — matches Phase C/bisect-3g.
+        //
+        // Probe result (attempt-8 active probe, 2026-05-06):
+        //   - COUNT=1: something calls fnGetClockCBs exactly once during init (non-NULL path).
+        //   - Probe returned 0 Hz → lib used 0 as sys clock freq → BLE timing broken → cba=0.
+        //   - wchble.h doc: "if NULL select HSE as the clock source" — NULL is the safe value.
+        //   - Pattern: lib checks `if (fnGetClockCBs != NULL) clock = fnGetClockCBs(); else HSE`.
+        //   - NULL → skips call → uses HSE default → correct timing → cba≥52 (Phase C confirmed).
+        //
+        // New Iron Law #33 (T8): fnGetClockCBs must be NULL in our ADV-only path.
+        //   Non-NULL with 0-return breaks BLE timing (caller uses return as sys clock Hz).
+        //   NULL → lib uses HSE default clock (correct for CH32V208 @96MHz HSE setup).
+        //   Do NOT install a non-NULL callback unless it returns the correct system clock in Hz.
+        //
+        // Path B-null: write NULL explicitly for warm-reset safety (.bss_compat not startup-zeroed).
+        core::ptr::write_volatile(&raw mut fnGetClockCBs, 0u32);
         hal::println!(
-            "# PATH_B fnGetClockCBs@0x{:08x}=0x{:08x} probe_fn=0x{:08x}",
+            "# PATH_B_NULL fnGetClockCBs@0x{:08x}=0x{:08x} (NULL=HSE-default)",
             &raw const fnGetClockCBs as u32,
             core::ptr::read_volatile(&raw const fnGetClockCBs),
-            rust_fnGetClockCBs_probe as u32,
         );
 
         hal::ble::ble_hw_preamble(); // HSE 32 MHz + RCC BLE/CRC clocks
