@@ -2,13 +2,10 @@ fn main() {
     // println!("cargo:rustc-link-arg-bins=--nmagic");
     // println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
 
-    // Path C: link the WCH BLE library for BLE_IPCoreInit and the BB IRQ sub-handler.
-    println!("cargo:rustc-link-search=/Users/mono/Elec/WCH/CH32V20xEVT-2.31/EXAM/BLE/LIB");
-    println!("cargo:rustc-link-lib=static=wchble");
-    // Phase D+1 T4 (2026-05-04): --undefined=BB_IRQLibHandler removed (was redundant).
-    // ip.o (BLE_RegInit) → BB_DevInit → bb.o keeps BB_IRQLibHandler alive regardless.
-    // The flag was added before the ip.o→bb.o dependency was understood. Removing it
-    // has zero BIN impact; retaining it would be misleading about what keeps bb.o live.
+    // T8 (2026-05-06): -lwchble removed. All lib COMMON BSS migrated to Rust strong
+    // symbols (#34 gBleIPPara, #35 gBleLlPara, T8 fnGetClockCBs). All anchored
+    // externs were already GC'd by --gc-sections; their decl block also removed.
+    // Previously: cargo:rustc-link-search=.../EXAM/BLE/LIB + cargo:rustc-link-lib=static=wchble
 
     // T4.5 #36 Option C (2026-05-05): TX_BUF strategic 16B alignment.
     //

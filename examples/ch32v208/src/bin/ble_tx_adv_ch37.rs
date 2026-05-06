@@ -56,24 +56,13 @@
 use core::ptr::{addr_of, read_volatile, write_volatile};
 use {ch32_hal as hal, panic_halt as _};
 
-extern "C" {
-    fn BLE_IPCoreInit();
-    // Task #20 forensic (2026-05-04):
-    // IRQ64 stays masked in Path C (`PATHC_ENABLE_LLE_IRQ=false`). The lib body
-    // is retained explicitly by `_KEEP_LLE_IRQ_HANDLER` below; removing both the
-    // call and symbol retention GC'd ~840B and failed the 60s BLE gate (cba=0).
-    fn LLE_IRQSubHandler();
-    fn BB_IRQLibHandler();
-    fn llAdvertiseCreateCore();
-    fn llAdvertiseSet();
-    fn llAdvertiseStart();
-    fn llAdvTraverseallChannel();
-    // Phase D+1 T3: gPaControl + dtmFlag migrated to Rust BSS (see #[no_mangle] statics below).
-    // Phase D+1 #34 DONE (0f918cc+Q commit): gBleIPPara migrated to Rust strong BSS
-    //   (see #[no_mangle] static below). extern "C" removed from this block.
-    // Phase D+1 #35 DONE: gBleLlPara migrated to Rust strong BSS (see #[no_mangle] below).
-    //   extern "C" declaration removed.
-}
+// T8 (2026-05-06): extern "C" block removed. All 7 symbols were compile-time-dead:
+//   BLE_IPCoreInit — dead (PATHC_REPLACE_TIER0=true + PATHC_USE_RUST_IP_CORE_INIT=true → else-branch DCE'd)
+//   LLE_IRQSubHandler — dead (IRQ64 NVIC-masked; anchor removed T6; GC'd by --gc-sections)
+//   BB_IRQLibHandler — dead (PATHC_USE_RUST_BB_IRQ=true → else-branch DCE'd; anchor removed T4)
+//   llAdvertise* (4 symbols) — dead (anchors removed T7; GC'd cascade -26,904B)
+// With -lwchble removed (T8), referencing these undefined symbols would be a link error.
+// Removal is safe: no live call site in Path C ADV TX. Verified by grep prior to deletion.
 
 // Phase D+1 T4 (2026-05-04): BB_IRQLibHandler anchor REMOVED.
 // BB_IRQLibHandler lib copy (276B text) GC'd by --gc-sections; Rust bb_irq_lib_handler()
@@ -139,7 +128,13 @@ pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration blo
 // gBleIPPara/gBleLlPara deferred to Tasks #34/#35 due to timing break mechanisms:
 //   - gBleIPPara: LLVM GlobalMerge folds into .L_MergedGlobals → BB ISR -24B (-6-8 cycles)
 //   - gBleLlPara: ISR length unchanged (262B) but cba=0 — mechanism unknown (Task #35)
+// T8 retroactive fix (2026-05-06): add link_section per the post-#35 Iron Law.
+// `ble` was migrated in T2 before the GlobalMerge mechanism was understood.
+// Without isolation, future BSS additions could fold `ble` into a MergedGlobals
+// aggregate and shift TX_BUF / ISR cycle count. Defensive consistency only —
+// no observed regression today; prevents latent breakage in future tasks.
 #[no_mangle]
+#[link_section = ".bss.ble"]
 pub static mut ble: [u32; 16] = [0; 16]; // 64B (lib size confirmed), u32 for 4-byte alignment — T2 final Plan C
 
 // Phase D+1 T3: simple BSS scalar globals — gPaControl (4B) + dtmFlag (1B).
@@ -204,60 +199,30 @@ pub static mut gBleLlPara: [u32; 74] = [0u32; 74]; // 296B — lib size confirme
 #[link_section = ".bss.gBleIPPara"]
 pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
 
-// Phase D+1 T3: rodata size-neutral pad.
-// T3-probe-align shifts gPaControl/dtmFlag OUT of main .bss, so BIN size may
-// change vs. T3 R1. Pad adjusted to maintain BIN = 51588B (Iron Law #22).
-// T3 R1 (pre-align): _T3_PAD=[u8;4], BIN=51588B.
-// T3-probe-align: re-probe required; start at [u8;4] and adjust ±4 per delta.
-#[used]
-#[link_section = ".rodata"]
-static _T3_PAD: [u8; 4] = [0u8; 4]; // T3-probe-align: adjust if BIN ≠ 51588B
+// Phase D+1 T8 (2026-05-06): fnGetClockCBs → typed Rust strong BSS, last lib COMMON holdout.
+// C-side: u32 fn-ptr `(*fnGetClockCBs)() -> u32` clock-tick callback. Vega Phase A:
+// no read site on Path C ADV TX (gBleIPPara[0] bit6 never set → zero call).
+// Stale-RAM hazard: NONE — `None` is byte-equivalent to lib `u32 = 0`.
+// GlobalMerge isolation: #[link_section=".bss.fnGetClockCBs"] mandatory per
+// retroactive Iron Law (any BSS migration MUST carry a unique link_section).
+// Future scan/connect paths: replace with `Some(my_clock_fn)` returning tick-now.
+// Andelf 2026-05-06: picked Option A (typed None, byte-equivalent to u32=0).
+#[no_mangle]
+#[link_section = ".bss.fnGetClockCBs"]
+pub static mut fnGetClockCBs: Option<unsafe extern "C" fn() -> u32> = None; // 4B — byte-equivalent to lib `u32 = 0`
 
-// Phase D+1 T4: size-neutral pad compensating BB_IRQLibHandler GC.
-// bb.o uses -ffunction-sections: BB_IRQLibHandler is in its own section.
-// That section was kept ONLY by --undefined=BB_IRQLibHandler (build.rs) and
-// this anchor. With both removed, BB_IRQLibHandler (276B text) is GC'd.
-// Net T4 BIN delta: -276B text (BB_IRQLibHandler) - 4B rodata (anchor) = -280B.
-// T4.5 (#36 Option C): reduced from 280 → 216 to absorb +64B code cost of
-// moving TX_BUF out of GlobalMerge into its own .tx_buf_aligned section.
-// #34 v3 (2026-05-05): reduced 216→208 for +8B ISR (scan-mode pre-arm writes).
-// v7-probe (2026-05-05): 216→132 — SDI instrumentation removed from .L6 and main
-//   loop (SDI_DUMP/SDI_ALIVE/ip0 println, ISR pre/post captures). BIN=51588B ✓.
-// v7-probe.3 (2026-05-05): 612→288 — unconditional ok=0/ok=1/ok=2 markers (+324B text).
-// v7-probe.3-fix (2026-05-05): 288→316 — remove 2nd PATHC_LIB_IRQ block (-28B text).
-// production (2026-05-05): 316→688 — remove 3 bisect ok=0/1/2 markers (-372B text+rodata).
-//   BIN=51588B ✓.
-// v7-probe.3-fix2 (2026-05-05): 688→752 — add W1C+two 72k delay fixes (+64B text code growth).
-//   BIN=51588B ✓.
-// Note (2026-05-06): fnGetClockCBs Rust strong BSS attempted (#34 gate) → cba=0 regression
-//   (Iron Law #22 layout shift). Reverted. fnGetClockCBs stays lib COMMON BSS until T8.
-#[used]
-#[link_section = ".rodata"]
-static _T4_PAD: [u8; 752] = [0u8; 752];
-
-// Phase D+1 T5: size-neutral pad compensating BLE_IPCoreInit cascade GC.
-// BLE_IPCoreInit (118B) + RFEND_DevInit (372B) + RFEND_Reset (52B) + anchor (4B) = -544B.
-// Empirically measured from T4 baseline (probe-build-nm-restore).
-#[used]
-#[link_section = ".rodata"]
-static _T5_PAD: [u8; 544] = [0u8; 544];
-
-// Phase D+1 T6: size-neutral pad compensating LLE_IRQSubHandler cascade GC.
-// LLE_IRQSubHandler (504B) + lle_irq_process (318B) + anchor (4B) = -826B symbol sum.
-// Actual BIN delta from T5 state: -828B (4B linker alignment vs T4-probe -824B estimate).
-// All cumulative pads (_T3+_T4+_T5+_T6) will be consolidated at T7.
-#[used]
-#[link_section = ".rodata"]
-static _T6_PAD: [u8; 828] = [0u8; 828];
-
-// Phase D+1 T7: size-neutral pad compensating 4x llAdvertise* cascade GC.
-// Empirical probe from T6 state: -26,904B (anchors + 4 sentinel writes removed).
-// Breakdown: ll_advertise.o functions (~17 direct) + 83 internal lib functions
-// reachable through multi-path deps (T5/T6 removal exposed additional cascade).
-// All cumulative pads (_T3+_T4+_T5+_T6+_T7) removed at T8 when -lwchble ships.
-#[used]
-#[link_section = ".rodata"]
-static _T7_PAD: [u8; 26904] = [0u8; 26904];
+// T8 (2026-05-06): _T3_PAD..._T7_PAD removed (29,032 B compensator total).
+// They padded BIN back to 51,588 B while -lwchble was still linked but its
+// bodies were GC-removed. With -lwchble gone, the deficit and the pad both
+// disappear; BIN drops to T8 target. Andelf 2026-05-06: target = clean
+// baseline, no pad residue. If alignment regresses (TX_BUF mod16 ≠ 0),
+// fall back to plan §6 bisect-3a (re-add _T3_PAD ±4 B as the minimal probe).
+//   _T3_PAD:  4 B (GlobalMerge align probe, T3 Option D residue)
+//   _T4_PAD: 752 B (BB_IRQLibHandler GC compensator, final v7-probe.3-fix2 value)
+//   _T5_PAD: 544 B (BLE_IPCoreInit cascade compensator)
+//   _T6_PAD: 828 B (LLE_IRQSubHandler cascade compensator)
+//   _T7_PAD: 26904 B (llAdvertise* full cascade compensator)
+//   Total:   29,032 B
 
 // ── Register bases ────────────────────────────────────────────────────────────
 
@@ -681,9 +646,8 @@ fn BB() {
                     hal::ble::bb_irq_lib_handler();
                 }
             }
-        } else {
-            BB_IRQLibHandler();
         }
+        // T8: BB_IRQLibHandler() FFI else-branch removed (PATHC_USE_RUST_BB_IRQ=true always; -lwchble gone).
         // Bug A removed: post-handler W1C of lle38 bits[4,6,7] deleted.
         // WCH BB_IRQLibHandler does NOT have this extra W1C. It was a historical
         // debug artifact that raced against .L4/.L8: if bit4/7 arrived after the
@@ -1809,12 +1773,8 @@ fn main() -> ! {
                 hal::println!("PathC PlanC: before ble_ip_core_init()");
                 hal::ble::ble_ip_core_init();
                 hal::println!("PathC PlanC: after ble_ip_core_init()");
-            } else {
-                // Task #23 bisect: FFI path with Rust replacement retained in flash.
-                hal::println!("PathC bisect: before BLE_IPCoreInit() FFI");
-                BLE_IPCoreInit();
-                hal::println!("PathC bisect: after BLE_IPCoreInit() FFI");
             }
+            // T8: BLE_IPCoreInit() FFI else-branch removed (PATHC_USE_RUST_IP_CORE_INIT=true always; -lwchble gone).
             dump_current_ble_symbols("after_ip_core_init");
             dump_ip_core_mmio("after_ip_core_init");
             hal::println!("PathC PlanD: before ll_init_safe_prefix()");
@@ -1826,46 +1786,9 @@ fn main() -> ! {
             hal::println!("PathC PlanD: seeded ble[0x18..0x1d] BD addr");
             hal::println!("PathC PlanB2: LL helper calls skipped");
             hal::println!("PathC PlanD: BLE IP-core init + LL_Init safe prefix replaced Tier-0 init");
-        } else {
-        hal::ble::lle_dev_init();
-
-        // B experiment: override BB+0x74 with LLE_DMA_BUF_B address (0x20008234).
-        // lle_dev_init() just wrote LLE_DMA_BUF (~0x200000D0) → readback 0x34.
-        // This write replaces it: (0x20008234 >> 2) & 0xFF = 0x8D → matches EVT.
-        if B_EXPERIMENT {
-            let b_addr = core::ptr::addr_of!(LLE_DMA_BUF_B) as u32;
-            bb_write(0x74, b_addr);
-            let rb74 = bb_read(0x74);
-            hal::println!("B_EXPERIMENT: LLE_DMA_BUF_B addr={:#010x} BB+0x74_readback={:#010x} (expect 0x8d)",
-                b_addr, rb74);
         }
-
-        // S1: after LLE init (WCH lle_dev_init / LLE_DevInit).
-        hal::ble::tracer::dump_regs("S1 BB   ", BB_BASE as u32,    0x00, 0x80);
-        hal::ble::tracer::dump_regs("S1 LLE  ", LLE_BASE as u32,   0x00, 0x80);
-        hal::ble::tracer::dump_regs("S1 RFEND", RFEND_BASE as u32, 0x00, 0xD0);
-
-        hal::ble::rfend_dev_init();
-        // S2: after RFEND init (WCH rfend_dev_init / RFEND_DevInit).
-        hal::ble::tracer::dump_regs("S2 BB   ", BB_BASE as u32,    0x00, 0x80);
-        hal::ble::tracer::dump_regs("S2 LLE  ", LLE_BASE as u32,   0x00, 0x80);
-        hal::ble::tracer::dump_regs("S2 RFEND", RFEND_BASE as u32, 0x00, 0xD0);
-
-        hal::ble::bb_dev_init(hal::ble::BB_RF_FLAG_1M);
-        // S3: after BB init — Lucy confirms BB_DevInit sets BB+0x2C=0x80010EC8|(rf_flag<<25)
-        // and BB+0x34=0x1D0(464).  EVT differences at these offsets come from downstream
-        // writers (not visible in S3).  Compare S3 with EVT's post-BLE_IPCoreInit dump.
-        hal::ble::tracer::dump_regs("S3 BB   ", BB_BASE as u32,    0x00, 0x80);
-        hal::ble::tracer::dump_regs("S3 LLE  ", LLE_BASE as u32,   0x00, 0x80);
-        hal::ble::tracer::dump_regs("S3 RFEND", RFEND_BASE as u32, 0x00, 0xD0);
-
-        hal::ble::ble_reg_init(false); // RF calibration — always last (Phase B RX path, keep clears)
-
-        // Path C probe: let WCH's IP-core init populate hidden BLE hardware/RAM latches.
-        // ip.o disassembly shows this calls only LLE_DevInit/RFEND_DevInit/BB_DevInit/BLE_RegInit.
-        BLE_IPCoreInit();
-        hal::println!("PathC: BLE_IPCoreInit() called");
-        }
+        // T8: PATHC_REPLACE_TIER0=true always; else-branch (lle_dev_init/rfend_dev_init/BLE_IPCoreInit FFI)
+        // removed. -lwchble gone, BLE_IPCoreInit no longer linkable.
 
         // H19 probe: EVT BLE_LibInit/GAPRole runtime has RFEND+0x04 bits 12 and 8 set.
         // Test whether these analog TX-path enable bits are the missing broadcast gate.
