@@ -130,12 +130,13 @@ pub static mut gptrRFENDReg: u32 = 0x4002_5000; // RF/PLL analog calibration blo
 //   - gBleLlPara: ISR length unchanged (262B) but cba=0 — mechanism unknown (Task #35)
 // T8 retroactive fix (2026-05-06): add link_section per the post-#35 Iron Law.
 // `ble` was migrated in T2 before the GlobalMerge mechanism was understood.
-// Without isolation, future BSS additions could fold `ble` into a MergedGlobals
-// aggregate and shift TX_BUF / ISR cycle count. Defensive consistency only —
-// no observed regression today; prevents latent breakage in future tasks.
+// bisect-3f (2026-05-06): REMOVE #[link_section=".bss.ble"] to test hypothesis A.
+// In Phase C (cba=87 PASS), ble had no link_section and landed at 0x20001858 (late BSS).
+// With link_section, ble lands at 0x20000508 (early BSS), shifting gBleIPPara from
+// 0x20000758 (Phase C) → 0x2000079c (T8). Test: does removing link_section restore
+// ble to late BSS and return gBleIPPara closer to Phase C address?
 #[no_mangle]
-#[link_section = ".bss.ble"]
-pub static mut ble: [u32; 16] = [0; 16]; // 64B (lib size confirmed), u32 for 4-byte alignment — T2 final Plan C
+pub static mut ble: [u32; 16] = [0; 16]; // 64B — bisect-3f: no link_section (Phase C behavior)
 
 // Phase D+1 T3: simple BSS scalar globals — gPaControl (4B) + dtmFlag (1B).
 // lib COMMON BSS: gPaControl=4B (type=C), dtmFlag=1B (type=C). Access: init-only, no ISR/hot-path.
