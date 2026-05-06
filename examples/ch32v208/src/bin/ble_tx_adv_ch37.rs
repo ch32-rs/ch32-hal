@@ -214,9 +214,10 @@ pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
 // If FNGETCLOCKCBS_CALL_COUNT > 0 after gate run → ROM has a separate hardcoded path that
 // calls fnGetClockCBs. If count = 0 → RF gate works purely through BSS layout (gBleIPPara addr).
 //
-// See wchble.h: pfnGetSysClock = uint32_t (*)(void); returns sys clock in Hz. Returning 0 = safe
-// (lib treats NULL/0-return as "use HSE default"). Confirmed by wchble.h fnGetClock doc:
-// "if NULL select HSE as the clock source".
+// Iron Law #35 (Lucy 2026-05-04 forensic): PfnGetSysClock returns RTC tick counter
+// (LSI/2 ≈ 16 KHz, 32-bit wrap), NOT Hz. The wchble.h "if NULL select HSE as the
+// clock source" SDK comment refers to a different fnGetClock() entry, not pfnGetSysClock;
+// see HAL/RTC.c. The `///` doc below is the canonical reference for this slot.
 /// `fnGetClockCBs`: ROM-pinned tick-counter callback at EXACTLY 0x20001c78.
 ///
 /// ABI type: `PfnGetSysClock = unsafe extern "C" fn() -> u32` (tick counter, NOT Hz —
@@ -1784,11 +1785,11 @@ fn main() -> ! {
         //   GAPRole_BroadcasterInit / TMOS_Init).  Phase B confirms which stage
         //   diverges and which registers are actually touched by dev_inits.
 
-        // T12 (minimal Path B): fnGetClockCBs = NULL (0) via startup-zero + Rust strong symbol.
-        // No explicit write_volatile or PATH_B_NULL print — matches 3g main() timing.
-        // fnGetClockCBs is startup-zeroed (inside _sbss.._ebss = 0x20000020..0x20001c7c).
-        // NULL → lib/ROM null-check skips call → HSE default clock (correct behavior). ✓
-        // (H5 test: removing these ~3ms of diagnostic prints to check if timing is root cause)
+        // attempt-15 boundary mode (Iron Law #36): fnGetClockCBs slot at 0x20001c78 lives
+        // OUTSIDE _sbss.._ebss (link.x: `_ebss = address_of(fnGetClockCBs) = 0x20001c78`,
+        // exclusive — the BSS-zero loop stops before this slot). qingke-rt does NOT touch
+        // it; ROM unconditionally installs `0x420B000A` during BLE init, post-init value
+        // converges regardless of cold/warm boot (see `///` doc on fnGetClockCBs above).
 
         hal::ble::ble_hw_preamble(); // HSE 32 MHz + RCC BLE/CRC clocks
 
