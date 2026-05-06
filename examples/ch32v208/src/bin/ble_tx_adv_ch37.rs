@@ -199,17 +199,16 @@ pub static mut gBleLlPara: [u32; 74] = [0u32; 74]; // 296B — lib size confirme
 #[link_section = ".bss.gBleIPPara"]
 pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
 
-// Phase D+1 T8 (2026-05-06): fnGetClockCBs → typed Rust strong BSS, last lib COMMON holdout.
+// Phase D+1 T8 (2026-05-06): fnGetClockCBs → Rust strong BSS, last lib COMMON holdout.
 // C-side: u32 fn-ptr `(*fnGetClockCBs)() -> u32` clock-tick callback. Vega Phase A:
 // no read site on Path C ADV TX (gBleIPPara[0] bit6 never set → zero call).
-// Stale-RAM hazard: NONE — `None` is byte-equivalent to lib `u32 = 0`.
 // GlobalMerge isolation: #[link_section=".bss.fnGetClockCBs"] mandatory per
 // retroactive Iron Law (any BSS migration MUST carry a unique link_section).
-// Future scan/connect paths: replace with `Some(my_clock_fn)` returning tick-now.
-// Andelf 2026-05-06: picked Option A (typed None, byte-equivalent to u32=0).
+// bisect-3e (2026-05-06): reverted from Option<fn>=None to plain u32=0 to isolate
+// whether Phase A byte-equivalence assumption holds. If 3e rescues → root cause.
 #[no_mangle]
 #[link_section = ".bss.fnGetClockCBs"]
-pub static mut fnGetClockCBs: Option<unsafe extern "C" fn() -> u32> = None; // 4B — byte-equivalent to lib `u32 = 0`
+pub static mut fnGetClockCBs: u32 = 0; // 4B — bisect-3e: plain u32 (original lib type)
 
 // T8 (2026-05-06): _T3_PAD..._T7_PAD removed (29,032 B compensator total).
 // They padded BIN back to 51,588 B while -lwchble was still linked but its
