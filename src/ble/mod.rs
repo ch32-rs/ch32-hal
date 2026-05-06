@@ -21,6 +21,7 @@ pub mod listener;
 pub mod rfend;
 pub mod regint;
 pub mod tracer;
+pub mod types;
 
 pub use regint::ble_reg_init;
 // Re-export individual init steps so examples can call them with dump points between
