@@ -62,6 +62,9 @@ const ADV_CHANNELS: [(u8, u32); 3] = [(37, 2_402_000), (38, 2_426_000), (39, 2_4
 pub const ADV_DATA_MAX: usize = 31;
 
 /// TX buffer: header (2B) + AdvA (6B) + AdvData (up to 31B).
+/// Must be 16B-aligned: BLE DMA (BB+0x70) requires 16B alignment (Iron Law T3/T4.5 #36).
+/// mod16≠0 → DMA reads wrong PDU bytes → cba=0. `.tx_buf_aligned` section enforces ALIGN(16).
+#[link_section = ".tx_buf_aligned"]
 static mut ADV_TX_BUF: [u8; 2 + 6 + ADV_DATA_MAX] = [0u8; 2 + 6 + ADV_DATA_MAX];
 
 // ── PDU builder ──────────────────────────────────────────────────────────────────────────────
@@ -145,21 +148,12 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     // 2. Event timeout counter: BB+0x64 = 160.
     bb_write(0x64, 160);
 
-    // 3. PLL program for ADV channel (RFEND_CAL+0x44).
-    // Formula (confirmed from RF_DevSetChannel d.asm L71418, DTM-validated 2026-04-30):
-    //   int_div  = (freq_khz / 64000) & 0x1F
-    //   frac_div = ((freq_khz % 64000) << 10) / 250
-    //   mask 0xFE0F_C000 preserves calibration bits + bits[17:14], zeroes int+frac fields
-    // NOTE: old code used `freq_khz - 1_000` offset + 0xFE0C_0000 mask — both wrong.
-    {
-        let int_div  = (freq_khz / 64_000) & 0x1F;
-        let frac_div = ((freq_khz % 64_000) << 10) / 250;
-        let pll = read_volatile((RFEND_CAL_BASE + 0x44) as *const u32);
-        let pll = (pll & 0xFE0F_C000) | (int_div << 20) | (frac_div & 0x3FFF);
-        write_volatile((RFEND_CAL_BASE + 0x44) as *mut u32, pll);
-        let v = read_volatile((RFEND_CAL_BASE + 0x2C) as *const u32);
-        write_volatile((RFEND_CAL_BASE + 0x2C) as *mut u32, v | (1 << 1)); // set lock
-    }
+    // 3. PLL channel — NOT reprogrammed per-burst.
+    // EVT does NOT rewrite RFEND_CAL+0x44 per-burst. Per-burst reprogram sets
+    // RFEND+0x44 to wrong calibration anchor and forces a PLL re-lock cycle
+    // that cannot settle before TX fires → RF failure (cba=0).
+    // Channel tracking is done via LLE+0x00 bits[5:0] at step 8.
+    let _ = freq_khz;
 
     // 4. TX path select: LLE+0x00 clear bits[8:7] then set bit8.
     let ctrl = lle_read(0x00);
