@@ -54,7 +54,6 @@
 #![no_main]
 
 use core::ptr::{addr_of, read_volatile, write_volatile};
-use hal::ble::types::PfnGetSysClock;
 use {ch32_hal as hal, panic_halt as _};
 
 // T8 (2026-05-06): extern "C" block removed. All 7 symbols were compile-time-dead:
@@ -220,15 +219,18 @@ pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
 // "if NULL select HSE as the clock source".
 /// `fnGetClockCBs`: ROM-pinned tick-counter callback at EXACTLY 0x20001c78.
 ///
-/// Typed as `Option<PfnGetSysClock>` (NPO guarantees 4B = same ABI as prior `u32`).
-/// `None` = boundary mode: qingke-rt startup zero-init stops at `_ebss = 0x20001c78`
-/// (exclusive), so this slot is NOT zeroed. ROM unconditionally installs its
-/// default `0x420B000A` during BLE init; whether the slot started as random SRAM
-/// (cold-boot) or retained `0x420B000A` (warm-boot), the post-init value
-/// converges to `0x420B000A`. See Iron Law #35 and `t8-final-strip-plan.md` §12.
+/// ABI type: `PfnGetSysClock = unsafe extern "C" fn() -> u32` (tick counter, NOT Hz —
+/// see Iron Law #35). Stored as `u32` to preserve LLVM GlobalMerge BSS clustering:
+/// changing to `Option<PfnGetSysClock>` shifts gBleIPPara off its ROM-expected
+/// address 0x20000758 (Iron Law #34 violation — do NOT change this type).
+///
+/// Boundary mode: `_ebss = 0x20001c78` (exclusive) — qingke-rt startup zero-init
+/// stops before this slot. ROM unconditionally installs its default `0x420B000A`
+/// during BLE init; whether cold-boot (random SRAM) or warm-boot (prior `0x420B000A`),
+/// the post-init value converges to `0x420B000A`. See `t8-final-strip-plan.md` §12.
 #[no_mangle]
 #[link_section = ".fnGetClockCBs"]
-pub static mut fnGetClockCBs: Option<PfnGetSysClock> = None;
+pub static mut fnGetClockCBs: u32 = 0;
 // T12: FNGETCLOCKCBS_CALL_COUNT removed (minimal — no diagnostics).
 // Rationale: H5 timing hypothesis — diagnotic println! may delay BLE init past
 // a critical timing window. attempt-12 removes all probe code to test this.

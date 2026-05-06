@@ -9,14 +9,15 @@ use crate::ble::types::PfnGetSysClock;
 
 // ── WCH lib BSS globals used by BB_IRQLibHandler ─────────────────────────────
 extern "C" {
-    /// Indirect tick-counter callback for BB clock dispatch.
+    /// Tick-counter callback pointer. ABI type: `PfnGetSysClock = unsafe extern "C" fn() -> u32`.
     ///
-    /// Type: `Option<PfnGetSysClock>` = `Option<unsafe extern "C" fn() -> u32>`.
-    /// NPO guarantees same 4-byte layout as the prior `u32` declaration.
+    /// Declared as `u32` (not `Option<PfnGetSysClock>`) to preserve LLVM GlobalMerge
+    /// clustering — changing the LLVM type shifts gBleIPPara off its ROM-expected
+    /// address 0x20000758 (Iron Law #34). Read as u32, transmute before calling.
     ///
-    /// Installed by BLE_LibInit → bleClock_RegisterCB; `None` (NULL/0) in our
-    /// standalone ADV TX path (Path C, boundary mode — see Iron Law #35).
-    static mut fnGetClockCBs: Option<PfnGetSysClock>;
+    /// Installed by BLE_LibInit → bleClock_RegisterCB; `0` (NULL) in our standalone
+    /// ADV TX path since BLE_LibInit is never called (Path C / boundary mode).
+    static mut fnGetClockCBs: u32;
 }
 
 // gptrBBReg in WCH naming: link-layer CTRL, GO, ACCESS_ADDR, CRC_INIT, TX mode, CFG, MODE.
@@ -155,12 +156,12 @@ pub unsafe fn bb_irq_lib_handler() {
         // gBleIPPara[0] bit6: clock callback pending (not set in ADV TX path)
         let ip0 = read_volatile(ip);
         if ip0 & 0x40 != 0 {
-            // Safety: fnGetClockCBs is a valid Option<PfnGetSysClock>; None (0) is
-            // the boundary-mode default. If Some, the fn ptr was installed by lib
-            // init or ROM; calling it is safe per the PfnGetSysClock ABI contract.
-            let cb = read_volatile(core::ptr::addr_of!(fnGetClockCBs));
-            if let Some(f) = cb {
-                let ret = f();
+            let fn_addr = read_volatile(addr_of_mut!(fnGetClockCBs));
+            if fn_addr != 0 {
+                // Safety: fn_addr is a valid PfnGetSysClock installed by lib init or ROM.
+                // Declared as u32 to preserve GlobalMerge layout (see extern block above).
+                let cb: PfnGetSysClock = core::mem::transmute(fn_addr as usize);
+                let ret = cb();
                 write_volatile(ip.add(0x1c).cast::<u32>(), ret); // gBleIPPara+28
             }
             write_volatile(ip, read_volatile(ip) & !0x40u8); // clear bit6
