@@ -6,6 +6,11 @@ fn main() {
     // symbols (#34 gBleIPPara, #35 gBleLlPara, T8 fnGetClockCBs). All anchored
     // externs were already GC'd by --gc-sections; their decl block also removed.
     // Previously: cargo:rustc-link-search=.../EXAM/BLE/LIB + cargo:rustc-link-lib=static=wchble
+    //
+    // bisect-3g (2026-05-06): re-link -lwchble to restore fnGetClockCBs as lib COMMON.
+    // Rust strong symbol removed → lib COMMON wins → fnGetClockCBs outside _ebss (Phase C layout).
+    println!("cargo:rustc-link-search=/Users/mono/Elec/WCH/CH32V20xEVT-2.31/EXAM/BLE/LIB");
+    println!("cargo:rustc-link-lib=static=wchble");
 
     // T4.5 #36 Option C (2026-05-05): TX_BUF strategic 16B alignment.
     //
