@@ -204,7 +204,7 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     // Lib DTM (`ll_hw_api_tx_direct_test`) clears this bit. Mode selector for HW TX path.
     bb_write(0x04, bb_read(0x04) | 0x1);
 
-    // 12.5. PHY rate select + lock: BLE_SetPHYTxMode step1 + step4 (d.asm L91784, T44.E fix #3).
+    // 12.5. PHY rate select + lock: BLE_SetPHYTxMode step1 + step4 + step6 (T44.E fix #3+#6).
     //
     // Step 1: LLE+0x00 bits[13:12] = 00 → select 1 Mbps PHY rate.
     //   Without this, hardware may warmup in wrong PHY mode → TX sends at wrong rate → nRF
@@ -213,14 +213,26 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     // Step 4: BB+0x08 = 0x2000 → PHY rate lock (W1C-clears bit13 timer IRQ).
     //   Critical step (Lucy d.asm L91836 comment): "without it nRF will not decode the packet".
     //   ISR .L6 repeats this write post-GO, but the pre-GO rate select ensures hardware warmup
-    //   starts in the correct mode. ADV_NONCONN_IND burst cba=0 without this despite fix #1+#2.
+    //   starts in the correct mode.
+    //
+    // Step 6: BB+0x64 = TX slot timer from PDU-length formula (T44.E fix #6, root-cause).
+    //   Frozen binary ble_set_phy_tx_mode_1mbps step 6 overwrites the step-2 value (160) with:
+    //     timer = (((pdu_body_len+1 + 11) << 2) + 158) << 1
+    //   where pdu_body_len = ADV_TX_BUF[1] & 0x3F (set by build_adv_pdu).
+    //   For "cba" payload (payload_len=14): timer = (((15+11)<<2)+158)<<1 = 524.
+    //   BB+0x64=160 (step 2 value) is too short for a 14B-payload ADV packet (~216µs over-the-air)
+    //   → TX event timer expires before packet completes → BB aborts TX → cba=0.
+    //   ADV_TX_BUF[1] is valid here (build_adv_pdu was called before adv_tx_burst in adv_event_verbose).
     let ctrl = lle_read(0x00);
     lle_write(0x00, ctrl & !0x3000); // bits[13:12]=0 → 1Mbps PHY rate
     bb_write(0x08, 0x2000);          // PHY rate lock (BLE_SetPHYTxMode step4)
+    let pdu_len_p1 = (core::ptr::read_volatile(&ADV_TX_BUF[1]) & 0x3F) as u32 + 1;
+    let slot_timer = (((pdu_len_p1 + 11) << 2) + 158) << 1;
+    bb_write(0x64, slot_timer);      // TX slot timer (BLE_SetPHYTxMode step6, fix #6)
 
     // 13. ADV GO: LLE+0x00 |= 0x800000 (bit 23 — NOT bit 11).
     // Confirmed from lib `ll_advertise_tx` L39276-39280 (`lui a3,0x800` → a3=0x00800000).
-    // Lib DTM does NOT write bit 23; both bit 11 and bit 23 were wrong in old code.
+    // bit12 also set in frozen binary (0x0080_1000 vs our 0x0080_0000) — kept as forensic deferred (P3).
     lle_write(0x00, lle_read(0x00) | 0x0080_0000);
 
     // 14. Clear TX arm: LLE+0x2C bits[1:0] = 00 (commit all config before trigger).
