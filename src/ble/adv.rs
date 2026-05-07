@@ -234,10 +234,13 @@ pub unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     let slot_timer = (((pdu_len_p1 + 11) << 2) + 158) << 1;
     bb_write(0x64, slot_timer);      // TX slot timer (BLE_SetPHYTxMode step6, fix #6)
 
-    // 13. ADV GO: LLE+0x00 |= 0x800000 (bit 23 — NOT bit 11).
-    // Confirmed from lib `ll_advertise_tx` L39276-39280 (`lui a3,0x800` → a3=0x00800000).
-    // bit12 also set in frozen binary (0x0080_1000 vs our 0x0080_0000) — kept as forensic deferred (P3).
-    lle_write(0x00, lle_read(0x00) | 0x0080_0000);
+    // 13. ADV GO: LLE+0x00 |= 0x0080_1000 (bit23 + bit12).
+    // bit23: BLE enable, confirmed from lib `ll_advertise_tx` L39276-39280.
+    // bit12: also set in frozen binary (0x0080_1000). EVT LLE+0x00 = 0x14001325 (bit12=1).
+    // P3 single-variable test (T44.E fix#9): adding bit12 on top of P1+P2.5 stack.
+    // Hypothesis: bit12 enables a required LLE sub-mode (scan/advertise gate, RFEND path,
+    // or ISR trigger condition) that adv.rs was missing vs frozen binary.
+    lle_write(0x00, lle_read(0x00) | 0x0080_1000);
 
     // 14. Clear TX arm: LLE+0x2C bits[1:0] = 00 (commit all config before trigger).
     let cfg = lle_read(0x2C);
