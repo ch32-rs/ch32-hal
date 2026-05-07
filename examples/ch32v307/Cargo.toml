@@ -21,6 +21,7 @@ critical-section = "1.2.0"
 
 embassy-time = "0.5.0"
 embassy-usb = "0.5.1"
+embassy-usb-driver = "=0.2.0"
 embassy-futures = "0.1.2"
 nb = "1.1.0"
 

@@ -24,6 +24,7 @@ embassy-executor = { version = "0.9.1", features = [
 
 embassy-time = "0.5.0"
 embassy-usb = { version = "0.5.1" }
+embassy-usb-driver = "=0.2.0"
 embassy-futures = { version = "0.1.0" }
 
 # This is okay because we should automatically use whatever ch32-hal uses
