@@ -136,7 +136,11 @@ pub fn ad_complete_name<'a>(buf: &'a mut [u8], name: &[u8]) -> usize {
 ///   108 = Sleep (default), non-108 = hardware accepted GO and is processing.
 /// irq_post_go: BB+0x08 bits[15:0] immediately after GO; non-zero = TX IRQ fired
 ///   (bits 29+25 = 0x22000000 are always-set hardware constants, masked out here).
-unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
+///
+/// Public so binary examples can drive the per-burst loop directly and interleave
+/// per-burst state writes (e.g. gBleIPPara[4] re-arm) between channels.
+/// Call `build_adv_pdu` once before the burst loop, then call this per channel.
+pub unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     // 1. TX arm: LLE+0x2C bit0 = 1 (TX mode arm).
     //    LLE+0x2C bits[30:25] = BB_RF_FLAG_1M (0x09) — PHY mode configuration written by
     //    bb_dev_init. These bits are rf_flag (PHY mode = 1Mbps), NOT the BLE channel for
@@ -259,7 +263,9 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
 ///   ADV_NONCONN_IND @ 1 Mbps ≈ 240µs + BB+0x50 pre-delay 90µs = 330µs.
 ///
 /// Returns (completed: bool, bb64_initial: u32, bb64_final: u32, bb08_final: u32).
-unsafe fn wait_adv_tx_done() -> (bool, u32, u32, u32) {
+///
+/// Public so binary examples can drive the per-burst loop directly alongside `adv_tx_burst`.
+pub unsafe fn wait_adv_tx_done() -> (bool, u32, u32, u32) {
     let initial = bb_read(0x64);
     let done = super::ble_tx_wait_done(10_000, 50_000);
     (done, initial, bb_read(0x64), bb_read(0x08))
