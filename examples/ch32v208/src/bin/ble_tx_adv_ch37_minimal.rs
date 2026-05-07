@@ -243,6 +243,19 @@ fn main() -> ! {
         let mut ok_total: u32 = 0;
 
         loop {
+            // P2 (T44.E fix #7): per-event re-arm gBleIPPara[4] = 0x80 before each TX event.
+            //
+            // Hypothesis: ip4=0x80 written in init may be cleared by a ROM path (e.g. ble_ip_core_init
+            // or ble_hw_preamble epilogue) before the loop starts, OR the .L4/.L8 auto-rearm
+            // in bb_irq_lib_handler leaves ip4=1 (not 0x80) and some condition in .L6 requires
+            // bit7=1. Re-arming here ensures ip4=0x80 at the start of every advertising event.
+            //
+            // adv_event_verbose calls 3 bursts internally. This re-arm covers the first burst;
+            // subsequent bursts within the event rely on .L4/.L8 auto-rearm to ip4=1 (1&0x40=0,
+            // so .L6 is still eligible for bursts 2 and 3). Single-variable test: only this line
+            // is added vs P1 commit b274611.
+            write_volatile(ip.add(4), 0x80u8);
+
             let (ok, _stats) = hal::ble::adv::adv_event_verbose(&ADDR, true, adv_data);
             tx_n += 1;
             ok_total += ok as u32;
