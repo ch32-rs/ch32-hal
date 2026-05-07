@@ -136,11 +136,7 @@ pub fn ad_complete_name<'a>(buf: &'a mut [u8], name: &[u8]) -> usize {
 ///   108 = Sleep (default), non-108 = hardware accepted GO and is processing.
 /// irq_post_go: BB+0x08 bits[15:0] immediately after GO; non-zero = TX IRQ fired
 ///   (bits 29+25 = 0x22000000 are always-set hardware constants, masked out here).
-///
-/// Public so binary examples can drive the per-burst loop directly and interleave
-/// per-burst state writes (e.g. gBleIPPara[4] re-arm) between channels.
-/// Call `build_adv_pdu` once before the burst loop, then call this per channel.
-pub unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
+unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     // 1. TX arm: LLE+0x2C bit0 = 1 (TX mode arm).
     //    LLE+0x2C bits[30:25] = BB_RF_FLAG_1M (0x09) — PHY mode configuration written by
     //    bb_dev_init. These bits are rf_flag (PHY mode = 1Mbps), NOT the BLE channel for
@@ -185,11 +181,11 @@ pub unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     //   confirmed by Lucy's RE of ll_advertise_process (asm line 40091):
     //     li a1, 37   ; hardcoded logical ch37, not phys_idx=0
     //   and LL_ReceiverTest / LL_TransmitterTest: map phys_idx → logical, then write logical.
-    // bit6=1 enables BB hardware whitener (BLE spec Vol 6 §3.2, seed={1, ch[5:0]}).
-    // NOTE: DTM (ble_dtm_tx) writes phys_idx with bit6=0 (no whitening); the hardware
-    // uses a different LUT path when bit6=0 vs bit6=1.
+    // bit6=0: whitening flag cleared. Frozen binary hardcodes `37u32` (bit6=0) and passes
+    // cba=61. Setting bit6=1 was adv.rs baseline; frozen uses bit6=0. Direction B delta.
+    // (T44.E fix#10, P6: single-variable test, 74e8d67 baseline + this one change.)
     let ctrl = lle_read(0x00);
-    lle_write(0x00, (ctrl & !0x7F) | ((ch_idx as u32 & 0x3F) | 0x40));
+    lle_write(0x00, (ctrl & !0x7F) | (ch_idx as u32 & 0x3F));
 
     // 9. Access address: LLE+0x08 = ADV AA.
     lle_write(0x08, ADV_ACCESS_ADDR);
@@ -208,7 +204,7 @@ pub unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     // Lib DTM (`ll_hw_api_tx_direct_test`) clears this bit. Mode selector for HW TX path.
     bb_write(0x04, bb_read(0x04) | 0x1);
 
-    // 12.5. PHY rate select + lock: BLE_SetPHYTxMode step1 + step4 + step6 (T44.E fix #3+#6).
+    // 12.5. PHY rate select + lock: BLE_SetPHYTxMode step1 + step4 (d.asm L91784, T44.E fix #3).
     //
     // Step 1: LLE+0x00 bits[13:12] = 00 → select 1 Mbps PHY rate.
     //   Without this, hardware may warmup in wrong PHY mode → TX sends at wrong rate → nRF
@@ -217,30 +213,15 @@ pub unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     // Step 4: BB+0x08 = 0x2000 → PHY rate lock (W1C-clears bit13 timer IRQ).
     //   Critical step (Lucy d.asm L91836 comment): "without it nRF will not decode the packet".
     //   ISR .L6 repeats this write post-GO, but the pre-GO rate select ensures hardware warmup
-    //   starts in the correct mode.
-    //
-    // Step 6: BB+0x64 = TX slot timer from PDU-length formula (T44.E fix #6, root-cause).
-    //   Frozen binary ble_set_phy_tx_mode_1mbps step 6 overwrites the step-2 value (160) with:
-    //     timer = (((pdu_body_len+1 + 11) << 2) + 158) << 1
-    //   where pdu_body_len = ADV_TX_BUF[1] & 0x3F (set by build_adv_pdu).
-    //   For "cba" payload (payload_len=14): timer = (((15+11)<<2)+158)<<1 = 524.
-    //   BB+0x64=160 (step 2 value) is too short for a 14B-payload ADV packet (~216µs over-the-air)
-    //   → TX event timer expires before packet completes → BB aborts TX → cba=0.
-    //   ADV_TX_BUF[1] is valid here (build_adv_pdu was called before adv_tx_burst in adv_event_verbose).
+    //   starts in the correct mode. ADV_NONCONN_IND burst cba=0 without this despite fix #1+#2.
     let ctrl = lle_read(0x00);
     lle_write(0x00, ctrl & !0x3000); // bits[13:12]=0 → 1Mbps PHY rate
     bb_write(0x08, 0x2000);          // PHY rate lock (BLE_SetPHYTxMode step4)
-    let pdu_len_p1 = (core::ptr::read_volatile(&ADV_TX_BUF[1]) & 0x3F) as u32 + 1;
-    let slot_timer = (((pdu_len_p1 + 11) << 2) + 158) << 1;
-    bb_write(0x64, slot_timer);      // TX slot timer (BLE_SetPHYTxMode step6, fix #6)
 
-    // 13. ADV GO: LLE+0x00 |= 0x0080_1000 (bit23 + bit12).
-    // bit23: BLE enable, confirmed from lib `ll_advertise_tx` L39276-39280.
-    // bit12: also set in frozen binary (0x0080_1000). EVT LLE+0x00 = 0x14001325 (bit12=1).
-    // P3 single-variable test (T44.E fix#9): adding bit12 on top of P1+P2.5 stack.
-    // Hypothesis: bit12 enables a required LLE sub-mode (scan/advertise gate, RFEND path,
-    // or ISR trigger condition) that adv.rs was missing vs frozen binary.
-    lle_write(0x00, lle_read(0x00) | 0x0080_1000);
+    // 13. ADV GO: LLE+0x00 |= 0x800000 (bit 23 — NOT bit 11).
+    // Confirmed from lib `ll_advertise_tx` L39276-39280 (`lui a3,0x800` → a3=0x00800000).
+    // Lib DTM does NOT write bit 23; both bit 11 and bit 23 were wrong in old code.
+    lle_write(0x00, lle_read(0x00) | 0x0080_0000);
 
     // 14. Clear TX arm: LLE+0x2C bits[1:0] = 00 (commit all config before trigger).
     let cfg = lle_read(0x2C);
@@ -266,9 +247,7 @@ pub unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
 ///   ADV_NONCONN_IND @ 1 Mbps ≈ 240µs + BB+0x50 pre-delay 90µs = 330µs.
 ///
 /// Returns (completed: bool, bb64_initial: u32, bb64_final: u32, bb08_final: u32).
-///
-/// Public so binary examples can drive the per-burst loop directly alongside `adv_tx_burst`.
-pub unsafe fn wait_adv_tx_done() -> (bool, u32, u32, u32) {
+unsafe fn wait_adv_tx_done() -> (bool, u32, u32, u32) {
     let initial = bb_read(0x64);
     let done = super::ble_tx_wait_done(10_000, 50_000);
     (done, initial, bb_read(0x64), bb_read(0x08))

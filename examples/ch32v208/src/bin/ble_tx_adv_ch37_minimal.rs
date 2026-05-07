@@ -243,30 +243,7 @@ fn main() -> ! {
         let mut ok_total: u32 = 0;
 
         loop {
-            // P2.5 (T44.E fix #8): per-burst re-arm — binary-controlled 3-channel loop.
-            //
-            // P2 (per-event, 015740e) FAILED → cba=0. Granularity refined to per-burst.
-            // This mirrors frozen binary's ble_set_phy_tx_mode_1mbps step5 exactly:
-            //   gBleIPPara[4] = 0x80 written before EACH burst (not just once per event).
-            //
-            // Structure: replaces adv_event_verbose with inline 3-channel loop.
-            //   - build_adv_pdu once (payload is same for all channels)
-            //   - per-channel: ip4=0x80 → adv_tx_burst → wait_adv_tx_done
-            //
-            // Lucy confounder note (§6.7.6.B): P2.5 changes two things simultaneously:
-            //   (a) ip4 granularity: per-event → per-burst
-            //   (b) call structure: adv_event_verbose → binary inline 3-channel loop
-            // If PASS: (a) or (b) attribution unresolved (Phase 2 cleanup can clarify).
-            // If FAIL: gBleIPPara[4] dimension declared dead; proceed to P3/P5.
-            hal::ble::adv::build_adv_pdu(&ADDR, true, adv_data);
-            let mut ok = 0u8;
-            for &(ch_idx, freq_khz) in &[(37u8, 2_402_000u32), (38u8, 2_426_000u32), (39u8, 2_480_000u32)] {
-                write_volatile(ip.add(4), 0x80u8);  // P2.5: per-burst re-arm
-                hal::ble::adv::adv_tx_burst(ch_idx, freq_khz);
-                let (done, _, _, _) = hal::ble::adv::wait_adv_tx_done();
-                if done { ok += 1; }
-            }
-
+            let (ok, _stats) = hal::ble::adv::adv_event_verbose(&ADDR, true, adv_data);
             tx_n += 1;
             ok_total += ok as u32;
 
