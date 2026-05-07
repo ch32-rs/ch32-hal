@@ -221,19 +221,18 @@ pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
 // (LSI/2 ≈ 16 KHz, 32-bit wrap), NOT Hz. The wchble.h "if NULL select HSE as the
 // clock source" SDK comment refers to a different fnGetClock() entry, not pfnGetSysClock;
 // see HAL/RTC.c. The `///` doc below is the canonical reference for this slot.
-/// `fnGetClockCBs`: ROM-pinned tick-counter callback at EXACTLY 0x20001c78.
+/// `fnGetClockCBs`: tick-counter callback (Phase 2b: pin removed 2026-05-08).
 ///
 /// ABI type: `PfnGetSysClock = unsafe extern "C" fn() -> u32` (tick counter, NOT Hz —
-/// see Iron Law #35). Stored as `u32` to preserve LLVM GlobalMerge BSS clustering:
-/// changing to `Option<PfnGetSysClock>` shifts gBleIPPara off its ROM-expected
-/// address 0x20000758 (Iron Law #34 violation — do NOT change this type).
+/// see Iron Law #35). Stored as `u32` to preserve LLVM GlobalMerge BSS clustering.
 ///
-/// Boundary mode: `_ebss = 0x20001c78` (exclusive) — qingke-rt startup zero-init
-/// stops before this slot. ROM unconditionally installs its default `0x420B000A`
-/// during BLE init; whether cold-boot (random SRAM) or warm-boot (prior `0x420B000A`),
-/// the post-init value converges to `0x420B000A`. See `t8-final-strip-plan.md` §12.
+/// Phase 2b (Iron Law #34 v5): historical claim "ROM unconditionally writes 0x420B000A
+/// at 0x20001c78" was not supported by ROM hex disassembly (0 direct hits across 68610
+/// disassembled lines). Pin removed; symbol now lives in regular `.bss.fnGetClockCBs`,
+/// startup-zeroed like any other BSS. Iron Law #31 warm-reset hazard eliminated as a
+/// side effect. If the host code path that conditionally calls through this slot is
+/// dead in ADV TX (D-1a.0b proved it), the residual NULL is safe.
 #[no_mangle]
-#[link_section = ".fnGetClockCBs"]
 pub static mut fnGetClockCBs: u32 = 0;
 // T12: FNGETCLOCKCBS_CALL_COUNT removed (minimal — no diagnostics).
 // Rationale: H5 timing hypothesis — diagnotic println! may delay BLE init past
