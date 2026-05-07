@@ -344,10 +344,15 @@ ASSERT(ble        == 0x20001858, "Iron Law #37: ble must be at 0x20001858 (BSS d
         "blinky", "embassy_blinky", "flash", "pwm_led",
         "ble_adv", "ble_dtm_tx", "ble_rx_listen", "ble_rx_irq", "ble_rx_listener",
         "ble_tx_adv_ch37",
+        // Direction B trace binary (frozen behavior): link.x (wildcard BSS, LLVM ordering)
+        "ble_tx_adv_trace_dir_b_frozen",
     ] {
         println!("cargo:rustc-link-arg-bin={}=-Tlink.x", bin);
     }
-    println!("cargo:rustc-link-arg-bin=ble_tx_adv_ch37_minimal=-Tlink_minimal.x");
+    // Direction B trace binary (minimal baseline): link_minimal.x (KEEP + address pins)
+    for bin in &["ble_tx_adv_ch37_minimal", "ble_tx_adv_trace_dir_b_minimal"] {
+        println!("cargo:rustc-link-arg-bin={}=-Tlink_minimal.x", bin);
+    }
 
     // Iron Law #37 ASSERT pins (binary-scoped):
     //   frozen_bss_pins.x → guards ble_tx_adv_ch37 regression (T8 baseline, commit f27c394)
@@ -356,4 +361,5 @@ ASSERT(ble        == 0x20001858, "Iron Law #37: ble must be at 0x20001858 (BSS d
     //                         "ASSERT failure = minimal BSS placement incorrect"
     println!("cargo:rustc-link-arg-bin=ble_tx_adv_ch37=-Tfrozen_bss_pins.x");
     println!("cargo:rustc-link-arg-bin=ble_tx_adv_ch37_minimal=-Tminimal_bss_pins.x");
+    // Trace binaries: no ASSERT pins (diagnostic only, BSS layout may vary slightly)
 }
