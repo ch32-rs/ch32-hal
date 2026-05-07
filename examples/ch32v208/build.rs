@@ -7,25 +7,22 @@ fn main() {
     // TX_BUF placed in dedicated .tx_buf_aligned section at ALIGN(16). Independent of
     // GlobalMerge layout. DMA-alignment requirement, NOT a BSS pin.
     //
-    // Phase 2 (2026-05-08): single-script BSS architecture, no pins.
+    // Phase 2a (2026-05-08): single-script BSS architecture.
     //
     // Iron Law #34 (v5 final, 2026-05-08 — ROM hex disassembly + Cindy 06:28 RAM dump
     // + frozen drift cba=72/61 PASS): ROM is RAM-layout-agnostic for the 6 BSS-contract
     // symbols. ROM uses its private 0x20003000-0x200036FF workspace; host BSS placement
-    // is host-only concern. link_minimal.x (KEEP+pin block) and the binary-specific
-    // ASSERT scripts (frozen_bss_pins.x, minimal_bss_pins.x) were dropped in Phase 2a.
+    // is host-only concern. Therefore link_minimal.x (KEEP+pin block) and the binary-
+    // specific ASSERT scripts (frozen_bss_pins.x, minimal_bss_pins.x) are dropped.
     //
-    // Phase 2b (this commit): drops the fnGetClockCBs @ 0x20001c78 pin and the
-    // `_ebss = 0x20001c78` boundary. Historical claim "ROM unconditionally writes
-    // 0x420B000A here" was not supported by ROM hex disasm (0 direct hits across the
-    // full disassembly). fnGetClockCBs is now a regular `.bss.fnGetClockCBs` symbol
-    // swept up by the wildcard, startup-zeroed like any other BSS, with `_ebss` at the
-    // natural end of .bss. Iron Law #31 (`_ebss` boundary warm-reset hazard) is
-    // eliminated as a side effect.
+    // The minimal binary's symbols are retained against --gc-sections by `#[no_mangle]`
+    // + `#[used]` on the 6 BSS-contract statics — these attributes are independent of
+    // section pinning and continue to apply.
     //
-    // All 6 BSS-contract symbols are retained against --gc-sections by `#[no_mangle]`
-    // + `#[used]` (where needed) on the source statics — these attributes are
-    // independent of section pinning and continue to apply.
+    // fnGetClockCBs @ 0x20001c78 is kept pinned for now (caveat §6 in
+    // notes/ch32-rs/phase2-bss-pin-removal-design.md). Phase 2b separately validates
+    // its removal. Until 2b lands, link.x continues to PROVIDE(_ebss=0x20001c78) and
+    // KEEP the .fnGetClockCBs section.
 
     let out = std::env::var("OUT_DIR").unwrap();
 
@@ -120,11 +117,17 @@ SECTIONS
         . = ALIGN(4);
 
         /* Natural LLVM BSS ordering — no explicit address pins (Iron Law #34 v5 final:
-         * ROM is RAM-layout-agnostic for the 6 BSS-contract symbols, fnGetClockCBs
-         * included; Phase 2b dropped the historical 0x20001c78 pin). */
+         * ROM is RAM-layout-agnostic for the 6 BSS-contract symbols). */
         *(.sbss .sbss.* .bss .bss.*);
-        . = ALIGN(4);
+
+        /* Phase 2b caveat — fnGetClockCBs @ 0x20001c78 (outside _ebss, ROM-managed).
+         * ROM lore: unconditionally writes 0x420B000A here during BLE init. ROM hex
+         * disasm shows 0 direct hits for 0x20001c78 (same as the other 5 pins) but
+         * removal is gated separately in Phase 2b due to the historical write claim.
+         * Invariant: wildcard BSS above must end before 0x20001c78. */
+        . = 0x20001c78;
         PROVIDE( _ebss = .);
+        KEEP(*(.fnGetClockCBs));  /* fnGetClockCBs at 0x20001c78, NOT startup-zeroed */
     } >RAM
 
     .stack ORIGIN(RAM)+LENGTH(RAM) (NOLOAD) :

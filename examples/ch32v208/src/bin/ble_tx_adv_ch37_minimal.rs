@@ -48,10 +48,9 @@ use {ch32_hal as hal, panic_halt as _};
 // gBleIPPara — 40B IP param block. Hot in BB ISR; live caller present.
 #[no_mangle] pub static mut gBleIPPara: [u32; 10] = [0u32; 10]; // 40B
 
-// fnGetClockCBs — Phase 2b: pin removed 2026-05-08 (Iron Law #34 v5 fully validated).
-// Historical "ROM writes 0x420B000A at 0x20001c78" claim not supported by ROM hex disasm
-// (0 direct hits). Symbol now in regular .bss.fnGetClockCBs, startup-zeroed.
-#[no_mangle] pub static mut fnGetClockCBs: u32 = 0;
+// fnGetClockCBs @ 0x20001c78 — Phase 2b caveat (still pinned via link_section + link.x).
+// _ebss = 0x20001c78 (exclusive). Historical claim: ROM unconditionally installs 0x420B000A.
+#[no_mangle] #[link_section = ".fnGetClockCBs"] pub static mut fnGetClockCBs: u32 = 0;
 
 // ── Device address ────────────────────────────────────────────────────────────
 /// AdvA: 6-byte BD address, LE order. On-air displays as C2:21:43:65:87:12 (random static).
