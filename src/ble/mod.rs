@@ -190,6 +190,8 @@ extern "C" {
     static mut dtmFlag:      u8;  // ROM-expected 0x20000750; Iron Law #37 (ASSERT-pinned, build.rs)
     static mut gBleIPPara:   u8;  // 40-byte array; access as *mut u8 + byte offset
                                   // ROM-expected 0x20000758; Iron Law #37 (ASSERT-pinned, build.rs)
+    static mut fnGetClockCBs: u32; // pinned at 0x20001c78; holds ROM_RTC_TICK_FN (0x420B000A)
+                                   // installed by ble_ip_core_init (= TMOS_TimerInit(0) equivalent)
 }
 
 /// Pure-Rust replacement for WCH `BLE_IPCoreInit`.
@@ -206,7 +208,7 @@ extern "C" {
 /// | WCH PDF step                      | This implementation            | Notes |
 /// |-----------------------------------|--------------------------------|-------|
 /// | `HAL_Init()` → SysClock + NVIC   | `hal::init()` by caller        | Done before `ble_hw_preamble` |
-/// | `HAL_TimeInit()` / RTC init       | **Skipped** (Iron Law #35)     | ROM auto-installs `0x420B000A` when `fnGetClockCBs=NULL` |
+/// | `HAL_TimeInit()` / RTC init       | **Explicit write** (Step 1)    | `TMOS_TimerInit(0)` = use RTC (PDF §8.1.1); we write `0x420B000A` directly (ROM's built-in RTC tick fn) since we don't call `TMOS_TimerInit`. ROM does NOT auto-install — baf71de hardware gate confirmed. |
 /// | `WCHBLE_Init()` / `BLE_LibInit()` | **Skipped** (no libwchble)     | Replaced by `ble_ip_core_init` + Rust sub-inits |
 /// | `BLE_IPCoreInit()`                | This function                  | MMIO cache + 4 sub-inits |
 /// | `TMOS_TimerInit()` / clock config | **Skipped** (no TMOS)          | Not needed for ADV-only TX path |
@@ -223,6 +225,29 @@ pub unsafe fn ble_ip_core_init() {
     use core::ptr::{addr_of_mut, write_volatile};
 
     // ── Glue: mirror BLE_IPCoreInit steps 1-7 ────────────────────────────────
+    // ── Step 0: install ROM's built-in RTC tick fn into fnGetClockCBs slot ──────
+    // PDF §8.1.1: `TMOS_TimerInit(0)` = "选择 RTC 作为系统时钟" — internally the
+    // library writes the ROM's RTC tick fn address into this slot. Since we never
+    // call `TMOS_TimerInit`, we must do this explicitly.
+    //
+    // 0x420B000A: ROM-internal LSI/RTC-derived tick fn on CH32V208WBU6 B1 silicon.
+    //   Returns a u32 counter at 1600 Hz / 625 µs per tick (PDF §3.3, Iron Law #35).
+    //   The bb_irq_lib_handler .L7 path reads this slot and stores the return value
+    //   at gBleIPPara[0x1c] for use by the BLE scheduler.
+    //
+    // Hardware-verified (2026-05-08):
+    //   - ROM does NOT auto-install: baf71de (NULL slot) → cba=0, slot stayed 0x00000000
+    //   - This write = equivalent of calling `TMOS_TimerInit(NULL)` per PDF
+    //   - B1-only: 0x420B000A is the ROM fn address for CH32V208WBU6 B1 silicon.
+    //     Other silicon revisions may use a different address (not yet verified).
+    const ROM_RTC_TICK_FN: u32 = 0x420B_000A; // B1 silicon ROM internal tick fn
+    write_volatile(addr_of_mut!(fnGetClockCBs), ROM_RTC_TICK_FN);
+    debug_assert_eq!(
+        core::ptr::read_volatile(core::ptr::addr_of!(fnGetClockCBs)),
+        ROM_RTC_TICK_FN,
+        "fnGetClockCBs write verify failed"
+    );
+
     // Steps 1-2: clear dtmFlag + gPaControl (BSS already 0; explicit write for compat)
     write_volatile(addr_of_mut!(dtmFlag),    0u8);
     write_volatile(addr_of_mut!(gPaControl), 0u32);
