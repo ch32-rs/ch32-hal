@@ -223,8 +223,7 @@ impl<'d, T: Instance, M: Mode> UartTx<'d, T, M> {
     /// Block until transmission complete
     pub fn blocking_flush(&mut self) -> Result<(), Error> {
         let rb = T::regs();
-
-        while !rb.statr().read().txe() {} // wait tx ends
+        while !rb.statr().read().tc() {} // wait for last bit on wire.
         Ok(())
     }
 }
