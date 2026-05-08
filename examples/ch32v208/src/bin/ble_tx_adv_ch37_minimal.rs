@@ -48,9 +48,12 @@ use {ch32_hal as hal, panic_halt as _};
 // gBleIPPara — 40B IP param block. Hot in BB ISR; live caller present.
 #[no_mangle] pub static mut gBleIPPara: [u32; 10] = [0u32; 10]; // 40B
 
-// fnGetClockCBs @ 0x20001c78 — Phase 2b caveat (still pinned via link_section + link.x).
-// _ebss = 0x20001c78 (exclusive). Historical claim: ROM unconditionally installs 0x420B000A.
-#[no_mangle] #[link_section = ".fnGetClockCBs"] pub static mut fnGetClockCBs: u32 = 0;
+// fnGetClockCBs — Phase 2c (2026-05-08): no longer pinned at 0x20001c78. Slot lives at
+// LLVM's natural BSS address (zeroed by qingke-rt startup) and is overwritten with
+// `fallback_clock` fn ptr by `ble_ip_core_init()` before any BLE sub-init runs.
+// This experiment distinguishes B1 (chip mask ROM hardcodes 0x20001c78) from
+// B2 (ROM only requires non-zero valid fn ptr at the linker-resolved symbol address).
+#[no_mangle] pub static mut fnGetClockCBs: u32 = 0;
 
 // ── Device address ────────────────────────────────────────────────────────────
 /// AdvA: 6-byte BD address, LE order. On-air displays as C2:21:43:65:87:12 (random static).

@@ -19,10 +19,12 @@ fn main() {
     // + `#[used]` on the 6 BSS-contract statics — these attributes are independent of
     // section pinning and continue to apply.
     //
-    // fnGetClockCBs @ 0x20001c78 is kept pinned for now (caveat §6 in
-    // notes/ch32-rs/phase2-bss-pin-removal-design.md). Phase 2b separately validates
-    // its removal. Until 2b lands, link.x continues to PROVIDE(_ebss=0x20001c78) and
-    // KEEP the .fnGetClockCBs section.
+    // Phase 2c (2026-05-08): fnGetClockCBs `_ebss = 0x20001c78` boundary trick + KEEP
+    // block are removed. The slot now lives at LLVM's natural BSS address (zeroed by
+    // qingke-rt startup) and is overwritten with `fallback_clock` fn ptr at the start
+    // of `ble_ip_core_init()`. This single-variable experiment distinguishes B1
+    // (chip mask ROM hardcodes 0x20001c78) from B2 (ROM only requires non-zero valid
+    // fn ptr at the linker-resolved symbol address).
 
     let out = std::env::var("OUT_DIR").unwrap();
 
@@ -117,17 +119,13 @@ SECTIONS
         . = ALIGN(4);
 
         /* Natural LLVM BSS ordering — no explicit address pins (Iron Law #34 v5 final:
-         * ROM is RAM-layout-agnostic for the 6 BSS-contract symbols). */
+         * ROM is RAM-layout-agnostic for the 6 BSS-contract symbols). Phase 2c also
+         * drops fnGetClockCBs pin: slot lives in natural BSS, zeroed by startup, and
+         * `ble_ip_core_init()` writes `fallback_clock` fn ptr before any BLE sub-init. */
         *(.sbss .sbss.* .bss .bss.*);
 
-        /* Phase 2b caveat — fnGetClockCBs @ 0x20001c78 (outside _ebss, ROM-managed).
-         * ROM lore: unconditionally writes 0x420B000A here during BLE init. ROM hex
-         * disasm shows 0 direct hits for 0x20001c78 (same as the other 5 pins) but
-         * removal is gated separately in Phase 2b due to the historical write claim.
-         * Invariant: wildcard BSS above must end before 0x20001c78. */
-        . = 0x20001c78;
+        . = ALIGN(4);
         PROVIDE( _ebss = .);
-        KEEP(*(.fnGetClockCBs));  /* fnGetClockCBs at 0x20001c78, NOT startup-zeroed */
     } >RAM
 
     .stack ORIGIN(RAM)+LENGTH(RAM) (NOLOAD) :

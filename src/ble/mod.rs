@@ -190,6 +190,33 @@ extern "C" {
     static mut dtmFlag:      u8;  // ROM-expected 0x20000750; Iron Law #37 (ASSERT-pinned, build.rs)
     static mut gBleIPPara:   u8;  // 40-byte array; access as *mut u8 + byte offset
                                   // ROM-expected 0x20000758; Iron Law #37 (ASSERT-pinned, build.rs)
+    /// `fnGetClockCBs`: tick-counter callback slot. ABI type:
+    /// `PfnGetSysClock = unsafe extern "C" fn() -> u32` (Iron Law #35 monotonic tick counter,
+    /// NOT Hz). Phase 2c (2026-05-08): this slot is no longer pinned at 0x20001c78 via
+    /// link.x boundary trick — it lives at LLVM's natural BSS address. Instead,
+    /// [`ble_ip_core_init`] explicitly writes [`fallback_clock`] into the slot before
+    /// running sub-inits. This Phase 2c experiment distinguishes B1 (chip mask ROM
+    /// hardcodes 0x20001c78) from B2 (slot value matters, address doesn't).
+    static mut fnGetClockCBs: u32;
+}
+
+/// Phase 2c fallback clock callback — monotonic tick counter satisfying Iron Law #35.
+///
+/// Reads SysTick CNT (low 32 bits) at 0xE000_F008 (Qingke V3 SysTick base 0xE000_F000).
+/// SysTick is enabled by `hal::init()` → `delay::init()` → `Delay::init()` (sets STE bit
+/// in SYSTICK.CTLR), so by the time `ble_ip_core_init()` runs the counter is already
+/// incrementing at HCLK/8 (12 MHz at 96 MHz HCLK; 32-bit wraps every ~358 s).
+///
+/// Iron Law #35 contract: returns a monotonically increasing tick counter (NOT Hz).
+/// T8 attempt-14 falsified "constant Hz" → cba=0; this fn returns a free-running
+/// SysTick value that satisfies the delta-sample hypothesis.
+///
+/// # Safety
+///
+/// Must be called only after `hal::init` has enabled SysTick. The address 0xE000_F008
+/// is fixed by the Qingke V3 architecture (CH32V208).
+unsafe extern "C" fn fallback_clock() -> u32 {
+    core::ptr::read_volatile(0xE000_F008 as *const u32)
 }
 
 /// Pure-Rust replacement for WCH `BLE_IPCoreInit`.
@@ -207,6 +234,20 @@ extern "C" {
 /// before any BLE TX/RX operation or IRQ delivery.
 pub unsafe fn ble_ip_core_init() {
     use core::ptr::{addr_of_mut, write_volatile};
+
+    // ── Phase 2c (2026-05-08): explicit fnGetClockCBs init ───────────────────
+    // Replaces the link.x `_ebss = 0x20001c78` boundary trick + `KEEP(*(.fnGetClockCBs))`
+    // pin in `examples/ch32v208/build.rs`. The slot now lives at LLVM's natural BSS
+    // address (zeroed by qingke-rt startup) and is overwritten here with a valid
+    // monotonic tick-counter fn ptr before any BLE sub-init runs.
+    //
+    // Outcome distinguishes:
+    //   B1 = chip mask ROM hardcodes 0x20001c78  → this experiment FAILs (cba=0)
+    //   B2 = ROM only requires a non-zero valid fn ptr at the linker-resolved
+    //         fnGetClockCBs symbol address → this experiment PASSes
+    //
+    // Iron Law #35: fallback_clock returns a monotonic tick counter, not Hz.
+    write_volatile(addr_of_mut!(fnGetClockCBs), fallback_clock as u32);
 
     // ── Glue: mirror BLE_IPCoreInit steps 1-7 ────────────────────────────────
     // Steps 1-2: clear dtmFlag + gPaControl (BSS already 0; explicit write for compat)

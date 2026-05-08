@@ -228,12 +228,12 @@ pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
 /// changing to `Option<PfnGetSysClock>` shifts gBleIPPara off its ROM-expected
 /// address 0x20000758 (Iron Law #34 violation — do NOT change this type).
 ///
-/// Boundary mode: `_ebss = 0x20001c78` (exclusive) — qingke-rt startup zero-init
-/// stops before this slot. ROM unconditionally installs its default `0x420B000A`
-/// during BLE init; whether cold-boot (random SRAM) or warm-boot (prior `0x420B000A`),
-/// the post-init value converges to `0x420B000A`. See `t8-final-strip-plan.md` §12.
+/// Phase 2c (2026-05-08): no longer pinned at 0x20001c78. Slot lives at LLVM's
+/// natural BSS address (zeroed by qingke-rt startup) and is overwritten with
+/// `fallback_clock` fn ptr by `ble_ip_core_init()` before any BLE sub-init runs.
+/// This experiment distinguishes B1 (chip mask ROM hardcodes 0x20001c78) from
+/// B2 (ROM only requires non-zero valid fn ptr at the linker-resolved symbol address).
 #[no_mangle]
-#[link_section = ".fnGetClockCBs"]
 pub static mut fnGetClockCBs: u32 = 0;
 // T12: FNGETCLOCKCBS_CALL_COUNT removed (minimal — no diagnostics).
 // Rationale: H5 timing hypothesis — diagnotic println! may delay BLE init past

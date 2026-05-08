@@ -32,7 +32,8 @@ pub static mut dtmFlag: u8 = 0;
 pub static mut gBleLlPara: [u32; 74] = [0u32; 74];
 #[no_mangle] #[link_section = ".bss.gBleIPPara"]
 pub static mut gBleIPPara: [u32; 10] = [0u32; 10];
-#[no_mangle] #[link_section = ".fnGetClockCBs"]
+// Phase 2c: natural BSS placement; `ble_ip_core_init()` writes `fallback_clock` fn ptr.
+#[no_mangle]
 pub static mut fnGetClockCBs: u32 = 0;
 
 const ADDR: [u8; 6] = [0x12, 0x87, 0x65, 0x43, 0x21, 0xC2];

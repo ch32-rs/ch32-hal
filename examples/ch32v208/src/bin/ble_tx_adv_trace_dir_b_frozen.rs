@@ -33,7 +33,8 @@ pub static mut dtmFlag: u8 = 0;
 pub static mut gBleLlPara: [u32; 74] = [0u32; 74];
 #[no_mangle] #[link_section = ".bss.gBleIPPara"]
 pub static mut gBleIPPara: [u32; 10] = [0u32; 10];
-#[no_mangle] #[link_section = ".fnGetClockCBs"]
+// Phase 2c: natural BSS placement; `ble_ip_core_init()` writes `fallback_clock` fn ptr.
+#[no_mangle]
 pub static mut fnGetClockCBs: u32 = 0;
 
 // Frozen binary also had RUST_ADV_CTX (192B) for pAdvCtx slots
