@@ -202,21 +202,28 @@ extern "C" {
 
 /// Phase 2c fallback clock callback — monotonic tick counter satisfying Iron Law #35.
 ///
-/// Reads SysTick CNT (low 32 bits) at 0xE000_F008 (Qingke V3 SysTick base 0xE000_F000).
-/// SysTick is enabled by `hal::init()` → `delay::init()` → `Delay::init()` (sets STE bit
-/// in SYSTICK.CTLR), so by the time `ble_ip_core_init()` runs the counter is already
-/// incrementing at HCLK/8 (12 MHz at 96 MHz HCLK; 32-bit wraps every ~358 s).
+/// Reads the RISC-V `cycle` CSR (0xC00) — the hardware CPU cycle counter. This counter
+/// starts at reset and increments on every clock cycle, requires no setup, and is always
+/// accessible from machine mode. Returns the low 32 bits (wraps at ~44 s at 96 MHz;
+/// monotonicity is preserved between samples for BLE timing deltas).
+///
+/// **Why not SysTick (0xE000_F008)?** ch32-hal `Delay::delay_us()` sets STE (bit0 of
+/// SYSTICK.CTLR) only transiently during each delay call and clears it when done. Between
+/// delays, `STE=0` and `CNTL` reads 0 — a constant, violating Iron Law #35 (empirically
+/// confirmed: constant return value → cba=0, T8 attempt-14).
 ///
 /// Iron Law #35 contract: returns a monotonically increasing tick counter (NOT Hz).
-/// T8 attempt-14 falsified "constant Hz" → cba=0; this fn returns a free-running
-/// SysTick value that satisfies the delta-sample hypothesis.
 ///
 /// # Safety
 ///
-/// Must be called only after `hal::init` has enabled SysTick. The address 0xE000_F008
-/// is fixed by the Qingke V3 architecture (CH32V208).
+/// Safe to call at any time after reset. `cycle` CSR is always readable in machine mode
+/// on QingKe V4C (CH32V208). No peripheral clocks or init required.
 unsafe extern "C" fn fallback_clock() -> u32 {
-    core::ptr::read_volatile(0xE000_F008 as *const u32)
+    let v: u32;
+    // `cycle` CSR (0xC00) = machine cycle counter low 32 bits.
+    // Always running from reset on QingKe V4C; no STE/init required.
+    core::arch::asm!("csrr {}, cycle", out(reg) v, options(nomem, nostack));
+    v
 }
 
 /// Pure-Rust replacement for WCH `BLE_IPCoreInit`.
