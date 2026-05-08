@@ -22,6 +22,12 @@
 //! (triple-path probe 2026-05-06: wlink SBA + CPU lw clock-off + CPU lw clock-on,
 //! all return all-zero — ROM body is statically read-as-zero on data path).
 //!
+//! **PDF-confirmed tick semantics** (WCH BLE manual §3.3): `TMOS_GetSystemClock()`
+//! returns a count where **1600 = 1 second** (i.e. 1 tick = 625 µs). The ROM-installed
+//! `0x420B000A` function is this tick source — it returns an LSI-derived counter in
+//! 625 µs units. Any caller-supplied `fnGetClockCBs` replacement MUST return the same
+//! 625 µs-unit count for the BLE TMOS scheduler to produce correct timing.
+//!
 //! Returning a constant Hz value (e.g. 96_000_000) as attempted in T8 attempt-14
 //! causes BLE timing failure (cba=0). **Hypothesis** (unverified — ROM body is
 //! execute-only per triple-path probe): the ROM treats the return as a counter delta
@@ -160,7 +166,14 @@ pub struct BleClockConfig {
     pub get_clock_value: Option<PfnGetSysClock>,
     /// Maximum counter value before wrap-around (typically `0xFFFF_FFFF`).
     pub clock_max_count: u32,
-    /// Tick source frequency in Hz (e.g. `CAB_LSIFQ / 2` ≈ 16_000).
+    /// Hardware tick counter frequency in Hz (e.g. `CAB_LSIFQ / 2` ≈ 16_000).
+    ///
+    /// **Note**: this is the *hardware* LSI counter rate fed into the TMOS scheduler,
+    /// NOT the TMOS logical tick frequency. The ROM's `0x420B000A` tick function
+    /// returns a 625 µs-unit counter (1600 ticks/s per WCH BLE manual §3.3); the
+    /// hardware LSI/2 ≈ 16 kHz counter is divided internally to produce that rate.
+    /// `BleClockConfig` therefore carries `16_000` here (hardware Hz), while the
+    /// TMOS tick period remains 625 µs regardless of this field value.
     pub clock_frequency: u16,
     /// Tick source accuracy in ppm (100 for LSE, 1000 for LSI).
     pub clock_accuracy: u16,

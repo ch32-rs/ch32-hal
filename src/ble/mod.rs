@@ -201,6 +201,20 @@ extern "C" {
 /// Once this function succeeds, the `extern "C" fn BLE_IPCoreInit` FFI symbol
 /// is no longer needed and can be removed from the example's extern block.
 ///
+/// # WCH PDF HAL init flow vs. this implementation (WCH BLE manual §4.4.2)
+///
+/// | WCH PDF step                      | This implementation            | Notes |
+/// |-----------------------------------|--------------------------------|-------|
+/// | `HAL_Init()` → SysClock + NVIC   | `hal::init()` by caller        | Done before `ble_hw_preamble` |
+/// | `HAL_TimeInit()` / RTC init       | **Skipped** (Iron Law #35)     | ROM auto-installs `0x420B000A` when `fnGetClockCBs=NULL` |
+/// | `WCHBLE_Init()` / `BLE_LibInit()` | **Skipped** (no libwchble)     | Replaced by `ble_ip_core_init` + Rust sub-inits |
+/// | `BLE_IPCoreInit()`                | This function                  | MMIO cache + 4 sub-inits |
+/// | `TMOS_TimerInit()` / clock config | **Skipped** (no TMOS)          | Not needed for ADV-only TX path |
+/// | `GAP_SetParamValue(TGAP_DISC_ADV_INT_MIN/MAX, 160)` | BB+0x64=160 in adv_event | PDF §8.2.2: 160 × 0.625 ms = 100 ms |
+/// | `GAPRole_PeripheralInit()`        | **Not applicable**             | We use non-connectable ADV TX only |
+/// | Periodic `tmos_systemProcess()`   | **Skipped** (no TMOS)          | Caller drives TX loop directly |
+/// | Sleep / LSI calibration callbacks | **Skipped** (no power mgmt)    | `PfnIdleCb` / `PfnLsiCalibrationCb` unused |
+///
 /// # Safety
 ///
 /// Must be called after [`ble_hw_preamble`] (HSE + BLE clocks enabled) and

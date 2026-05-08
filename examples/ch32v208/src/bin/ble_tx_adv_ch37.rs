@@ -33,7 +33,7 @@
 //!
 //! ```text
 //!  1. LLE+0x2C bits[30:25]=ch37, bits[1:0]=01 — TX arm + channel field in cfg reg
-//!  2. BB+0x64 = 160              — event timeout counter
+//!  2. BB+0x64 = 160              — event timeout counter (= TGAP_DISC_ADV_INT_MIN/MAX: 160 × 0.625 ms = 100 ms)
 //!  3. RFEND+0x44 = PLL dividers  — int_div + frac_div for 2402 MHz
 //!     RFEND+0x2C bit1 = 1       — PLL lock set
 //!  4. LLE+0x00 bits[8:7] = 10b  — TX path select (clear then set)
@@ -902,6 +902,7 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
 
     // Step 2: BB+0x64 initial value (overwritten by ble_set_phy_tx_mode_normal in trigger sequence).
     // Kept for compatibility with ISO_MODE=1/2/3/4 which don't call SetPHYTxMode.
+    // 160 = TGAP_DISC_ADV_INT_MIN/MAX (WCH BLE manual §8.2.2): 160 × 0.625 ms = 100 ms ADV interval.
     trace_w(BB_BASE as u32 + 0x64, 160);
     bb_write(0x64, 160);
 
@@ -2062,7 +2063,7 @@ fn main() -> ! {
                 //   irq_post bits[15:0] → TX completion IRQ flags (bits[29+25] always-set)
             }
 
-            // ~100 ms inter-packet gap.
+            // ~100 ms inter-packet gap — matches TGAP_DISC_ADV_INT_MIN/MAX default (160 × 0.625 ms).
             // At 96 MHz, ~4 cycles/iter: 2_400_000 iters ≈ 100 ms.
             qingke::riscv::asm::delay(2_400_000);
         }

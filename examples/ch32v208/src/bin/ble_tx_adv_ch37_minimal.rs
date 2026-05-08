@@ -255,7 +255,8 @@ fn main() -> ! {
                 hal::println!("adv#{tx_n}: ok={ok}/3 total_ok={ok_total}");
             }
 
-            // ~100 ms inter-event gap (2_400_000 iters @96MHz/4cyc ≈ 100ms).
+            // ~100 ms inter-event gap — matches TGAP_DISC_ADV_INT_MIN/MAX default (160 × 0.625 ms).
+            // At 96 MHz, ~4 cycles/iter: 2_400_000 iters ≈ 100 ms.
             qingke::riscv::asm::delay(2_400_000);
         }
     }
