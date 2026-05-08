@@ -120,14 +120,12 @@ SECTIONS
          * ROM is RAM-layout-agnostic for the 6 BSS-contract symbols). */
         *(.sbss .sbss.* .bss .bss.*);
 
-        /* Phase 2b caveat — fnGetClockCBs @ 0x20001c78 (outside _ebss, ROM-managed).
-         * ROM lore: unconditionally writes 0x420B000A here during BLE init. ROM hex
-         * disasm shows 0 direct hits for 0x20001c78 (same as the other 5 pins) but
-         * removal is gated separately in Phase 2b due to the historical write claim.
-         * Invariant: wildcard BSS above must end before 0x20001c78. */
-        . = 0x20001c78;
+        /* task #56 Step 3: fnGetClockCBs pin REMOVED — LLD free placement.
+         * ble_ip_core_init writes 0x420B000A via symbol addr_of_mut!(fnGetClockCBs),
+         * which resolves to whatever address LLD assigns. ROM reads 0x20001c78
+         * (hardcoded); if LLD places the symbol elsewhere, ROM reads garbage → cba=0.
+         * PASS → address constraint does not exist; FAIL → constraint confirmed. */
         PROVIDE( _ebss = .);
-        KEEP(*(.fnGetClockCBs));  /* fnGetClockCBs at 0x20001c78, NOT startup-zeroed */
     } >RAM
 
     .stack ORIGIN(RAM)+LENGTH(RAM) (NOLOAD) :
