@@ -203,25 +203,35 @@ pub static mut gBleLlPara: [u32; 74] = [0u32; 74]; // 296B — lib size confirme
 pub static mut gBleIPPara: [u32; 10] = [0; 10]; // 40B — lib size confirmed
                                                  // ROM-expected 0x20000758; Iron Law #37 (ASSERT-pinned, build.rs)
 
-// fnGetClockCBs: 4-byte placeholder at 0x20001c78 (task #56, 2026-05-08).
+// T8 attempt-8 (2026-05-06): Path B — fnGetClockCBs in custom .bss_compat section at 0x20001c78.
+// -lwchble fully removed. fnGetClockCBs forced to Phase C lib COMMON address via link.x .bss_compat.
 //
-// Runtime indirection retired: bb_irq_lib_handler now calls
-// `crate::ble::fallback_clock()` directly (cycle CSR). The slot exists ONLY as
-// a zero-initialized BSS placeholder so that — if the chip silicon ROM hardcodes
-// a read at 0x20001c78 — that byte is reliably NULL on every reset, triggering
-// the ROM's auto-install fallback (cold + warm boot deterministic).
+// Root cause (bisect-3g confirmed): fnGetClockCBs inside _ebss → 4B BSS shift → gBleIPPara moves
+// from 0x20000758 (Phase C, PASS) to 0x2000075c (+4B) → RF failure (cba=0).
+// By forcing fnGetClockCBs to 0x20001c78 (outside _ebss), gBleIPPara stays at 0x20000758.
 //
-// link.x places this section INSIDE [_sbss, _ebss) so qingke-rt startup zero-init
-// covers it. Compare to the prior "boundary trick" (Phase 2a) where _ebss=0x20001c78
-// left the slot OUTSIDE zero-init, depending on warm-boot SRAM retention.
+// SDK audit (rf_fh.o disassembly): fnGetClockCBs is a pfnGetSysClock = u32(*)(void) fn ptr.
+// RF_HopGetChannel (rf_fh.o .highcode) loads fnGetClockCBs via PC-relative addressing and
+// calls through it (jalr). This function is GC'd in our binary (no lib .text linked).
+// Active probe: install rust_fnGetClockCBs_probe fn ptr in main() before BLE init.
+// If FNGETCLOCKCBS_CALL_COUNT > 0 after gate run → ROM has a separate hardcoded path that
+// calls fnGetClockCBs. If count = 0 → RF gate works purely through BSS layout (gBleIPPara addr).
 //
-// History (kept for context):
-// - T8 (2026-05-06): -lwchble fully removed; slot became a Rust strong symbol
-// - Iron Law #35 (Lucy 2026-05-04 forensic): PfnGetSysClock returns RTC tick
-//   counter (NOT Hz). See HAL/RTC.c and notes/ch32-rs/lib-dependency-removal.md
-/// `fnGetClockCBs`: 4-byte zero-init placeholder at 0x20001c78. Not read by Rust
-/// code (slot retired task #56). Kept to satisfy possible chip silicon ROM read
-/// at this address — startup zero-init guarantees NULL → ROM auto-install path.
+// Iron Law #35 (Lucy 2026-05-04 forensic): PfnGetSysClock returns RTC tick counter
+// (LSI/2 ≈ 16 KHz, 32-bit wrap), NOT Hz. The wchble.h "if NULL select HSE as the
+// clock source" SDK comment refers to a different fnGetClock() entry, not pfnGetSysClock;
+// see HAL/RTC.c. The `///` doc below is the canonical reference for this slot.
+/// `fnGetClockCBs`: ROM-pinned tick-counter callback at EXACTLY 0x20001c78.
+///
+/// ABI type: `PfnGetSysClock = unsafe extern "C" fn() -> u32` (tick counter, NOT Hz —
+/// see Iron Law #35). Stored as `u32` to preserve LLVM GlobalMerge BSS clustering:
+/// changing to `Option<PfnGetSysClock>` shifts gBleIPPara off its ROM-expected
+/// address 0x20000758 (Iron Law #34 violation — do NOT change this type).
+///
+/// Boundary mode: `_ebss = 0x20001c78` (exclusive) — qingke-rt startup zero-init
+/// stops before this slot. ROM unconditionally installs its default `0x420B000A`
+/// during BLE init; whether cold-boot (random SRAM) or warm-boot (prior `0x420B000A`),
+/// the post-init value converges to `0x420B000A`. See `t8-final-strip-plan.md` §12.
 #[no_mangle]
 #[link_section = ".fnGetClockCBs"]
 pub static mut fnGetClockCBs: u32 = 0;
@@ -1778,11 +1788,11 @@ fn main() -> ! {
         //   GAPRole_BroadcasterInit / TMOS_Init).  Phase B confirms which stage
         //   diverges and which registers are actually touched by dev_inits.
 
-        // Task #56 (2026-05-08): fnGetClockCBs slot at 0x20001c78 is now INSIDE
-        // [_sbss, _ebss); qingke-rt zero-inits it on every reset → chip silicon
-        // ROM (if hardcoded read) sees NULL → auto-install fallback path.
-        // bb_irq_lib_handler no longer reads the slot — it calls
-        // crate::ble::fallback_clock() directly. See `///` doc on fnGetClockCBs above.
+        // attempt-15 boundary mode (Iron Law #36): fnGetClockCBs slot at 0x20001c78 lives
+        // OUTSIDE _sbss.._ebss (link.x: `_ebss = address_of(fnGetClockCBs) = 0x20001c78`,
+        // exclusive — the BSS-zero loop stops before this slot). qingke-rt does NOT touch
+        // it; ROM unconditionally installs `0x420B000A` during BLE init, post-init value
+        // converges regardless of cold/warm boot (see `///` doc on fnGetClockCBs above).
 
         hal::ble::ble_hw_preamble(); // HSE 32 MHz + RCC BLE/CRC clocks
 

@@ -13,27 +13,26 @@
 //! `core::mem::{size_of, align_of}`. These validate against the WCH C compiler's
 //! layout on RISC-V 32-bit (pointer = 4B, max field align = 4B).
 //!
-//! # Iron Law #35 — clock-tick source protocol
+//! # Iron Law #35 — fnGetClockCBs / PfnGetSysClock protocol
 //!
-//! The pure-Rust BB IRQ path (`bb::bb_irq_lib_handler`) needs a **monotonically
-//! increasing tick counter** for the `.L7` clock-callback path (`gBleIPPara[0] & 0x40`).
-//! Returns must be ticks (NOT Hz); the BLE scheduler treats successive calls as a
-//! delta sample, so a constant return value stalls it (T8 attempt-14 empirically
-//! confirmed cba=0 when returning `96_000_000` Hz).
+//! `PfnGetSysClock` (= `fnGetClockCBs` ROM-pinned RAM slot at 0x20001c78) returns a
+//! **monotonically increasing tick counter** (e.g. `RTC_GetCounter`), NOT Hz. The ROM
+//! default at `0x420B000A` is an execute-only function that reads an internal BLE
+//! controller timing counter; it cannot be reverse-engineered via data reads
+//! (triple-path probe 2026-05-06: wlink SBA + CPU lw clock-off + CPU lw clock-on,
+//! all return all-zero — ROM body is statically read-as-zero on data path).
 //!
-//! **Implementation** (task #56, 2026-05-08): `bb_irq_lib_handler` calls
-//! [`crate::ble::fallback_clock`] directly — the RISC-V `cycle` CSR (always
-//! running from reset on QingKe V4C). The legacy `fnGetClockCBs` 4-byte BSS slot
-//! (a libwchble.a-inherited fn-pointer indirection) was retired: it remains as a
-//! zero-initialized placeholder at 0x20001c78 INSIDE `[_sbss, _ebss)` so that —
-//! if the chip silicon ROM hardcodes a read at that address — startup zero-init
-//! guarantees NULL → ROM auto-installs its default `0x420B000A` (cold + warm
-//! boot deterministic). The slot is never read by Rust code.
+//! Returning a constant Hz value (e.g. 96_000_000) as attempted in T8 attempt-14
+//! causes BLE timing failure (cba=0). **Hypothesis** (unverified — ROM body is
+//! execute-only per triple-path probe): the ROM treats the return as a counter delta
+//! sample; a constant returns delta=0, stalling the BLE scheduler. **Empirical fact**:
+//! a Rust fn returning a constant Hz value causes cba=0 (T8 attempt-14 falsified).
 //!
-//! Historical note: ROM default at `0x420B000A` is an execute-only function reading
-//! an internal BLE controller timing counter; cannot be reverse-engineered via data
-//! reads (triple-path probe 2026-05-06 returns all-zero on the data path).
-//! See `notes/ch32-rs/lib-dependency-removal.md` for the full saga.
+//! **Recommendation**: leave the slot uninitialized — boundary mode skips
+//! qingke-rt startup zero-init for `_ebss = 0x20001c78` (Rust strong symbol in
+//! `.fnGetClockCBs` section, T8 boundary mode). Cold boot → random SRAM → ROM
+//! auto-installs default `0x420B000A`; warm reboot → prior `0x420B000A` persists.
+//! See `t8-final-strip-plan.md` §12 (Iron Law #35).
 
 // ── TMOS primitive type aliases ───────────────────────────────────────────────
 // wchble.h L42-56
@@ -114,11 +113,9 @@ pub type PfnFlashWriteCb = unsafe extern "C" fn(addr: u32, num: u32, p_buf: *con
 /// delta calculations (NOT Hz — see Iron Law #35 above). The WCH SDK example
 /// uses `RTC_GetCounter` (32-bit RTC counter @ LSI/2 ≈ 16 kHz, wraps at 2³²).
 ///
-/// **Pure-Rust port (task #56)**: this type is no longer the ABI of a runtime
-/// fn-pointer slot — `bb_irq_lib_handler` calls [`crate::ble::fallback_clock`]
-/// directly. The type is retained because [`BleClockConfig::get_clock_value`]
-/// still mirrors the C `bleClockConfig_t.getClockValue` field for documentation
-/// of the WCH BLE C ABI (and possible future TMOS use).
+/// This type is the ABI of `fnGetClockCBs` (lib COMMON BSS at 0x20001c78).
+/// ROM default (`0x420B000A`) reads an internal BLE controller counter; it is
+/// installed by ROM during BLE init when `fnGetClockCBs` is non-NULL on entry.
 pub type PfnGetSysClock = unsafe extern "C" fn() -> u32;
 
 // ── BleClockConfig ────────────────────────────────────────────────────────────

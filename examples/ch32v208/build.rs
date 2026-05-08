@@ -19,15 +19,10 @@ fn main() {
     // + `#[used]` on the 6 BSS-contract statics — these attributes are independent of
     // section pinning and continue to apply.
     //
-    // fnGetClockCBs @ 0x20001c78 (2026-05-08, task #56): the slot is no longer
-    // a runtime fn-ptr indirection (bb_irq_lib_handler now calls fallback_clock
-    // directly). The 4-byte placeholder is preserved at 0x20001c78 INSIDE the
-    // [_sbss, _ebss) zero-init range so that startup BSS-clear keeps the byte
-    // at 0 every reset (cold and warm). If the chip silicon ROM hardcodes a
-    // read at 0x20001c78, NULL triggers its auto-install fallback path —
-    // deterministic regardless of cold/warm SRAM state. Compare to the prior
-    // "boundary trick" (Phase 2a) where _ebss=0x20001c78 left the slot OUTSIDE
-    // zero-init range, depending on warm-boot SRAM retention.
+    // fnGetClockCBs @ 0x20001c78 is kept pinned for now (caveat §6 in
+    // notes/ch32-rs/phase2-bss-pin-removal-design.md). Phase 2b separately validates
+    // its removal. Until 2b lands, link.x continues to PROVIDE(_ebss=0x20001c78) and
+    // KEEP the .fnGetClockCBs section.
 
     let out = std::env::var("OUT_DIR").unwrap();
 
@@ -125,17 +120,14 @@ SECTIONS
          * ROM is RAM-layout-agnostic for the 6 BSS-contract symbols). */
         *(.sbss .sbss.* .bss .bss.*);
 
-        /* fnGetClockCBs @ 0x20001c78 (task #56, 2026-05-08): 4-byte placeholder
-         * INSIDE [_sbss, _ebss) so startup BSS-clear zeroes it on every reset.
-         * Chip silicon ROM (if it hardcodes a read at 0x20001c78) sees NULL and
-         * triggers its auto-install fallback path → cold + warm boot deterministic.
-         * The slot is no longer a runtime indirection — bb_irq_lib_handler calls
-         * crate::ble::fallback_clock() directly. Invariant: wildcard BSS above
-         * must end at or before 0x20001c78. */
+        /* Phase 2b caveat — fnGetClockCBs @ 0x20001c78 (outside _ebss, ROM-managed).
+         * ROM lore: unconditionally writes 0x420B000A here during BLE init. ROM hex
+         * disasm shows 0 direct hits for 0x20001c78 (same as the other 5 pins) but
+         * removal is gated separately in Phase 2b due to the historical write claim.
+         * Invariant: wildcard BSS above must end before 0x20001c78. */
         . = 0x20001c78;
-        KEEP(*(.fnGetClockCBs));
-        . = ALIGN(4);
         PROVIDE( _ebss = .);
+        KEEP(*(.fnGetClockCBs));  /* fnGetClockCBs at 0x20001c78, NOT startup-zeroed */
     } >RAM
 
     .stack ORIGIN(RAM)+LENGTH(RAM) (NOLOAD) :
@@ -159,9 +151,8 @@ SECTIONS
     // Add OUT_DIR to linker search path so link.x is found before qingke-rt's version.
     println!("cargo:rustc-link-search=native={}", out);
 
-    // Single linker script for all binaries (Phase 2a + task #56, 2026-05-08).
+    // Single linker script for all binaries (Phase 2a, 2026-05-08).
     // Iron Law #34 v5: no binary needs ROM-contract address pins on the 5 BSS symbols.
-    // fnGetClockCBs is preserved at 0x20001c78 INSIDE _ebss as a zero-init placeholder
-    // (chip ROM auto-install fallback safety); runtime indirection retired (task #56).
+    // fnGetClockCBs is still pinned at 0x20001c78 inside link.x (Phase 2b caveat).
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
 }
