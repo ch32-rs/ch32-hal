@@ -120,19 +120,14 @@ SECTIONS
          * ROM is RAM-layout-agnostic for the 6 BSS-contract symbols). */
         *(.sbss .sbss.* .bss .bss.*);
 
-        /* task #56 option (b) — fnGetClockCBs @ 0x20001c78, INSIDE [_sbss, _ebss).
-         * layout-only change: slot is now startup-zeroed by qingke-rt BSS init.
-         * Cold-boot: startup writes 0 here → ROM reads NULL → auto-installs 0x420B000A.
-         * Warm-boot: startup writes 0 here → same ROM auto-install path.
-         * B1-confirmed safe (Phase 2c, 2026-05-06): NULL → ROM dispatch, not crash.
-         * bb.rs/.L7 path unchanged — still reads fnGetClockCBs and calls whatever
-         * the ROM installed, producing 1600 Hz / 625 µs ticks (Iron Law #35).
-         * Iron Law #36: _ebss is at 0x20001c7c (AFTER slot), so _ebss > 0x20001c78
-         * is fine here — the slot is owned and zeroed by our BSS, not ROM-unknown. */
+        /* Phase 2b caveat — fnGetClockCBs @ 0x20001c78 (outside _ebss, ROM-managed).
+         * ROM lore: unconditionally writes 0x420B000A here during BLE init. ROM hex
+         * disasm shows 0 direct hits for 0x20001c78 (same as the other 5 pins) but
+         * removal is gated separately in Phase 2b due to the historical write claim.
+         * Invariant: wildcard BSS above must end before 0x20001c78. */
         . = 0x20001c78;
-        KEEP(*(.fnGetClockCBs));  /* fnGetClockCBs at 0x20001c78, startup-zeroed */
-        . = ALIGN(4);
         PROVIDE( _ebss = .);
+        KEEP(*(.fnGetClockCBs));  /* fnGetClockCBs at 0x20001c78, NOT startup-zeroed */
     } >RAM
 
     .stack ORIGIN(RAM)+LENGTH(RAM) (NOLOAD) :
