@@ -30,6 +30,37 @@ pub use bb::{bb_dev_init, bb_irq_lib_handler, BB_RF_FLAG_1M};
 pub use lle::lle_dev_init;
 pub use rfend::rfend_dev_init;
 
+// ── Pure-Rust clock callback (task #56, 2026-05-08) ─────────────────────────
+//
+// Replaces the runtime `fnGetClockCBs` fn-ptr indirection that historically
+// pointed at the WCH lib's `LSI_GetSysClockTimes`. The 4-byte slot at
+// 0x20001c78 is still preserved in BSS as a zero-init placeholder so the
+// chip silicon ROM (which may hardcode a read at that address) sees NULL and
+// triggers its own auto-install fallback path on every reset (cold + warm).
+//
+// `bb_irq_lib_handler` calls this function directly in the .L7 path
+// (gBleIPPara[0] & 0x40 — clock-callback request bit). For our pure-Rust
+// ADV TX path that bit is never set, so this is a defensive shim only.
+//
+// The RISC-V `cycle` CSR (0xC00) increments at the CPU clock rate and is
+// always available without any peripheral configuration. The historical C
+// callback returned an LSI-derived tick counter; the contract between
+// `bb_irq_lib_handler` and this function only requires a monotonically
+// increasing `u32` — the absolute time-base does not matter for the path
+// we exercise (the value is stored at `ip+0x1c` and the request bit is
+// cleared, with no further consumer in the ADV TX flow).
+//
+// # Safety
+//
+// Reads the unprivileged `cycle` CSR. Caller must be in machine mode (the
+// WCH RT0 startup leaves us in M-mode, and BLE IRQs are M-mode handlers).
+#[inline]
+pub(crate) unsafe fn fallback_clock() -> u32 {
+    let v: u32;
+    core::arch::asm!("csrr {}, cycle", out(reg) v, options(nomem, nostack));
+    v
+}
+
 // ── Shared BLE TX completion primitive ──────────────────────────────────────
 
 /// gptrLLEReg base address — IRQ status at offset +0x08.

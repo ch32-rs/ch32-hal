@@ -5,21 +5,13 @@
 // Derived from BB_DevInit() / BB_IRQLibHandler() in libwchble.a V1.40 (bb.o)
 
 use core::ptr::{read_volatile, write_volatile};
-use crate::ble::types::PfnGetSysClock;
 
-// ── WCH lib BSS globals used by BB_IRQLibHandler ─────────────────────────────
-extern "C" {
-    /// Tick-counter callback pointer. ABI type: `PfnGetSysClock = unsafe extern "C" fn() -> u32`.
-    ///
-    /// Declared as `u32` (not `Option<PfnGetSysClock>`) to preserve LLVM GlobalMerge
-    /// clustering — changing the LLVM type shifts gBleIPPara off its ROM-expected
-    /// address 0x20000758 (Iron Law #34; Iron Law #37 ASSERT-pins this address).
-    /// Read as u32, transmute before calling.
-    ///
-    /// Installed by BLE_LibInit → bleClock_RegisterCB; `0` (NULL) in our standalone
-    /// ADV TX path since BLE_LibInit is never called (Path C / boundary mode).
-    static mut fnGetClockCBs: u32;
-}
+// fnGetClockCBs slot retired (2026-05-08): the .L7 clock-callback path now calls
+// `super::fallback_clock()` directly. The 4-byte slot at 0x20001c78 is still
+// preserved per-binary as a zero-initialized BSS placeholder so that the chip
+// silicon ROM's possible hardcoded read at that address sees NULL → triggers
+// the ROM's auto-install fallback. See `crate::ble::fallback_clock` for the
+// monotonic tick-counter source used by `.L7` going forward.
 
 // gptrBBReg in WCH naming: link-layer CTRL, GO, ACCESS_ADDR, CRC_INIT, TX mode, CFG, MODE.
 const BB_BASE: usize = 0x40024100;
@@ -154,17 +146,15 @@ pub unsafe fn bb_irq_lib_handler() {
         // v4–v6 all cba=0 with ~110–249 ns natural gap → timing hypothesis exhausted;
         // LLE state-machine context is the new investigation target.
 
-        // gBleIPPara[0] bit6: clock callback pending (not set in ADV TX path)
+        // gBleIPPara[0] bit6: clock callback pending (not set in ADV TX path).
+        // Pre-2026-05-08 this read `fnGetClockCBs` (4-byte BSS slot @ 0x20001c78)
+        // and called the indirect fn ptr. Now calls `fallback_clock` (cycle CSR)
+        // directly — the slot was an inherited libwchble.a indirection with no
+        // remaining purpose in our pure-Rust port.
         let ip0 = read_volatile(ip);
         if ip0 & 0x40 != 0 {
-            let fn_addr = read_volatile(addr_of_mut!(fnGetClockCBs));
-            if fn_addr != 0 {
-                // Safety: fn_addr is a valid PfnGetSysClock installed by lib init or ROM.
-                // Declared as u32 to preserve GlobalMerge layout (see extern block above).
-                let cb: PfnGetSysClock = core::mem::transmute(fn_addr as usize);
-                let ret = cb();
-                write_volatile(ip.add(0x1c).cast::<u32>(), ret); // gBleIPPara+28
-            }
+            let ret = super::fallback_clock();
+            write_volatile(ip.add(0x1c).cast::<u32>(), ret); // gBleIPPara+28
             write_volatile(ip, read_volatile(ip) & !0x40u8); // clear bit6
         }
 

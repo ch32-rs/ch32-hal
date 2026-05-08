@@ -23,9 +23,11 @@ use {ch32_hal as hal, panic_halt as _};
 // the 5 non-fnGetClockCBs symbols; LLVM natural BSS ordering applies. `#[no_mangle]`
 // + `#[used]` retain the symbols against --gc-sections (independent of pinning).
 //
-// fnGetClockCBs keeps `#[link_section = ".fnGetClockCBs"]` until Phase 2b validates
-// removal (caveat: historical "ROM writes 0x420B000A here" lore not yet refuted by
-// hardware experiment).
+// fnGetClockCBs keeps `#[link_section = ".fnGetClockCBs"]` as a 4B zero-init
+// placeholder at 0x20001c78 (task #56, 2026-05-08). Runtime indirection retired:
+// bb_irq_lib_handler calls crate::ble::fallback_clock() directly. The byte stays
+// at 0x20001c78 INSIDE [_sbss, _ebss) so chip silicon ROM (if hardcoded read) sees
+// NULL on every reset and triggers its auto-install fallback path.
 //
 // T1: MMIO register pointer cache (DATA, initialized).
 #[no_mangle] pub static mut gptrBBReg:    u32 = 0x4002_4100; // WCH "BB"  = lle_* range
@@ -48,8 +50,9 @@ use {ch32_hal as hal, panic_halt as _};
 // gBleIPPara — 40B IP param block. Hot in BB ISR; live caller present.
 #[no_mangle] pub static mut gBleIPPara: [u32; 10] = [0u32; 10]; // 40B
 
-// fnGetClockCBs @ 0x20001c78 — Phase 2b caveat (still pinned via link_section + link.x).
-// _ebss = 0x20001c78 (exclusive). Historical claim: ROM unconditionally installs 0x420B000A.
+// fnGetClockCBs @ 0x20001c78 — 4B zero-init placeholder (task #56, 2026-05-08).
+// INSIDE [_sbss, _ebss) so startup zero-init covers it. Slot is no longer read
+// at runtime — bb_irq_lib_handler calls crate::ble::fallback_clock() directly.
 #[no_mangle] #[link_section = ".fnGetClockCBs"] pub static mut fnGetClockCBs: u32 = 0;
 
 // ── Device address ────────────────────────────────────────────────────────────
