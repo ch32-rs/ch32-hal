@@ -120,11 +120,11 @@ SECTIONS
          * ROM is RAM-layout-agnostic for the 6 BSS-contract symbols). */
         *(.sbss .sbss.* .bss .bss.*);
 
-        /* task #56 Step 3: fnGetClockCBs pin REMOVED — LLD free placement.
-         * ble_ip_core_init writes 0x420B000A via symbol addr_of_mut!(fnGetClockCBs),
-         * which resolves to whatever address LLD assigns. ROM reads 0x20001c78
-         * (hardcoded); if LLD places the symbol elsewhere, ROM reads garbage → cba=0.
-         * PASS → address constraint does not exist; FAIL → constraint confirmed. */
+        /* task #56 Step 3: fnGetClockCBs in BSS NOLOAD (no address pin).
+         * Must be explicitly listed here; without this the section falls outside
+         * all NOLOAD regions and objcopy produces a ~536MB binary. */
+        *(.fnGetClockCBs .fnGetClockCBs.*);
+
         PROVIDE( _ebss = .);
     } >RAM
 
