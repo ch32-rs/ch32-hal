@@ -120,12 +120,16 @@ SECTIONS
          * ROM is RAM-layout-agnostic for the 6 BSS-contract symbols). */
         *(.sbss .sbss.* .bss .bss.*);
 
-        /* task #56 Step 3: fnGetClockCBs in BSS NOLOAD (no address pin).
-         * Must be explicitly listed here; without this the section falls outside
-         * all NOLOAD regions and objcopy produces a ~536MB binary. */
-        *(.fnGetClockCBs .fnGetClockCBs.*);
-
+        /* fnGetClockCBs @ 0x20001c78 — HARD ROM ABI ADDRESS (Step 3 hardware-confirmed,
+         * 2026-05-09). ROM reads this exact physical address unconditionally regardless
+         * of where our symbol is placed. Poisoning 0x20001c78 → cba=0 even when
+         * our Rust symbol at 0x200007c0 held the correct 0x420B000A value.
+         * The pin is a real hardware requirement, not a historical artifact.
+         * ble_ip_core_init writes 0x420B000A here explicitly (= TMOS_TimerInit(0)
+         * equivalent per PDF §8.1.1). ROM does NOT write this slot itself (baf71de). */
+        . = 0x20001c78;
         PROVIDE( _ebss = .);
+        KEEP(*(.fnGetClockCBs));  /* fnGetClockCBs at 0x20001c78, NOT startup-zeroed */
     } >RAM
 
     .stack ORIGIN(RAM)+LENGTH(RAM) (NOLOAD) :
