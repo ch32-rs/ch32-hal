@@ -99,7 +99,10 @@ pub unsafe fn bb_dev_init(rf_flag: u8) {
 /// if blk bit6 SET:
 ///   W1C: *(0x40024100+0x38) = 0x60   (clear bits 5+6)
 ///   if gBleIPPara[0] bit6 SET:
-///     ret = (*fnGetClockCBs)()        (indirect call; NULL in ADV TX path)
+///     ret = (*fnGetClockCBs)()        (LIVE in ADV TX path: ble_tx_adv_ch37*.rs
+///                                      writes gBleIPPara[0]=0x60 at init, so
+///                                      bit6 is set on every BB IRQ. fnGetClockCBs
+///                                      is the ROM-installed ~32 kHz LSI-tick fn.)
 ///     gBleIPPara[0x1c..0x1f] = ret
 ///     gBleIPPara[0] &= ~0x40
 ///   if gBleIPPara[0] bit5 SET:
@@ -122,7 +125,15 @@ pub unsafe fn bb_dev_init(rf_flag: u8) {
 ///
 /// # ADV TX path
 ///
-/// * `gBleIPPara[0]` = 0 (BSS) → fnGetClockCBs path and bit5 path never fire.
+/// * `gBleIPPara[0]` = 0x60 (bit5 + bit6) — written by ADV TX setup
+///   (Iron Law #27, v7-probe). Both bit-5 and bit-6 paths fire on every BB IRQ:
+///   bit-5 commits the scan-mode TX arm (0x8000 → WCH_LLER+0x08 etc.); bit-6
+///   reads `fnGetClockCBs` (ROM-installed ~32 kHz LSI-tick fn at 0x420B000A on
+///   B1 silicon) and stores the result at `gBleIPPara[0x1c]` for the BLE
+///   scheduler timing math.  ⚠ Iron Law #38: any change to the value flowing
+///   into ip+0x1c (e.g. swapping LSI-tick semantics for `cycle` CSR) must pass
+///   a 30 s air-visible cba ≥ 5 hardware gate before commit — task #56 v5
+///   regression confirmed cycle CSR (~96 MHz) is NOT semantically equivalent.
 /// * `gBleIPPara[4]` = 0x80 after `BLE_SetPHYTxMode` (bit7=1, bit6=0) →
 ///   `.L6` fires on the first BB IRQ whose `gptrBBReg+0x38` bit6 is set (PLL ready).
 /// * `gBleIPPara[16..19]` = 776 (written by ADV TX setup) → bb+0x64 timer.
@@ -154,7 +165,14 @@ pub unsafe fn bb_irq_lib_handler() {
         // v4–v6 all cba=0 with ~110–249 ns natural gap → timing hypothesis exhausted;
         // LLE state-machine context is the new investigation target.
 
-        // gBleIPPara[0] bit6: clock callback pending (not set in ADV TX path)
+        // gBleIPPara[0] bit6: clock callback. SET on every BB IRQ in the ADV TX
+        // path — both ble_tx_adv_ch37.rs and ble_tx_adv_ch37_minimal.rs write
+        // gBleIPPara[0] = 0x60 at init (Iron Law #27, v7-probe). When set, this
+        // reads fnGetClockCBs (ROM-installed ~32 kHz LSI-tick fn at 0x420B000A
+        // on B1 silicon) and stores the tick at gBleIPPara[0x1c] for the BLE
+        // scheduler. Iron Law #38: do NOT swap the fn semantics (e.g. retire to
+        // RISC-V `cycle` CSR ~96 MHz) — task #56 v5 regression proved the scale
+        // mismatch (~3000×) breaks air TX even when nm/disasm look well-formed.
         let ip0 = read_volatile(ip);
         if ip0 & 0x40 != 0 {
             let fn_addr = read_volatile(addr_of_mut!(fnGetClockCBs));
@@ -168,7 +186,11 @@ pub unsafe fn bb_irq_lib_handler() {
             write_volatile(ip, read_volatile(ip) & !0x40u8); // clear bit6
         }
 
-        // gBleIPPara[0] bit5: active-scan TX-mode write pending (not set in ADV TX path)
+        // gBleIPPara[0] bit5: active-scan TX-mode write. SET on every BB IRQ in
+        // the ADV TX path (gBleIPPara[0]=0x60 includes bit5). This is the
+        // mechanism that arms TX: bit5 path commits 0x8000 → WCH_LLER+0x08 and
+        // (gBleIPPara[20..24] << 1) → WCH_LLER+0x6c BEFORE .L6 fires (Iron Law
+        // #27, v7-probe forensic proof: probe-A R1=56, 3×60s median=53).
         let ip0 = read_volatile(ip);
         if ip0 & 0x20 != 0 {
             write_volatile(ip, ip0 & !0x20u8);                              // clear bit5
