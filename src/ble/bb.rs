@@ -101,8 +101,11 @@ pub unsafe fn bb_dev_init(rf_flag: u8) {
 ///   if gBleIPPara[0] bit6 SET:
 ///     ret = (*fnGetClockCBs)()        (LIVE in ADV TX path: ble_tx_adv_ch37*.rs
 ///                                      writes gBleIPPara[0]=0x60 at init, so
-///                                      bit6 is set on every BB IRQ. fnGetClockCBs
-///                                      is the ROM-installed ~32 kHz LSI-tick fn.)
+///                                      bit6 is set on every BB IRQ. The slot
+///                                      holds an RTC-derived 1600 Hz counter fn
+///                                      — contract per WCH BLE manual: returns
+///                                      tmos system run time, unit = 625µs,
+///                                      1600 = 1s.)
 ///     gBleIPPara[0x1c..0x1f] = ret
 ///     gBleIPPara[0] &= ~0x40
 ///   if gBleIPPara[0] bit5 SET:
@@ -128,12 +131,17 @@ pub unsafe fn bb_dev_init(rf_flag: u8) {
 /// * `gBleIPPara[0]` = 0x60 (bit5 + bit6) — written by ADV TX setup
 ///   (Iron Law #27, v7-probe). Both bit-5 and bit-6 paths fire on every BB IRQ:
 ///   bit-5 commits the scan-mode TX arm (0x8000 → WCH_LLER+0x08 etc.); bit-6
-///   reads `fnGetClockCBs` (ROM-installed ~32 kHz LSI-tick fn at 0x420B000A on
-///   B1 silicon) and stores the result at `gBleIPPara[0x1c]` for the BLE
-///   scheduler timing math.  ⚠ Iron Law #38: any change to the value flowing
-///   into ip+0x1c (e.g. swapping LSI-tick semantics for `cycle` CSR) must pass
-///   a 30 s air-visible cba ≥ 5 hardware gate before commit — task #56 v5
-///   regression confirmed cycle CSR (~96 MHz) is NOT semantically equivalent.
+///   reads `fnGetClockCBs` (B1 silicon: ROM auto-installs an RTC-derived 1600 Hz
+///   counter fn at 0x420B000A; this is the canonical `pfnGetSysClock` of WCH's
+///   `TMOS_TimerInit` API per the BLE manual — returns a u32 counter in units of
+///   625 µs, where 1600 = 1 s) and stores the result at `gBleIPPara[0x1c]` for
+///   the BLE scheduler timing math.  ⚠ Iron Law #38: any change to the value
+///   flowing into ip+0x1c must pass a 30 s air-visible cba ≥ 5 hardware gate
+///   before commit AND match the 1600 Hz / 625 µs frequency contract.
+///   task #56 v5 regression: substituting RISC-V `cycle` CSR (~96 MHz CPU clock)
+///   for the ROM fn put a 60,000× scale error on every IRQ → BLE scheduler
+///   timing collapsed → 0 air TX. nm + disasm confirmed v5 was code-form
+///   equivalent; only air-visible cba count caught the semantic regression.
 /// * `gBleIPPara[4]` = 0x80 after `BLE_SetPHYTxMode` (bit7=1, bit6=0) →
 ///   `.L6` fires on the first BB IRQ whose `gptrBBReg+0x38` bit6 is set (PLL ready).
 /// * `gBleIPPara[16..19]` = 776 (written by ADV TX setup) → bb+0x64 timer.
@@ -168,11 +176,15 @@ pub unsafe fn bb_irq_lib_handler() {
         // gBleIPPara[0] bit6: clock callback. SET on every BB IRQ in the ADV TX
         // path — both ble_tx_adv_ch37.rs and ble_tx_adv_ch37_minimal.rs write
         // gBleIPPara[0] = 0x60 at init (Iron Law #27, v7-probe). When set, this
-        // reads fnGetClockCBs (ROM-installed ~32 kHz LSI-tick fn at 0x420B000A
-        // on B1 silicon) and stores the tick at gBleIPPara[0x1c] for the BLE
-        // scheduler. Iron Law #38: do NOT swap the fn semantics (e.g. retire to
-        // RISC-V `cycle` CSR ~96 MHz) — task #56 v5 regression proved the scale
-        // mismatch (~3000×) breaks air TX even when nm/disasm look well-formed.
+        // reads fnGetClockCBs and stores the tick at gBleIPPara[0x1c] for the
+        // BLE scheduler.  The slot's contract (per WCH BLE manual,
+        // TMOS_TimerInit / TMOS_GetSystemClock): returns a u32 counter in units
+        // of 625 µs, where 1600 = 1 s — i.e. an RTC-derived 1600 Hz counter
+        // (B1 silicon: ROM auto-installs 0x420B000A which honours this).
+        // Iron Law #38: do NOT swap the fn for any other clock source unless it
+        // matches the 1600 Hz / 625 µs frequency contract — task #56 v5
+        // regression proved RISC-V `cycle` CSR (~96 MHz) is 60,000× off → the
+        // BLE scheduler reads 60,000 BLE slots per actual slot → 0 air TX.
         let ip0 = read_volatile(ip);
         if ip0 & 0x40 != 0 {
             let fn_addr = read_volatile(addr_of_mut!(fnGetClockCBs));
