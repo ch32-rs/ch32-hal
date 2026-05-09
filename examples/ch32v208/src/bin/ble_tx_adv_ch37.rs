@@ -54,6 +54,7 @@
 #![no_main]
 
 use core::ptr::{addr_of, read_volatile, write_volatile};
+use ch32_hal::pac::{BLE_BB, BLE_LLE, BLE_RFEND};
 use {ch32_hal as hal, panic_halt as _};
 
 // T8 (2026-05-06): extern "C" block removed. All 7 symbols were compile-time-dead:
@@ -259,17 +260,119 @@ const BB_BASE:    usize = 0x40024200;
 const RFEND_BASE: usize = 0x40025000;
 
 #[inline(always)]
-unsafe fn lle_read(off: usize) -> u32 { read_volatile((LLE_BASE + off) as *const u32) }
+unsafe fn lle_read(off: usize) -> u32 {
+    match off {
+        0x00 => BLE_BB.ctrl().read().0,
+        0x04 => BLE_BB.irq_ctrl().read(),
+        0x08 => BLE_BB.access_status().read(),
+        0x20 => BLE_BB.mode().read(),
+        0x2C => BLE_BB.cfg().read().0,
+        0x34 => BLE_BB.timing().read(),
+        0x38 => BLE_BB.statr().read().0,
+        0x80 => BLE_BB.dbg80().read(),
+        _ => core::hint::unreachable_unchecked(),
+    }
+}
 #[inline(always)]
-unsafe fn lle_write(off: usize, v: u32) { write_volatile((LLE_BASE + off) as *mut u32, v); }
+unsafe fn lle_write(off: usize, v: u32) {
+    match off {
+        0x00 => BLE_BB.ctrl().write_value(hal::pac::blebb::regs::Ctrl(v)),
+        0x04 => BLE_BB.irq_ctrl().write_value(v),
+        0x08 => BLE_BB.access_status().write_value(v),
+        0x20 => BLE_BB.mode().write_value(v),
+        0x2C => BLE_BB.cfg().write_value(hal::pac::blebb::regs::Cfg(v)),
+        0x34 => BLE_BB.timing().write_value(v),
+        0x38 => BLE_BB.statr().write_value(hal::pac::blebb::regs::Statr(v)),
+        0x80 => BLE_BB.dbg80().write_value(v),
+        _ => core::hint::unreachable_unchecked(),
+    }
+}
 #[inline(always)]
-unsafe fn bb_read(off: usize) -> u32 { read_volatile((BB_BASE + off) as *const u32) }
+unsafe fn bb_read(off: usize) -> u32 {
+    match off {
+        0x00 => BLE_LLE.ctrl().read().0,
+        0x04 => BLE_LLE.crc_init().read(),
+        0x08 => BLE_LLE.access_addr().read(),
+        0x0C => BLE_LLE.irq_mask().read(),
+        0x1C => BLE_LLE.state_machine().read().0,
+        0x38 => BLE_LLE.dbg38().read(),
+        0x40 => BLE_LLE.dbg40().read(),
+        0x44 => BLE_LLE.timing6().read(),
+        0x50 => BLE_LLE.settle().read(),
+        0x60 => BLE_LLE.dbg60().read(),
+        0x64 => BLE_LLE.timer().read(),
+        0x68 => BLE_LLE.dbg68().read(),
+        0x70 => BLE_LLE.tx_buf_ptr().read(),
+        0x74 => BLE_LLE.dma_buf().read(),
+        _ => core::hint::unreachable_unchecked(),
+    }
+}
 #[inline(always)]
-unsafe fn bb_write(off: usize, v: u32) { write_volatile((BB_BASE + off) as *mut u32, v); }
+unsafe fn bb_write(off: usize, v: u32) {
+    match off {
+        0x00 => BLE_LLE.ctrl().write_value(hal::pac::blelle::regs::Ctrl(v)),
+        0x04 => BLE_LLE.crc_init().write_value(v),
+        0x08 => BLE_LLE.access_addr().write_value(v),
+        0x0C => BLE_LLE.irq_mask().write_value(v),
+        0x1C => BLE_LLE.state_machine().write_value(hal::pac::blelle::regs::StateMachine(v)),
+        0x38 => BLE_LLE.dbg38().write_value(v),
+        0x40 => BLE_LLE.dbg40().write_value(v),
+        0x44 => BLE_LLE.timing6().write_value(v),
+        0x50 => BLE_LLE.settle().write_value(v),
+        0x60 => BLE_LLE.dbg60().write_value(v),
+        0x64 => BLE_LLE.timer().write_value(v),
+        0x68 => BLE_LLE.dbg68().write_value(v),
+        0x70 => BLE_LLE.tx_buf_ptr().write_value(v),
+        0x74 => BLE_LLE.dma_buf().write_value(v),
+        _ => core::hint::unreachable_unchecked(),
+    }
+}
 #[inline(always)]
-unsafe fn rfend_read(off: usize) -> u32 { read_volatile((RFEND_BASE + off) as *const u32) }
+unsafe fn rfend_read(off: usize) -> u32 {
+    match off {
+        0x04 => BLE_RFEND.cal_trig().read().0,
+        0x08 => BLE_RFEND.path_en().read().0,
+        0x0C => BLE_RFEND.ctrl().read(),
+        0x28 => BLE_RFEND.cfg0().read(),
+        0x2C => BLE_RFEND.pll_vco().read(),
+        0x30 => BLE_RFEND.loop_filter().read(),
+        0x38 => BLE_RFEND.cfg4().read(),
+        0x3C => BLE_RFEND.cfg5_freq().read().0,
+        0x44 => BLE_RFEND.pll_div().read().0,
+        0x48 => BLE_RFEND.rf0().read(),
+        0x4C => BLE_RFEND.rf1().read(),
+        0x50 => BLE_RFEND.rf2().read(),
+        0x54 => BLE_RFEND.rf2b().read(),
+        0x58 => BLE_RFEND.adc_ref().read(),
+        0x8C => BLE_RFEND.dbg8c().read(),
+        0x90 => BLE_RFEND.tune_result().read().0,
+        0x9C => BLE_RFEND.rx_filter_result().read(),
+        _ => core::hint::unreachable_unchecked(),
+    }
+}
 #[inline(always)]
-unsafe fn rfend_write(off: usize, v: u32) { write_volatile((RFEND_BASE + off) as *mut u32, v); }
+unsafe fn rfend_write(off: usize, v: u32) {
+    match off {
+        0x04 => BLE_RFEND.cal_trig().write_value(hal::pac::blerfend::regs::CalTrig(v)),
+        0x08 => BLE_RFEND.path_en().write_value(hal::pac::blerfend::regs::PathEn(v)),
+        0x0C => BLE_RFEND.ctrl().write_value(v),
+        0x28 => BLE_RFEND.cfg0().write_value(v),
+        0x2C => BLE_RFEND.pll_vco().write_value(v),
+        0x30 => BLE_RFEND.loop_filter().write_value(v),
+        0x38 => BLE_RFEND.cfg4().write_value(v),
+        0x3C => BLE_RFEND.cfg5_freq().write_value(hal::pac::blerfend::regs::Cfg5Freq(v)),
+        0x44 => BLE_RFEND.pll_div().write_value(hal::pac::blerfend::regs::PllDiv(v)),
+        0x48 => BLE_RFEND.rf0().write_value(v),
+        0x4C => BLE_RFEND.rf1().write_value(v),
+        0x50 => BLE_RFEND.rf2().write_value(v),
+        0x54 => BLE_RFEND.rf2b().write_value(v),
+        0x58 => BLE_RFEND.adc_ref().write_value(v),
+        0x8C => BLE_RFEND.dbg8c().write_value(v),
+        0x90 => BLE_RFEND.tune_result().write_value(hal::pac::blerfend::regs::TuneResult(v)),
+        0x9C => BLE_RFEND.rx_filter_result().write_value(v),
+        _ => core::hint::unreachable_unchecked(),
+    }
+}
 
 unsafe fn write_ll_u8(base: *mut u8, off: usize, v: u8) {
     write_volatile(base.add(off), v);
