@@ -28,3 +28,8 @@ embedded-storage = "0.3.1"
 strip = false   # symbols are not flashed to the microcontroller, so don't strip them.
 lto = true
 opt-level = "z" # Optimize for size.
+
+# Local ch32-metapac (built from ch32-rs/ch32-data working tree). Used while
+# integrating CH32V208 BLE peripheral metadata before the ch32-data MR lands.
+[patch."https://github.com/ch32-rs/ch32-metapac"]
+ch32-metapac = { path = "../../../ch32-data/build/ch32-metapac" }
