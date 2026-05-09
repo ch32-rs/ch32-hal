@@ -1,5 +1,7 @@
 //! Inter-Integrated-Circuit (I2C)
 
+pub mod slave;
+
 use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
@@ -155,8 +157,18 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
         T::set_remap(REMAP);
 
-        scl.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
-        sda.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
+        // On CH32X0, I2C pins are automatically set to open-drain by hardware.
+        // On other families, use OutputOpenDrain.
+        #[cfg(not(gpio_x0))]
+        {
+            scl.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
+            sda.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
+        }
+        #[cfg(gpio_x0)]
+        {
+            scl.set_as_af_output(AFType::OutputPushPull, Speed::High);
+            sda.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        }
 
         unsafe { T::EventInterrupt::enable() };
         unsafe { T::ErrorInterrupt::enable() };
