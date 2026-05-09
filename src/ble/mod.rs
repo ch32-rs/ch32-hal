@@ -242,17 +242,17 @@ pub unsafe fn ble_ip_core_init() {
     //   - B1-only: 0x420B000A is the ROM fn address for CH32V208WBU6 B1 silicon.
     //     Other silicon revisions may use a different address (not yet verified).
     const ROM_RTC_TICK_FN: u32 = 0x420B_000A; // B1 silicon ROM internal tick fn
-    // Write 1: symbol-resolved address (user-side PCREL consumers, e.g. bb.rs .L7
-    // which reads via `addr_of!(fnGetClockCBs)`).
+    // Phase 2c (2026-05-09): single symbol-resolved write is sufficient for the
+    // frozen binary path. ROM IRQ reads absolute 0x20001c78 as fn ptr but is
+    // NULL-tolerant: NULL → ROM internal fallback (= 0x420B000A); non-NULL valid →
+    // jalr. For frozen layout the symbol naturally lands at/covers 0x20001c78, so
+    // this write simultaneously satisfies both userland PCREL consumers (bb.rs .L7)
+    // and the ROM IRQ absolute-read path. Iron Law #38 three-condition gate verified
+    // (Step B d056863, 2026-05-09): warm cba=43 / power-cycle cba=32 /
+    // scrub-0xDEADBEEF-then-reset cba=54, all PASS with 0x20001c78=NULL.
+    // NOTE: minimal binary path (_ebss=0x200007c4, 0x20001c78 not BSS-covered) needs
+    // separate treatment; out of scope for task #56 (frozen-only).
     write_volatile(addr_of_mut!(fnGetClockCBs), ROM_RTC_TICK_FN);
-    // Write 2: absolute physical address 0x20001c78 (ROM/hardware consumers that
-    // read this RAM word directly, independent of where the Rust symbol lands).
-    // Needed when fnGetClockCBs symbol BSS address ≠ 0x20001c78 (e.g. minimal binary
-    // where symbol is at 0x200007c0 and _ebss=0x200007c4, leaving 0x20001c78 as SRAM
-    // residue). When the symbol IS at 0x20001c78 (frozen binary), this is a no-op.
-    // Phase 2c gate (2026-05-09): if this write enables both frozen and minimal to
-    // PASS, ROM has a physical-address read path at 0x20001c78 (confirmed).
-    write_volatile(0x2000_1c78 as *mut u32, ROM_RTC_TICK_FN);
     debug_assert_eq!(
         core::ptr::read_volatile(core::ptr::addr_of!(fnGetClockCBs)),
         ROM_RTC_TICK_FN,

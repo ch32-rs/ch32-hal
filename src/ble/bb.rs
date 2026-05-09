@@ -131,10 +131,11 @@ pub unsafe fn bb_dev_init(rf_flag: u8) {
 /// * `gBleIPPara[0]` = 0x60 (bit5 + bit6) — written by ADV TX setup
 ///   (Iron Law #27, v7-probe). Both bit-5 and bit-6 paths fire on every BB IRQ:
 ///   bit-5 commits the scan-mode TX arm (0x8000 → WCH_LLER+0x08 etc.); bit-6
-///   reads `fnGetClockCBs` (B1 silicon: ROM auto-installs an RTC-derived 1600 Hz
-///   counter fn at 0x420B000A; this is the canonical `pfnGetSysClock` of WCH's
-///   `TMOS_TimerInit` API per the BLE manual — returns a u32 counter in units of
-///   625 µs, where 1600 = 1 s) and stores the result at `gBleIPPara[0x1c]` for
+///   reads `fnGetClockCBs` (B1 silicon: `ble_ip_core_init` Phase 2c Step 1
+///   explicitly writes `0x420B_000A` = ROM `clockGetHSEValue` into this slot;
+///   this is the canonical `pfnGetSysClock` of WCH's `TMOS_TimerInit` API per
+///   the BLE manual — returns a u32 counter in units of 625 µs, where 1600 = 1 s)
+///   and stores the result at `gBleIPPara[0x1c]` for
 ///   the BLE scheduler timing math.  ⚠ Iron Law #38: any change to the value
 ///   flowing into ip+0x1c must pass a 30 s air-visible cba ≥ 5 hardware gate
 ///   before commit AND match the 1600 Hz / 625 µs frequency contract.
@@ -180,7 +181,8 @@ pub unsafe fn bb_irq_lib_handler() {
         // BLE scheduler.  The slot's contract (per WCH BLE manual,
         // TMOS_TimerInit / TMOS_GetSystemClock): returns a u32 counter in units
         // of 625 µs, where 1600 = 1 s — i.e. an RTC-derived 1600 Hz counter
-        // (B1 silicon: ROM auto-installs 0x420B000A which honours this).
+        // (Phase 2c Step 1: ble_ip_core_init explicitly writes 0x420B000A which
+        // honours this; ROM does NOT auto-install — baf71de gate falsified that).
         // Iron Law #38: do NOT swap the fn for any other clock source unless it
         // matches the 1600 Hz / 625 µs frequency contract — task #56 v5
         // regression proved RISC-V `cycle` CSR (~96 MHz) is 60,000× off → the
