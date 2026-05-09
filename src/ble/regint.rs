@@ -6,10 +6,11 @@
 //   3. RFEND_RXFilter — RX filter self-calibration with hardware poll
 //   4. RFEND_RXAdc    — RX ADC reference configuration
 //
-// Register base: 0x40025000 (gptrRFENDReg) — SAME block used by rfend.rs RFEND_DevInit.
-// rfend.rs configures the analog registers (PLL/VCO/loop-filter/bias offsets +0x28..+0x5C);
-// this file triggers calibration (+0x04) and reads calibration results (+0x90..+0xD0).
-// Both files operate on the same 0x40025000 hardware block — they are not separate regions.
+// Register block: `BLE_RFEND` (gptrRFENDReg) at 0x40025000 — SAME block used by
+// rfend.rs RFEND_DevInit. rfend.rs configures the analog registers (PLL/VCO/loop
+// filter/bias offsets +0x28..+0x5C); this file triggers calibration (+0x04) and
+// reads calibration results (+0x90..+0xD0). Both files operate on the same
+// 0x40025000 hardware block — they are not separate regions.
 //
 // Confirmed by ip.o BLE_IPCoreInit reloc: `lui a4, 0x40025` → *gptrRFENDReg=0x40025000.
 // Also confirmed by wlink dump after running official dtm.elf:
@@ -17,55 +18,50 @@
 //
 // Register intent map (from disassembly of libwchble.a V1.40, confirmed):
 //   +0x04  bits: bit0=TX_tune_trigger, bit4=TX_cal_mode, bit8=TXF_enable,
-//                bit12=RX_filter_mode, bit16=RX_ADC_config
+//                bit12=RX_filter_mode, bit16=RX_ADC_config            [cal_trig]
 //   +0x08  bits: bit16=RX_ADC_path, bit17=TX_cal_path, bit21=RX_filter_path
-//   +0x0C  bits: bit4=RX_filter_strobe, bit8=ADC_ref_strobe
-//   +0x28  bits: bit12=TX_tune_mode_final (set after calibration completes)
-//   +0x2C  bits: bit4=post_cal_enable
-//   +0x38  bits[15:8]=freq_code, bits[5:0]=nCO2440, bits[30:24]=nGA2440
-//   +0x50  bits: bit16=RX_filter_valid, bits[4:0]=RX_filter_result
-//   +0x58  bits: bit16=RX_ADC_ref_enable
-//   +0x90  bits: bits[5:0]=CO_result, bit25=tune_done, bit26=tune_active
-//   +0x94  bits[16:10]: GA_result (7 bits)
-//   +0x9C  bits: bit8=RX_filter_done, bits[4:0]=RX_filter_result
-//   +0xA0..0xB0: CO calibration table 1 (nibble-packed, 40 channels, ch0→ch39)
-//   +0xB4..0xC4: CO calibration table 2 (nibble-packed, 40 channels, ch0→ch39)
-//   +0xC8..0xD0: GA calibration + CO2 overflow
+//                bits[20]=TX_PLL_pre, bits[21]=RX_PLL_pre              [path_en]
+//   +0x0C  bits: bit4=RX_filter_strobe, bit8=ADC_ref_strobe            [ctrl]
+//   +0x28  bits: bit12=TX_tune_mode_final (set after calibration completes) [cfg0]
+//   +0x2C  bits: bit4=post_cal_enable                                 [pll_vco]
+//   +0x38  bits[15:8]=freq_code, bits[5:0]=nCO2440, bits[30:24]=nGA2440 [cfg4]
+//          (also rfend.rs writes PLL-enable bits[25:19]+bit20+bit31 here — same reg)
+//   +0x50  bits: bit16=RX_filter_valid, bits[4:0]=RX_filter_result    [rf2]
+//   +0x58  bits: bit16=RX_ADC_ref_enable                              [adc_ref]
+//   +0x90  bits: bits[5:0]=CO_result, bit25=tune_done, bit26=tune_active [tune_result]
+//   +0x94  bits[16:10]: GA_result (7 bits)                            [ga_result]
+//   +0x9C  bits: bit8=RX_filter_done, bits[4:0]=RX_filter_result      [rx_filter_result]
+//   +0xA0..0xB0: CO calibration table 1 (nibble-packed, 40 channels)  [co_table1]
+//   +0xB4..0xC4: CO calibration table 2 (nibble-packed, 40 channels)  [co_table2]
+//   +0xC8..0xD0: GA calibration + CO2 overflow                        [ga_table]
+//
+// 2026-05-09: migrated from raw `read_volatile/write_volatile` to typed
+// `BLE_BB / BLE_LLE / BLE_RFEND` accessors against the new ch32-metapac BLE
+// blocks. Bit patterns preserved exactly; semantics unchanged. Iron Law #38
+// hardware-gated.
+//
+// Metapac caveat (filed for future ch32-data MR): the YAML labels +0x38 as
+// `cfg4` (PLL enable bits[25:19]) with no fieldset and +0x3C as `cfg5_freq`
+// with FREQ_CODE / NCO2440 / NGA2440 fields. Disassembly of the working DTM
+// build (tx_tune_measure: `lw 56(a5)` / `sw 56(a5)` where `a5=0x40025000`)
+// proves freq_code is actually written to +0x38. Both rfend.rs PLL-enable
+// writes AND regint.rs freq_code writes target the same physical register at
+// +0x38. We therefore manipulate `cfg4()` as a raw u32 here; the metapac
+// `cfg5_freq` named accessors at +0x3C are NOT used (they would touch the
+// wrong register). Future MR should rename `cfg4` → e.g. `cfg4_freq` with
+// FREQ_CODE/NCO2440/NGA2440 fields, and `cfg5_freq` → `cfg5_strobe` (raw u32).
 //
 // Sources: static disassembly of dtm.elf (WCH BLE SDK V1.40), live register dump.
 
 use core::arch::asm;
-use core::ptr::{read_volatile, write_volatile};
 
-// gptrRFENDReg: PA bias, PLL, calibration trigger, tables.
-// SAME block as RFEND_BASE in rfend.rs (both = 0x40025000 = gptrRFENDReg).
-const RFEND_CAL_BASE: usize = 0x40025000;
-// gptrLLEReg: provides LLE+0x64 countdown register for calibration timeouts.
-const LLE_BASE: usize = 0x40024200;
-// gptrBBReg: link-layer CTRL/GO. Used by BLE_RegInit pre/post-init analog-gate writes.
-// Confirmed by relocation decode of ip.o (BLE_RegInit s4 = gptrBBReg).
-const BB_BASE_REG: usize = 0x40024100;
+use crate::pac::{BLE_BB, BLE_LLE, BLE_RFEND};
 
-// Frequency selection codes written to RFEND_CAL_BASE+0x38 bits[15:8].
+// Frequency selection codes written to BLE_RFEND.cfg4() bits[15:8].
 // Confirmed from BB_DevInit / RF_DevSetChannel disassembly.
 const FREQ_CODE_2401: u32 = 0xBF00; // one step below BLE ch0 (2402 MHz)
 const FREQ_CODE_2480: u32 = 0xE700; // BLE ch39
 const FREQ_CODE_2440: u32 = 0xD300; // BLE ch19, band midpoint
-
-#[inline(always)]
-unsafe fn r(off: usize) -> u32 {
-    read_volatile((RFEND_CAL_BASE + off) as *const u32)
-}
-
-#[inline(always)]
-unsafe fn w(off: usize, val: u32) {
-    write_volatile((RFEND_CAL_BASE + off) as *mut u32, val);
-}
-
-#[inline(always)]
-unsafe fn rmw(off: usize, clear: u32, set: u32) {
-    w(off, (r(off) & !clear) | set);
-}
 
 /// Run all 4 RF calibration routines in the order used by BLE_RegInit.
 ///
@@ -73,16 +69,8 @@ unsafe fn rmw(off: usize, clear: u32, set: u32) {
 /// Calibrates TX carrier, TX filter, RX filter, and RX ADC for the current temperature.
 ///
 /// # Safety
-/// Requires the RFEND/LLE peripherals to be initialized and accessible.
-/// RMW helper for BB_BASE (gptrBBReg = 0x40024100).
-/// Used by BLE_RegInit pre/post-init: WCH's +0x00 writes go to BB+0x00, NOT RFEND_CAL+0x00.
-/// Confirmed by ip.o relocation decode: BLE_RegInit s4 = gptrBBReg (2026-05-01, Lucy).
-#[inline(always)]
-unsafe fn bb_rmw(off: usize, clear: u32, set: u32) {
-    let p = (BB_BASE_REG + off) as *mut u32;
-    write_volatile(p, (read_volatile(p as *const u32) & !clear) | set);
-}
-
+/// Requires the RFEND/LLE/BB peripherals to be initialized and accessible.
+///
 /// If `skip_phase_b_rx_clears` is `true`, the two extra post-calibration clears that
 /// were added for the Phase B RX path (Bug #2: RFEND+0x08 bit16, Bug #3: RFEND+0x04
 /// bits 8+12) are omitted, matching the lib BLE_RegInit behavior exactly.
@@ -95,27 +83,34 @@ pub unsafe fn ble_reg_init(skip_phase_b_rx_clears: bool) {
     // Saves and clears LLE+0x0C (interrupt/DMA mask) for the duration of calibration.
     // "delay(13)" = call to phy_status_clear(13) which is a no-op in standalone DTM
     // (LLE+0x00 & 3 == 0 → immediate return). No actual wait needed.
-    let lle_0c = (LLE_BASE + 0x0C) as *mut u32;
-    let lle_0c_saved = read_volatile(lle_0c);
-    write_volatile(lle_0c, 0);
-    core::arch::asm!("fence.i");
+    let lle_0c_saved = BLE_LLE.irq_mask().read();
+    BLE_LLE.irq_mask().write_value(0);
+    asm!("fence.i");
     // Brief settle (200k iters) — semantically irrelevant (phy_status_clear is no-op here)
     // but retains ordering margin for any analog settle.
-    for _ in 0..200_000u32 { core::hint::spin_loop(); }
+    for _ in 0..200_000u32 {
+        core::hint::spin_loop();
+    }
 
     // ── Pre-init: analog enable (WCH BLE_RegInit L71150-71168, ip.o reloc confirmed) ──
     //
-    // +0x00 writes go to BB_BASE (gptrBBReg = 0x40024100), NOT RFEND_CAL+0x00.
+    // BB+0x00 writes go to gptrBBReg = 0x40024100 (NOT RFEND_CAL+0x00).
     // Confirmed by ip.o objdump -d -r: s4 register = gptrBBReg, used for +0x00 RMWs.
-    bb_rmw(0x00, 0x3000, 0x1000); // BB+0x00: clear bits[13:12], set bit12
-    bb_rmw(0x00, 0x0180, 0);      // BB+0x00: clear bits[8:7]
-    bb_rmw(0x00, 0,      0x0100); // BB+0x00: set bit8
+    // Use raw u32 (`w.0`) on Ctrl fieldset because bit13 is outside the named fields.
+    BLE_BB.ctrl().modify(|w| w.0 = (w.0 & !0x3000) | 0x1000); // clear bits[13:12], set bit12
+    BLE_BB.ctrl().modify(|w| w.0 &= !0x0180);                  // clear bits[8:7]
+    BLE_BB.ctrl().modify(|w| w.0 |= 0x0100);                    // set bit8
     //
-    // +0x08 write goes to RFEND_CAL+0x08 (gptrRFENDReg = 0x40025000, s2 in asm).
-    rmw(0x08, 0, 0x0033_0000);    // RFEND_CAL+0x08: enable TX/RX PLL (bits 21+20+17+16)
+    // RFEND+0x08: enable TX/RX PLL paths (bits 21+20+17+16 = 0x0033_0000).
+    BLE_RFEND.path_en().modify(|w| {
+        w.set_rx_adc_path(true);
+        w.set_tx_cal_path(true);
+        w.set_tx_pll_pre(true);
+        w.set_rx_filter_path(true);
+    });
     //
-    // LLE+0x50 = 93 (settle timer, s1 = gptrLLEReg = 0x40024200).
-    write_volatile((LLE_BASE + 0x50) as *mut u32, 93);
+    // LLE+0x50 = 93 (settle timer).
+    BLE_LLE.settle().write_value(93);
 
     // ── 4 calibration routines (WCH BLE_RegInit L71169-71176) ───────────────────
     rfend_tx_ctune();
@@ -124,8 +119,10 @@ pub unsafe fn ble_reg_init(skip_phase_b_rx_clears: bool) {
     rfend_rx_adc();
 
     // ── Post-cleanup (WCH BLE_RegInit L71177-71192, ip.o reloc confirmed) ────────
-    bb_rmw(0x00, 0x0180, 0x0080);      // BB+0x00: clear bits[8:7], set bit7
-    rmw(0x08, 0x0032_0000, 0);         // RFEND_CAL+0x08: clear bits 21+20+17 (WCH 0xFFCDFFFF)
+    BLE_BB.ctrl().modify(|w| w.0 = (w.0 & !0x0180) | 0x0080); // clear bits[8:7], set bit7
+    BLE_RFEND
+        .path_en()
+        .modify(|w| w.0 &= !0x0032_0000); // clear bits 21+20+17 (WCH 0xFFCDFFFF)
     // Bug #2 fix: clear bit16 (RX_ADC path enable, set by rfend_rx_adc, not cleared before).
     // Phase B diff: our 0x000119f8 vs EVT 0x000019f8 — bit16 should not remain set post-cal.
     // Bug #3 fix: clear bits 8+12 (TXF_enable + RX_filter_mode, set during cal, never cleared).
@@ -135,11 +132,14 @@ pub unsafe fn ble_reg_init(skip_phase_b_rx_clears: bool) {
     // for the Phase B RX listener but HARMFUL for ADV TX (Tier 3 regression confirmed).
     // Skip when skip_phase_b_rx_clears=true (ADV TX / ble_ip_core_init path).
     if !skip_phase_b_rx_clears {
-        rmw(0x08, 1 << 16, 0);             // RFEND_CAL+0x08: clear bit16 (RX_ADC path)
-        rmw(0x04, (1 << 8) | (1 << 12), 0); // RFEND_CAL+0x04: clear bit8 (TXF) + bit12 (RX_filter)
+        BLE_RFEND.path_en().modify(|w| w.set_rx_adc_path(false)); // clear bit16
+        BLE_RFEND.cal_trig().modify(|w| {
+            w.set_txf_enable(false);
+            w.set_rx_filter_mode(false);
+        });
     }
-    write_volatile((LLE_BASE + 0x50) as *mut u32, 0); // LLE+0x50 = 0
-    write_volatile(lle_0c, lle_0c_saved); // restore LLE+0x0C
+    BLE_LLE.settle().write_value(0);
+    BLE_LLE.irq_mask().write_value(lle_0c_saved); // restore LLE+0x0C
 }
 
 /// RFEND_TXCtune: TX carrier oscillator + gain calibration.
@@ -157,12 +157,12 @@ pub unsafe fn ble_reg_init(skip_phase_b_rx_clears: bool) {
 /// After calibration, RFEND+0x38 bits[5:0] = nCO2440, bits[30:24] = nGA2440.
 unsafe fn rfend_tx_ctune() {
     // Setup: clear calibration-mode bits, enable TX cal path.
-    rmw(0x04, 1 << 8, 0);   // clear bit8 (TXF enable off during CO tune)
-    rmw(0x28, 1 << 12, 0);  // clear bit12 (TX tune mode not yet final)
-    rmw(0x2C, 1 << 4, 0);   // clear bit4 (post_cal_enable) — WCH asm: andi a4,a4,-17 (mask 0xFFFFFFEF)
-                              // BUG FIXED: was `0xF` (bits[3:0]) — wrong, matches WCH L75733-36
-    rmw(0x08, 0, 1 << 17);  // set bit17 (TX calibration path enable) — Lucy confirmed: WCH L75738 writes ONLY bit17
-    rmw(0x04, 0, 1 << 4);   // set bit4 (TX calibration mode)
+    BLE_RFEND.cal_trig().modify(|w| w.set_txf_enable(false)); // clear bit8 (TXF off during CO tune)
+    BLE_RFEND.cfg0().modify(|w| *w &= !(1 << 12)); // clear bit12 (TX tune mode not yet final)
+    BLE_RFEND.pll_vco().modify(|w| *w &= !(1 << 4)); // clear bit4 (post_cal_enable)
+                                                     // BUG FIXED: was `0xF` (bits[3:0]) — wrong, matches WCH L75733-36
+    BLE_RFEND.path_en().modify(|w| w.set_tx_cal_path(true)); // set bit17 (TX cal path) — Lucy: WCH L75738
+    BLE_RFEND.cal_trig().modify(|w| w.set_tx_cal_mode(true)); // set bit4 (TX calibration mode)
 
     let (nco2401, nga2401, w2401) = tx_tune_measure(FREQ_CODE_2401);
     let (nco2480, nga2480, w2480) = tx_tune_measure(FREQ_CODE_2480);
@@ -171,9 +171,15 @@ unsafe fn rfend_tx_ctune() {
     // Calibration result summary (w=u32::MAX means timeout; w=0 may indicate stale state).
     crate::println!(
         "rfend_tune: 2401 co={} ga={} w={} | 2480 co={} ga={} w={} | 2440 co={} ga={} w={}",
-        nco2401, nga2401, w2401,
-        nco2480, nga2480, w2480,
-        nco2440, nga2440, w2440,
+        nco2401,
+        nga2401,
+        w2401,
+        nco2480,
+        nga2480,
+        w2480,
+        nco2440,
+        nga2440,
+        w2440,
     );
 
     // CO table 1 (RFEND+0xA0..0xB0, 5 words, 40 nibbles for ch0..ch39).
@@ -183,7 +189,8 @@ unsafe fn rfend_tx_ctune() {
     let delta_low = nco2401 as i32 - nco2440 as i32;
     debug_assert!(
         (-8..=7).contains(&delta_low),
-        "delta_low={} out of 4-bit signed range; CO1 nibbles will wrap", delta_low
+        "delta_low={} out of 4-bit signed range; CO1 nibbles will wrap",
+        delta_low
     );
     for word in 0..5usize {
         let mut word_val = 0u32;
@@ -192,7 +199,7 @@ unsafe fn rfend_tx_ctune() {
             let nibble = ((delta_low * (39 - ch as i32) / 39) & 0xF) as u32;
             word_val |= nibble << (i * 4);
         }
-        w(0xA0 + word * 4, word_val);
+        BLE_RFEND.co_table1(word).write_value(word_val);
     }
 
     // CO table 2 (RFEND+0xB4..0xC4, 5 words, 40 nibbles for ch0..ch39).
@@ -202,7 +209,8 @@ unsafe fn rfend_tx_ctune() {
     let delta_high = nco2440 as i32 - nco2480 as i32;
     debug_assert!(
         (-8..=7).contains(&delta_high),
-        "delta_high={} out of 4-bit signed range; CO2 nibbles will wrap", delta_high
+        "delta_high={} out of 4-bit signed range; CO2 nibbles will wrap",
+        delta_high
     );
     for word in 0..5usize {
         let mut word_val = 0u32;
@@ -211,14 +219,16 @@ unsafe fn rfend_tx_ctune() {
             let nibble = ((delta_high * (ch as i32 + 1) / 40) & 0xF) as u32;
             word_val |= nibble << (i * 4);
         }
-        w(0xB4 + word * 4, word_val);
+        BLE_RFEND.co_table2(word).write_value(word_val);
     }
 
-    // CO2 overflow at RFEND+0xC8 nibbles 0-1 (ch40, ch41 for guard-band use).
+    // CO2 overflow at RFEND+0xC8 (= ga_table[0]) nibbles 0-1 (ch40, ch41 for guard band).
     let co2_ch40 = ((delta_high * 41 / 40) & 0xF) as u32;
     let co2_ch41 = ((delta_high * 42 / 40) & 0xF) as u32;
-    let prev_c8 = r(0xC8);
-    w(0xC8, (prev_c8 & !0xFF) | co2_ch40 | (co2_ch41 << 4));
+    let prev_c8 = BLE_RFEND.ga_table(0).read();
+    BLE_RFEND
+        .ga_table(0)
+        .write_value((prev_c8 & !0xFF) | co2_ch40 | (co2_ch41 << 4));
 
     // GA calibration tables (skipped if either CO delta is zero — degenerate hardware).
     // GA1 (0xC8 nibbles 2-7, 0xCC nibbles 0-3): GA1[n] = (delta_ga*(10-n)/delta_high|8)&0xF
@@ -239,23 +249,24 @@ unsafe fn rfend_tx_ctune() {
         #[cfg(feature = "defmt")]
         defmt::warn!(
             "rfend_tx_ctune: skipping GA cal (delta_high={} delta_low={})",
-            delta_high, delta_low
+            delta_high,
+            delta_low
         );
     } else {
-        // 0xC8 nibbles 2-7: GA1[0..5], preserving CO2 overflow in nibbles 0-1.
+        // 0xC8 (ga_table[0]) nibbles 2-7: GA1[0..5], preserving CO2 overflow in nibbles 0-1.
         {
-            let mut v = r(0xC8);
+            let mut v = BLE_RFEND.ga_table(0).read();
             for n in 0..6usize {
                 let nib = ((delta_ga * (10 - n as i32) / delta_high | 8) & 0xF) as u32;
                 let pos = (n + 2) * 4;
                 v = (v & !(0xF << pos)) | (nib << pos);
             }
-            w(0xC8, v);
+            BLE_RFEND.ga_table(0).write_value(v);
         }
-        // 0xCC: GA1[6..9] at nibbles 0-3, separator at nibble4, GA2[0..2] at nibbles 5-7.
-        // 0xD0: GA2[3..9] at nibbles 0-6, nibble7 cleared.
+        // 0xCC (ga_table[1]): GA1[6..9] at nibbles 0-3, separator at nibble4, GA2[0..2] at nibbles 5-7.
+        // 0xD0 (ga_table[2]): GA2[3..9] at nibbles 0-6, nibble7 cleared.
         {
-            let mut v = r(0xCC);
+            let mut v = BLE_RFEND.ga_table(1).read();
             for n in 0..4usize {
                 let nib = ((delta_ga * (4 - n as i32) / delta_high | 8) & 0xF) as u32;
                 v = (v & !(0xF << (n * 4))) | (nib << (n * 4));
@@ -268,9 +279,9 @@ unsafe fn rfend_tx_ctune() {
                 let nib = (raw & 0xF) as u32;
                 v = (v & !(0xF << ((n + 5) * 4))) | (nib << ((n + 5) * 4));
             }
-            w(0xCC, v);
+            BLE_RFEND.ga_table(1).write_value(v);
 
-            let mut v = r(0xD0);
+            let mut v = BLE_RFEND.ga_table(2).read();
             for n in 0..7usize {
                 let raw = delta_ga2 * (n as i32 + 4) / delta_low;
                 debug_assert!((0..=7).contains(&raw), "GA2 nibble out of range: {}", raw);
@@ -278,21 +289,26 @@ unsafe fn rfend_tx_ctune() {
                 v = (v & !(0xF << (n * 4))) | (nib << (n * 4));
             }
             v &= !(0xF << 28); // nibble7 = 0
-            w(0xD0, v);
+            BLE_RFEND.ga_table(2).write_value(v);
         }
     }
 
     // Teardown: clear calibration mode, switch to operational state.
-    rmw(0x04, (1 << 4) | 1, 0); // clear bit4 (TX_cal_mode) and bit0 (trigger)
-    rmw(0x28, 0, 1 << 12);       // set bit12 (TX_tune_mode_final)
-    rmw(0x2C, 0, 1 << 4);        // set bit4 (post_cal_enable)
+    BLE_RFEND.cal_trig().modify(|w| {
+        w.set_tx_cal_mode(false); // clear bit4
+        w.set_tx_tune_trigger(false); // clear bit0
+    });
+    BLE_RFEND.cfg0().modify(|w| *w |= 1 << 12); // set bit12 (TX_tune_mode_final)
+    BLE_RFEND.pll_vco().modify(|w| *w |= 1 << 4); // set bit4 (post_cal_enable)
 
-    // Store calibration anchors: nCO2440 in bits[5:0], nGA2440 in bits[30:24].
+    // Store calibration anchors at RFEND+0x38 (`cfg4` per metapac, but actually
+    // the FREQ_CODE/NCO/NGA register per disassembly): bits[5:0] = nco2440,
+    // bits[30:24] = nga2440. Preserve bit31 (rfend.rs PLL enable).
     // Hardware reads RFEND+0x38 on every TX burst for default channel compensation.
-    let v = r(0x38);
+    let v = BLE_RFEND.cfg4().read();
     let v = (v & !0x3F) | (nco2440 as u32 & 0x3F);
     let v = (v & 0x80FF_FFFF) | ((nga2440 as u32 & 0x7F) << 24);
-    w(0x38, v);
+    BLE_RFEND.cfg4().write_value(v);
 }
 
 /// Perform one TX tune measurement at the given frequency code.
@@ -301,22 +317,28 @@ unsafe fn rfend_tx_ctune() {
 /// number of spin iterations until bits[26:25] of RFEND+0x90 were both set.
 /// `wait_iters == u32::MAX` signals a timeout (bits never became set).
 ///
-/// Trigger: bit0 of RFEND_CAL+0x04 (TX_tune_trigger) deassert → assert pulse.
+/// Trigger: bit0 of RFEND+0x04 (TX_tune_trigger) deassert → assert pulse.
 /// Requires the pre-init analog enable in ble_reg_init() to have run first:
-/// without `RFEND_CAL+0x08 |= 0x0033_0000` the PLL analog path is unpowered
+/// without `RFEND+0x08 |= 0x0033_0000` the PLL analog path is unpowered
 /// and the trigger pulse has no effect (confirmed 2026-05-01).
-///
 #[inline]
 unsafe fn tx_tune_measure(freq_code: u32) -> (u8, u8, u32) {
-    rmw(0x04, 1, 0); // deassert trigger (bit0 of +0x04)
-    let v = r(0x38);
-    w(0x38, (v & 0xFFFE_00FF) | freq_code); // bits[15:8] ← freq code
-    rmw(0x04, 0, 1); // assert trigger (bit0) → PLL starts measurement
+    BLE_RFEND.cal_trig().modify(|w| w.set_tx_tune_trigger(false)); // deassert trigger
+    // Set freq_code in bits[15:8] of cfg4 (= RFEND+0x38, the FREQ_CODE/NCO/NGA register).
+    // Mask 0xFFFE_00FF preserves all bits except bits[16:8] — note the existing
+    // pre-migration code also cleared bit16 here (intentional or harmless): we keep
+    // the same bit-pattern for semantic equivalence.
+    let v = BLE_RFEND.cfg4().read();
+    BLE_RFEND.cfg4().write_value((v & 0xFFFE_00FF) | freq_code);
+    BLE_RFEND.cal_trig().modify(|w| w.set_tx_tune_trigger(true)); // assert trigger → PLL starts measurement
 
     let iters = rfend_wait_tune();
 
-    let co = (r(0x90) & 0x3F) as u8;        // bits[5:0]
-    let ga = ((r(0x94) >> 10) & 0x7F) as u8; // bits[16:10]
+    // Reading +0x90 (tune_result) latches GA into +0x94 (ga_result) per WCH read-side-effect.
+    // rfend_wait_tune already performed several reads of +0x90 in the polling loop, so the
+    // final read here is consistent with the post-lock measurement.
+    let co = BLE_RFEND.tune_result().read().co(); // bits[5:0]
+    let ga = ((BLE_RFEND.ga_result().read() >> 10) & 0x7F) as u8; // bits[16:10]
     (co, ga, iters)
 }
 
@@ -354,24 +376,28 @@ unsafe fn tx_tune_measure(freq_code: u32) -> (u8, u8, u32) {
 unsafe fn rfend_wait_tune() -> u32 {
     // Arm LLE+0x64 countdown = 6000. Matches lib RFEND_WaitTune entry.
     // Side-effect: clears stale bits[26:25] in RFEND+0x90 from the previous measurement.
-    write_volatile((LLE_BASE + 0x64) as *mut u32, 6000);
+    BLE_LLE.timer().write_value(6000);
 
     let mut i = 0u32;
     loop {
-        let s = r(0x90); // reading +0x90 latches GA into +0x94 (WCH read-side-effect)
-        if s & (1 << 26) != 0 {
-            let s2 = r(0x90); // WCH double-checks bit26 then bit25
-            if s2 & (1 << 25) != 0 {
+        // Reading +0x90 latches GA into +0x94 (WCH read-side-effect).
+        let s = BLE_RFEND.tune_result().read();
+        if s.tune_active() {
+            // WCH double-checks bit26 then bit25.
+            let s2 = BLE_RFEND.tune_result().read();
+            if s2.tune_done() {
                 return i;
             }
         }
         // Lib loop condition: LLE+0x64 hardware countdown (matches RFEND_WaitTune control flow).
         // In standalone mode, LLE+0x64 does not decrement — this path is a safety net.
-        if read_volatile((LLE_BASE + 0x64) as *const u32) == 0 {
+        if BLE_LLE.timer().read() == 0 {
             return u32::MAX; // hw countdown expired
         }
         i = i.wrapping_add(1);
-        if i >= 300_000 { return u32::MAX; } // SW safety cap
+        if i >= 300_000 {
+            return u32::MAX; // SW safety cap
+        }
     }
 }
 
@@ -380,7 +406,7 @@ unsafe fn rfend_wait_tune() -> u32 {
 /// Trivial: set bit8 of RFEND+0x04 (TXF_enable).
 /// From RFEND_TXFtune() at 0xf8c2 in dtm.elf.
 unsafe fn rfend_tx_ftune() {
-    rmw(0x04, 0, 1 << 8);
+    BLE_RFEND.cal_trig().modify(|w| w.set_txf_enable(true));
 }
 
 /// RFEND_RXFilter: RX filter self-calibration.
@@ -391,20 +417,23 @@ unsafe fn rfend_tx_ftune() {
 /// still operate but with uncompensated filter offset.
 /// From RFEND_RXFilter() at 0xead4 in dtm.elf.
 unsafe fn rfend_rx_filter() {
-    rmw(0x50, 1 << 16, 0);          // clear bit16 (RX_filter_valid)
-    rmw(0x08, 0, 1 << 21);          // set bit21 (RX_filter_path enable)
-    rmw(0x0C, 0, 1 << 4);           // strobe high
-    rmw(0x0C, 1 << 4, 0);           // strobe low
+    // RFEND+0x50 = `rf2` per metapac (Analog RF2). bit16 is RX_filter_valid;
+    // bits[4:0] is RX_filter_result. Both are folded into the same register.
+    BLE_RFEND.rf2().modify(|w| *w &= !(1 << 16)); // clear bit16 (RX_filter_valid)
+    BLE_RFEND.path_en().modify(|w| w.set_rx_filter_path(true)); // set bit21 (RX_filter_path)
+    // RFEND+0x0C = `ctrl` per metapac. bit4 = RX_filter_strobe.
+    BLE_RFEND.ctrl().modify(|w| *w |= 1 << 4); // strobe high
+    BLE_RFEND.ctrl().modify(|w| *w &= !(1 << 4)); // strobe low
     for _ in 0..4 {
-        unsafe { asm!("nop") };      // 4-cycle settle delay
+        asm!("nop"); // 4-cycle settle delay
     }
-    rmw(0x0C, 0, 1 << 4);           // second strobe = actual calibration trigger
-    rmw(0x04, 0, 1 << 12);          // set bit12 (RX_filter_mode)
+    BLE_RFEND.ctrl().modify(|w| *w |= 1 << 4); // second strobe = actual calibration trigger
+    BLE_RFEND.cal_trig().modify(|w| w.set_rx_filter_mode(true)); // set bit12
 
     // LLE+0x64 is event-driven (ticks only during active BLE events); use a software counter.
     let mut filter_done = false;
     for _ in 0..200_000u32 {
-        if r(0x9C) & (1 << 8) != 0 {
+        if BLE_RFEND.rx_filter_result().read() & (1 << 8) != 0 {
             filter_done = true;
             break;
         }
@@ -415,11 +444,11 @@ unsafe fn rfend_rx_filter() {
         defmt::warn!("rfend_rx_filter timeout");
     }
 
-    let result = r(0x9C) & 0x1F;
-    let v = r(0x50);
-    w(0x50, (v | (1 << 16)) & !0x1F | result);
+    let result = BLE_RFEND.rx_filter_result().read() & 0x1F;
+    let v = BLE_RFEND.rf2().read();
+    BLE_RFEND.rf2().write_value((v | (1 << 16)) & !0x1F | result);
 
-    rmw(0x08, 1 << 21, 0);          // clear bit21 (disable RX filter path)
+    BLE_RFEND.path_en().modify(|w| w.set_rx_filter_path(false)); // clear bit21
 }
 
 /// RFEND_RXAdc: configure RX ADC reference.
@@ -428,10 +457,10 @@ unsafe fn rfend_rx_filter() {
 /// the ADC reference configuration. No wait loop.
 /// From RFEND_RXAdc() at 0xeb68 in dtm.elf.
 unsafe fn rfend_rx_adc() {
-    rmw(0x58, 1 << 16, 0);          // clear bit16 (RX_ADC_ref disable)
-    rmw(0x08, 0, 1 << 16);          // set bit16 (RX_ADC path enable)
-    rmw(0x0C, 1 << 8, 0);           // clear bit8 (ADC_ref_strobe low)
-    rmw(0x04, 1 << 16, 0);          // clear bit16 (RX_ADC_config reset)
-    rmw(0x0C, 0, 1 << 8);           // set bit8 (ADC_ref_strobe high = latch)
-    rmw(0x04, 0, 1 << 16);          // set bit16 (RX_ADC_config apply)
+    BLE_RFEND.adc_ref().modify(|w| *w &= !(1 << 16)); // clear bit16 (RX_ADC_ref disable)
+    BLE_RFEND.path_en().modify(|w| w.set_rx_adc_path(true)); // set bit16 (RX_ADC path enable)
+    BLE_RFEND.ctrl().modify(|w| *w &= !(1 << 8)); // clear bit8 (ADC_ref_strobe low)
+    BLE_RFEND.cal_trig().modify(|w| w.set_rx_adc_config(false)); // clear bit16 (RX_ADC_config reset)
+    BLE_RFEND.ctrl().modify(|w| *w |= 1 << 8); // set bit8 (ADC_ref_strobe high = latch)
+    BLE_RFEND.cal_trig().modify(|w| w.set_rx_adc_config(true)); // set bit16 (RX_ADC_config apply)
 }
