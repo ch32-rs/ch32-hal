@@ -9,20 +9,24 @@ fn main() {
     //
     // Phase 2a (2026-05-08): single-script BSS architecture.
     //
-    // Iron Law #34 (v5 final, 2026-05-08 — ROM hex disassembly + Cindy 06:28 RAM dump
-    // + frozen drift cba=72/61 PASS): ROM is RAM-layout-agnostic for the 6 BSS-contract
-    // symbols. ROM uses its private 0x20003000-0x200036FF workspace; host BSS placement
-    // is host-only concern. Therefore link_minimal.x (KEEP+pin block) and the binary-
-    // specific ASSERT scripts (frozen_bss_pins.x, minimal_bss_pins.x) are dropped.
+    // Iron Law #34 (v5 final, 2026-05-08): ROM is RAM-layout-agnostic for the 6
+    // BSS-contract symbols. ROM uses its private 0x20003000-0x200036FF workspace.
     //
-    // The minimal binary's symbols are retained against --gc-sections by `#[no_mangle]`
-    // + `#[used]` on the 6 BSS-contract statics — these attributes are independent of
-    // section pinning and continue to apply.
+    // Phase 2c (2026-05-09): fnGetClockCBs address pin removed.
+    // C ground truth (Lucy, 2026-05-09): fnGetClockCBs is a COMMON symbol with
+    // PCREL relocations in libwchble.a — linker resolves its address freely.
+    // WCH EVT Broadcaster nm shows fnGetClockCBs at 0x20002420 (not 0x20001c78)
+    // and shifting 1:1 with MEM_BUF size. 0x20001c78 was a BSS layout coincidence
+    // from a specific historical binary, not a ROM/hardware hardcoded address.
     //
-    // fnGetClockCBs @ 0x20001c78 is kept pinned for now (caveat §6 in
-    // notes/ch32-rs/phase2-bss-pin-removal-design.md). Phase 2b separately validates
-    // its removal. Until 2b lands, link.x continues to PROVIDE(_ebss=0x20001c78) and
-    // KEEP the .fnGetClockCBs section.
+    // Step 3 FAIL (0665bc1) was caused by removing the pin WITHOUT keeping the
+    // explicit write — symbol moved to new address but slot was NULL → cba=0.
+    // Root cause was the missing write, not a hardcoded physical address in ROM.
+    //
+    // Production mechanism (Step 1, 52ed8dc): ble_ip_core_init writes 0x420B_000A
+    // to fnGetClockCBs via addr_of_mut!(fnGetClockCBs) — symbol-resolved, works at
+    // any linker-assigned address. fnGetClockCBs is startup-zeroed (normal BSS),
+    // then explicitly written before any ROM BLE call.
 
     let out = std::env::var("OUT_DIR").unwrap();
 
@@ -119,17 +123,15 @@ SECTIONS
         /* Natural LLVM BSS ordering — no explicit address pins (Iron Law #34 v5 final:
          * ROM is RAM-layout-agnostic for the 6 BSS-contract symbols). */
         *(.sbss .sbss.* .bss .bss.*);
+        /* fnGetClockCBs: COMMON/PCREL symbol, linker-placed at natural BSS address.
+         * Must be listed here explicitly to stay in NOLOAD (orphan sections become
+         * loadable, causing 536MB objcopy — see 78f0493 post-mortem).
+         * ble_ip_core_init writes 0x420B_000A via addr_of_mut!(fnGetClockCBs) after
+         * startup zeroing. No address pin required (Phase 2c, 2026-05-09). */
+        *(.fnGetClockCBs .fnGetClockCBs.*);
 
-        /* fnGetClockCBs @ 0x20001c78 — HARD ROM ABI ADDRESS (Step 3 hardware-confirmed,
-         * 2026-05-09). ROM reads this exact physical address unconditionally regardless
-         * of where our symbol is placed. Poisoning 0x20001c78 → cba=0 even when
-         * our Rust symbol at 0x200007c0 held the correct 0x420B000A value.
-         * The pin is a real hardware requirement, not a historical artifact.
-         * ble_ip_core_init writes 0x420B000A here explicitly (= TMOS_TimerInit(0)
-         * equivalent per PDF §8.1.1). ROM does NOT write this slot itself (baf71de). */
-        . = 0x20001c78;
+        . = ALIGN(4);
         PROVIDE( _ebss = .);
-        KEEP(*(.fnGetClockCBs));  /* fnGetClockCBs at 0x20001c78, NOT startup-zeroed */
     } >RAM
 
     .stack ORIGIN(RAM)+LENGTH(RAM) (NOLOAD) :
@@ -154,7 +156,7 @@ SECTIONS
     println!("cargo:rustc-link-search=native={}", out);
 
     // Single linker script for all binaries (Phase 2a, 2026-05-08).
-    // Iron Law #34 v5: no binary needs ROM-contract address pins on the 5 BSS symbols.
-    // fnGetClockCBs is still pinned at 0x20001c78 inside link.x (Phase 2b caveat).
+    // Phase 2c (2026-05-09): fnGetClockCBs address pin removed. All 6 BSS-contract
+    // symbols now linker-placed without address constraints.
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
 }

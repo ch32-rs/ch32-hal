@@ -190,8 +190,9 @@ extern "C" {
     static mut dtmFlag:      u8;  // ROM-expected 0x20000750; Iron Law #37 (ASSERT-pinned, build.rs)
     static mut gBleIPPara:   u8;  // 40-byte array; access as *mut u8 + byte offset
                                   // ROM-expected 0x20000758; Iron Law #37 (ASSERT-pinned, build.rs)
-    static mut fnGetClockCBs: u32; // pinned at 0x20001c78; holds ROM_RTC_TICK_FN (0x420B000A)
-                                   // installed by ble_ip_core_init (= TMOS_TimerInit(0) equivalent)
+    static mut fnGetClockCBs: u32; // linker-placed BSS (Phase 2c: no address pin).
+                                   // ble_ip_core_init writes 0x420B000A (ROM_RTC_TICK_FN)
+                                   // explicitly after startup zeroing (= TMOS_TimerInit(0) equiv).
 }
 
 /// Pure-Rust replacement for WCH `BLE_IPCoreInit`.
@@ -208,7 +209,7 @@ extern "C" {
 /// | WCH PDF step                      | This implementation            | Notes |
 /// |-----------------------------------|--------------------------------|-------|
 /// | `HAL_Init()` → SysClock + NVIC   | `hal::init()` by caller        | Done before `ble_hw_preamble` |
-/// | `HAL_TimeInit()` / RTC init       | **Explicit write** (Step 1)    | `TMOS_TimerInit(0)` = use RTC (PDF §8.1.1); we write `0x420B000A` directly (ROM's built-in RTC tick fn) since we don't call `TMOS_TimerInit`. ROM does NOT auto-install — baf71de hardware gate confirmed. |
+/// | `HAL_TimeInit()` / RTC init       | **Explicit write** (Step 1)    | `TMOS_TimerInit(0)` = use RTC (PDF §8.1.1); we write `0x420B000A` directly (ROM's built-in RTC tick fn) since we don't call `TMOS_TimerInit`. ROM does NOT auto-install (baf71de gate). `fnGetClockCBs` is a COMMON/PCREL symbol — linker-placed, no address pin (Phase 2c; C ground truth 2026-05-09). |
 /// | `WCHBLE_Init()` / `BLE_LibInit()` | **Skipped** (no libwchble)     | Replaced by `ble_ip_core_init` + Rust sub-inits |
 /// | `BLE_IPCoreInit()`                | This function                  | MMIO cache + 4 sub-inits |
 /// | `TMOS_TimerInit()` / clock config | **Skipped** (no TMOS)          | Not needed for ADV-only TX path |
