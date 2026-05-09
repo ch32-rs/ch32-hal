@@ -1,13 +1,15 @@
 // LLE (Link Layer Engine) initialization for CH32V208 BLE.
 //
-// Register base: 0x40024200 (gptrLLEReg — timing, IRQ, timer, TX buf ptr)
-// Source: elec-docs/ble-reverse-docs/05-lle-engine.md and hardware dump
-// Hardware-confirmed timing values from live CH32V208WBU6 board dump.
+// Register block: `BLE_LLE` (gptrLLEReg) at 0x40024200 — timing slots,
+// state machine, IRQ status / mask, link-layer timer, TX/DMA buffer pointers.
+//
+// 2026-05-09: migrated from raw `read_volatile/write_volatile` to typed
+// `BLE_LLE.{timing0,state_machine,dma_buf,access_addr,irq_mask,...}()
+// .{read,write_value,modify}()` against the new ch32-metapac BLE_LLE block.
+// Bit patterns + write order preserved exactly; semantics unchanged.
+// Iron Law #38 hardware-gated.
 
-use core::ptr::{read_volatile, write_volatile};
-
-// gptrLLEReg in WCH naming: timing, scheduling, IRQ status, timer, TX buffer.
-const LLE_BASE: usize = 0x40024200;
+use crate::pac::BLE_LLE;
 
 /// Link-layer DMA buffer — maps to gBleIPPara[36] (MEMAddr) in WCH BLE stack.
 ///
@@ -20,17 +22,7 @@ const LLE_BASE: usize = 0x40024200;
 #[link_section = ".bss"]
 static mut LLE_DMA_BUF: [u32; 256] = [0; 256];
 
-#[inline(always)]
-unsafe fn lle_read(offset: usize) -> u32 {
-    read_volatile((LLE_BASE + offset) as *const u32)
-}
-
-#[inline(always)]
-unsafe fn lle_write(offset: usize, val: u32) {
-    write_volatile((LLE_BASE + offset) as *mut u32, val);
-}
-
-/// LLE state machine values (observed from live hardware and assembly).
+/// LLE state machine values (observed from live hardware).
 #[repr(u8)]
 #[derive(Copy, Clone, Debug)]
 pub enum LleState {
@@ -54,47 +46,47 @@ pub enum LleState {
 /// pending IRQ status bits, and enables the standard IRQ mask (0xF00F).
 ///
 /// Hardware-confirmed values from live CH32V208WBU6 board (STATE_MACHINE=108=SLEEP,
-/// TIMING0-7 matching values below) via wlink dump at +0x40024100.
+/// TIMING0-7 matching values below).
 pub unsafe fn lle_dev_init() {
     // Timing parameters — all hardware-confirmed from live board dump.
-    // WCH LLE_DevInit writes timing registers first, then +0x74/+0x08/+0x0C.
-    lle_write(0x14, 140); // TIMING0
-    lle_write(0x1C, LleState::Sleep as u32); // STATE_MACHINE = SLEEP (108)
-    lle_write(0x24, 140); // TIMING2
-    lle_write(0x2C, 60);  // TIMING3
-    lle_write(0x34, 140); // TIMING4
-    lle_write(0x3C, 60);  // TIMING5
-    lle_write(0x44, 140); // TIMING6
-    lle_write(0x4C, 108); // TIMING7
+    // WCH LLE_DevInit writes timing registers first, then DMA_BUF / ACCESS_ADDR / IRQ_MASK.
+    BLE_LLE.timing0().write_value(140);
+    BLE_LLE.state_machine().write(|w| w.set_state(LleState::Sleep as u8));
+    BLE_LLE.timing2().write_value(140);
+    BLE_LLE.timing3().write_value(60);
+    BLE_LLE.timing4().write_value(140);
+    BLE_LLE.timing5().write_value(60);
+    BLE_LLE.timing6().write_value(140);
+    BLE_LLE.timing7().write_value(108);
 
     // ★ LLE+0x74 = DMA buffer base address (MEMAddr, gBleIPPara[36] in WCH).
     // WCH's LLE_DevInit writes this from pInitConfig->MEMAddr.
     // Without a valid non-zero address the LLE state machine may refuse to
-    // fire any trigger, blocking RFEND PLL calibration (Lucy analysis 2026-05-01).
+    // fire any trigger, blocking RFEND PLL calibration.
     let buf_addr = core::ptr::addr_of!(LLE_DMA_BUF) as u32;
-    lle_write(0x74, buf_addr);
+    BLE_LLE.dma_buf().write_value(buf_addr);
 
     // Clear all pending IRQ status (W1C) then set IRQ mask.
-    // WCH writes these AFTER timing/+0x74 writes.
-    lle_write(0x08, 0xFFFF);  // clear all pending IRQ status
-    lle_write(0x0C, 0xF00F);  // IRQ mask: bits [15:12] and [3:0]
+    // WCH writes these AFTER timing/DMA_BUF writes.
+    BLE_LLE.access_addr().write_value(0xFFFF); // clear all pending IRQ status
+    BLE_LLE.irq_mask().write_value(0xF00F);    // IRQ mask: bits [15:12] and [3:0]
 }
 
 /// Read the current LLE state machine value.
 pub unsafe fn lle_read_state() -> u8 {
-    (lle_read(0x1C) & 0xFF) as u8
+    BLE_LLE.state_machine().read().state()
 }
 
 /// Read the current IRQ status (unmasked raw status bits).
 ///
-/// Note: +0x08 is a split register. CPU reads return IRQ_STATUS (live event bits);
-/// writes are W1C. Do not interpret read values as ACCESS_ADDR.
-/// See wchble disasm notes: real-hardware-verification chapter.
+/// Note: ACCESS_ADDR (+0x08) is a split register. CPU reads return IRQ_STATUS
+/// (live event bits); writes are W1C. Do not interpret read values as the
+/// access-address constant.
 pub unsafe fn lle_read_irq_status() -> u32 {
-    lle_read(0x08)
+    BLE_LLE.access_addr().read()
 }
 
 /// Clear specific LLE IRQ status bits (W1C).
 pub unsafe fn lle_clear_irq(bits: u32) {
-    lle_write(0x08, bits);
+    BLE_LLE.access_addr().write_value(bits);
 }
