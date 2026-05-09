@@ -283,6 +283,13 @@ unsafe fn write_ll_u32(base: *mut u8, off: usize, v: u32) {
     write_volatile(base.add(off) as *mut u32, v);
 }
 
+// Phase 2c Step B — address-axis test: forces fnGetClockCBs to land ≠ 0x20001c78.
+// This 4 KB BSS pad is placed in .bss (before .fnGetClockCBs section), pushing
+// fnGetClockCBs ~4 KB higher than its natural address. REMOVE after gate completes.
+#[link_section = ".bss"]
+#[used]
+static _PHASE2C_AXIS_PAD: [u8; 4096] = [0u8; 4096];
+
 #[link_section = ".bss"]
 static mut RUST_ADV_CTX: [u8; 192] = [0; 192];
 
