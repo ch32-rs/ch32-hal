@@ -1542,6 +1542,195 @@ Net effect: the production binary at `c702890` was correct, but for a different 
 ### Next steps (approved by Andelf 2026-05-08 00:32)
 
 - **Phase 2 sub-step 2a** — remove the 5 non-`fnGetClockCBs` pins (`gBleLlPara` / `dtmFlag` / `gPaControl` / `gBleIPPara` / `ble`); delete `link_minimal.x` / `frozen_bss_pins.x` / `minimal_bss_pins.x` generation in `build.rs`; remove `#[link_section]` on those 5 in `ble_tx_adv_ch37_minimal.rs`. Validation gate: frozen MD5 must stay `301ccc628a7db0daf768f33cc0802450`; minimal cba ≥ 52 with any BSS layout.
-- **Phase 2 sub-step 2b** — separately remove the `fnGetClockCBs` pin. If gate FAIL, restore that one pin and document as the single residual ROM-touch slot.
+- **Phase 2 sub-step 2b** — separately remove the `fnGetClockCBs` pin. If gate FAIL, restore that one pin and document as the single residual ROM-touch slot. **[CLOSED 2026-05-09 — see "## 2026-05-09 09:48 — task #56 closure" below. Pin retired; Iron Law #38 three-condition gate PASS.]**
 - **Stay on `feat/ble-types-align`, do not merge** until Phase 2 lands and Andelf signs off (per 2026-05-08 00:32 directive: "维持在 ble feature 分支工作, 不 merge 先").
 - **Phase 3 (hex ↔ .a cross-ref)** — deferred until Phase 2 closes (per same directive).
+
+---
+
+## 2026-05-09 09:48 — task #56 closure: `fnGetClockCBs` link.x pin retirement (Iron Law #38 three-condition gate PASS)
+
+**Author**: Lucy (collaborators: Andelf direction + final approval; Vega code + reviews; Cindy hardware gates)
+**Status**: **LOCKED** — closes Phase 2 sub-step 2b. Iron Law #34 v5-final reaffirmed without exception. Iron Law #39 (proposed) retired.
+**Trigger**: Andelf direction `c5e85e7b` (2026-05-09 ~00:00) + GO `a20bb37c` (09:16): "开始验证，别一失败就回滚说不行，失败后分析失败原因和遗漏的修改点".
+
+### Final outcome
+
+The `link.x` `_ebss=0x20001c78` boundary trick + `KEEP(*(.fnGetClockCBs))` rule
+is **permanently retired**. Production mechanism for the frozen binary path:
+single symbol-resolved `write_volatile(addr_of_mut!(fnGetClockCBs), 0x420B_000A)`
+in `ble_ip_core_init`. No address pin required.
+
+### ROM consumer model (H4, the surviving hypothesis)
+
+```c
+// ROM IRQ handler pseudocode:
+fn = *(volatile u32*)0x20001c78;        // hardcoded absolute read
+if (fn == NULL) fn = clockGetHSEValue;  // ROM internal fallback (= 0x420B_000A)
+result = fn();                          // jalr; non-NULL valid → use; non-NULL garbage → crash
+```
+
+ROM IRQ reads the absolute physical word at 0x20001c78 unconditionally, BUT is
+**NULL-tolerant** — falls back to its internal `clockGetHSEValue` when the slot
+is NULL. Userland Rust `bb_irq_lib_handler` .L7 path reads via PCREL_HI20 to the
+linker-placed symbol address. **Both consumers exist**; in the frozen binary
+layout (where `_ebss` covers 0x20001c78), the symbol IS at 0x20001c78, so the
+single symbol-resolved write satisfies both consumers simultaneously.
+
+### Iron Law #38 three-condition gate (Step B `d056863`)
+
+Symbol force-shifted to 0x20002c78 via 4 KB BSS pad in `ble_tx_adv_ch37.rs`;
+`_ebss=0x20002c7c` covers 0x20001c78 → BSS clear sweeps the historical address
+to NULL → ROM internal fallback runs:
+
+| Condition | cba 30s | `0x20001c78` | `0x20002c78` (symbol) |
+|-----------|---------|--------------|------------------------|
+| warm 30s | **43** | `0x00000000` ✓ | `0x420B_000A` ✓ |
+| WCH-Link 3V3 power-cycle | **32** | `0x00000000` ✓ | `0x420B_000A` ✓ |
+| scrub `0xDEADBEEF` → reset | **54** | `0x00000000` ✓ | `0x420B_000A` ✓ |
+
+The scrub run is the smoking gun: pre-write `0xDEADBEEF` to 0x20001c78, reset,
+the BSS clear sweeps it back to NULL, ROM falls back, cba=54 (highest of three).
+Confirms NULL-tolerated fallback path — no SRAM-persistence dependency.
+
+### Terminal regression (`d50907a` frozen, MD5 `3e69b556`)
+
+The cleaned production commit (C1 = `d50907a`, no test pad, no double-write,
+single symbol-resolved write, no link.x pin) re-runs the same three-condition
+gate. Frozen layout naturally places `fnGetClockCBs` symbol at 0x20001c78, so
+this validates the production path the consumers will actually take:
+
+| Condition | cba 30s | `0x20001c78` (= symbol) | `gBleIPPara+0x1c` |
+|-----------|---------|-------------------------|-------------------|
+| warm 30s | **39** | `0x420B_000A` ✓ | `0x00000000` |
+| WCH-Link 3V3 power-cycle | **45** | `0x420B_000A` ✓ | `0x00000000` |
+| scrub `0xDEADBEEF` → reset | **52** | `0x420B_000A` ✓ | `0x00000000` |
+
+scrub prescan confirmed `0x20001c78=0xDEADBEEF`; post-reset the symbol-resolved
+write in `ble_ip_core_init` overwrote the SRAM contamination back to
+`0x420B_000A`. Production path: zero dependence on warm SRAM persistence,
+zero dependence on link.x pin, zero dependence on ROM auto-install. Logs:
+`/tmp/ble_scan_phase2c_final_20260509_1016_final_warm.log`,
+`/tmp/ble_scan_phase2c_final_20260509_1018_final_cold.log`,
+`/tmp/ble_scan_phase2c_final_20260509_1019_final_scrub.log`.
+
+### Hypothesis ledger (this saga's reshapes)
+
+| ID | Hypothesis | Status | Falsifying datum |
+|----|------------|--------|------------------|
+| H1 | ROM auto-installs `0x420B_000A` at 0x20001c78 on cold boot | FALSIFIED 2026-05-08 | `baf71de` cold gate: post-run slot=NULL, cba=0 |
+| H2a | ROM hard-binds abs 0x20001c78 AND requires non-NULL fn ptr | FALSIFIED 2026-05-09 | Step B PASS with `0x20001c78=NULL` |
+| H3 | Consumer reads via PCREL only (any symbol address works) | PARTIALLY FALSIFIED | Minimal binary FAIL: PCREL would read symbol@0x200007c0=valid → should PASS, but actually FAILed |
+| **H4** (current) | ROM IRQ reads abs 0x20001c78 + NULL-tolerant fallback; userland reads PCREL | SURVIVING | Explains every data point |
+| H39 (proposed law) | fnGetClockCBs slot must be pinned at 0x20001c78 (hardware-fixed) | RETIRED 2026-05-09 | Step B PASS with symbol@0x20002c78 |
+
+### Iron Law revisions (post-PASS)
+
+#### Iron Law #34 v5 — reaffirmed without `fnGetClockCBs` exception
+
+The 2026-05-09 00:05 wording proposed an `fnGetClockCBs` exception based on
+Step 3 FAIL. Step B PASS proves the exception was incorrect. Final wording:
+
+> **Iron Law #34 v5 (final, 2026-05-09)** — ROM IRQ reads absolute physical
+> 0x20001c78 as fn ptr, but is NULL-tolerant: NULL → ROM internal fallback
+> (`clockGetHSEValue` at 0x420B_000A); non-NULL garbage → `jalr` → crash.
+> Userland consumers (`bb.rs` .L7 path) read via PCREL_HI20 to the
+> linker-placed symbol. For frozen BSS layout: `_ebss` naturally covers
+> 0x20001c78 → BSS clear → NULL → ROM fallback runs cleanly. Step 1 explicit
+> write to the symbol (`addr_of_mut!(fnGetClockCBs)`) is sufficient — in
+> frozen layout the symbol IS at 0x20001c78 anyway, so the symbol-resolved
+> write covers both consumer paths simultaneously. The link.x
+> `_ebss=0x20001c78` boundary trick + `KEEP(*(.fnGetClockCBs))` was
+> archaeological pinning, not a hardware contract. Iron Law #38 three-condition
+> gate (Step B `d056863`, 2026-05-09): warm cba=43, power-cycle cba=32,
+> scrub-then-reset cba=54 — all PASS with 0x20001c78=NULL by BSS clear.
+
+This supersedes the table-row claim at line 1522 ("ROM allegedly writes
+`0x420B000A` here — sub-step 2b separately validates"). Final answer: ROM
+**reads** the slot directly (does not write); the slot must hold either
+NULL or a valid fn ptr; frozen BSS layout + Step1 write satisfies both
+consumers in one shot.
+
+#### Iron Law #39 (proposed) — retired
+
+The proposal "fnGetClockCBs slot must be pinned at 0x20001c78 — chip silicon
+ROM internal handler reads this address directly (verified by Step 3 FAIL)"
+is retired. The address-axis premise was correct (ROM does read abs
+0x20001c78), but it is NULL-tolerant via internal fallback — so a hard pin
+is not required for frozen layout. Step 3 FAIL was due to slot-NULL +
+SRAM-garbage interaction (Step1 missing + minimal-style `_ebss` not covering
+0x20001c78), not a "must-pin" constraint. The pragmatic outcome and the
+mechanism are both captured by the revised Iron Law #34 v5 above.
+
+#### Iron Law #35 — split confirmed (35a / 35b)
+
+35a (raw HSE counter): `fnGetClockCBs` returns u32 raw counter. Used by
+`bb_irq_lib_handler` .L7 path → stored at `gBleIPPara+0x1c`. ADV-TX path
+consumes this directly without 1600 Hz conversion.
+
+35b (1600 Hz tick): `pfnTimerCBs` (set by `TMOS_TimerRegister`) returns
+1600 Hz / 625 µs tick. Consumed by `TMOS_GetSystemClock` via
+`clockGetTickValve` (which wraps `(raw * 1600) / bleClock_t.[8]`). Not
+exercised by ADV-TX path.
+
+#### Iron Law #38 — second use case validated
+
+Step B is the second documented Iron Law #38 invocation (first was task #56
+v5 catch). The gate matrix (warm + power-cycle + scrub) caught nothing on
+Step B (PASS) but proved its discriminator value: any failure mode that only
+shows under one of the three conditions would have been visible in the
+gate's columns. The scrub condition specifically rules out SRAM-persistence
+masking.
+
+### Wording corrections applied (4 sites)
+
+The phrase "ROM auto-installs `0x420B_000A`" or close variants existed in:
+
+1. `src/ble/types.rs` Iron Law #35 module doc (L18, L37-40, L122-124, L160-165) → corrected in commit `5e0330d` (C2)
+2. `src/ble/mod.rs` `ble_ip_core_init` Step 0 doc + write block (L210-260) → corrected in commit `d50907a` (C1)
+3. `src/ble/bb.rs` .L7 path doc (L134-137 + L181-183) → corrected in commit `d50907a` (C1)
+4. `notes/ch32-rs/lib-dependency-removal.md` v1-v4 reshape table (L1522 row) → superseded by this section (C3)
+
+The corrected wording: "`ble_ip_core_init` explicitly writes `0x420B_000A` (ROM
+`clockGetHSEValue` address) to the slot via Step 1; ROM does NOT auto-install
+— `baf71de` cold gate falsified that. ROM reads the slot directly via abs
+0x20001c78 and falls back internally if NULL."
+
+### Code/doc commits landing this saga
+
+| Commit | Subject | Change |
+|--------|---------|--------|
+| `52ed8dc` | Step 1 — explicit fnGetClockCBs install | Added `write_volatile(addr_of_mut!(fnGetClockCBs), 0x420B_000A)` in `ble_ip_core_init` |
+| `10d8b91` | Phase 2c — remove pin from link.x | Dropped `_ebss=0x20001c78` + `KEEP(*(.fnGetClockCBs))` |
+| `d056863` | Phase 2c Step B — 4 KB BSS pad (test artifact) | Force-shift symbol to 0x20002c78 for discriminator gate |
+| `c09d701` | Phase 2c double-write hedge (provisional) | Added abs-write `0x20001c78` for minimal-path consideration; superseded by C1 |
+| `d50907a` | task #56 C1 — code cleanup | Drop pad + drop double-write + bb.rs wording scrub |
+| `5e0330d` | task #56 C2 — types.rs doc | Iron Law #35 + PfnGetSysClock + BleClockConfig.get_clock_value rewritten |
+| (this) | task #56 C3 — notes update | Iron Law #34 v5-final reaffirm + #39 retire + 4-site wording sweep + this section + new postmortem |
+
+### What's out of scope for #56 (follow-up tasks)
+
+- **Minimal binary FAIL**: `_ebss=0x200007c4` doesn't cover 0x20001c78 → SRAM
+  garbage at 0x20001c78 → ROM IRQ jalrs to garbage → crash. Not a
+  fnGetClockCBs problem per se; remediation candidates: extend BSS coverage,
+  add explicit absolute write for minimal only, or drop the minimal variant
+  for production. Out of #56 scope per Vega-Lucy alignment + Andelf approval.
+- **B1 silicon-version gating**: `0x420B_000A` is the ROM `clockGetHSEValue`
+  address on CH32V208WBU6 B1; other revisions may differ. Recommendation:
+  cargo feature gate (`ch32v208wbu6-b1`) controlling the constant.
+- **Strict pull-plug cold boot**: `baf71de` and Step B used WCH-Link 3V3
+  power-cycle; strict USB unplug + bench supply off was deferred (Cindy
+  noted SRAM self-discharge >5 s caveat). Worth one round of confirmation
+  before final close.
+
+### Cross-references
+
+- `notes/ch32-rs/task56-postmortem.md` — full postmortem with timeline,
+  hypothesis ledger, root-cause list (5+1 items), engineering lessons
+- `notes/ch32-rs/c-ground-truth-fnGetClockCBs.md` — symbolic + empirical
+  proof from libwchble.a (COMMON, PCREL_HI20, MEMHEAP-shift experiment)
+- `notes/ch32-rs/tmos-timerinit-disasm.md` — fnGetClockCBs vs pfnTimerCBs
+  ABI distinction; clockGetTickValve hardcoded `1600`
+- `/tmp/phase2c_d056863_clean/` — Step B binaries + ELFs
+- `/tmp/wlink_dump_phase2c_d056863_padded_*` — three-condition gate dump logs
+- `bad/task56-v5-air-regression` (`5528b5f`) — preserved cycle-CSR regression
