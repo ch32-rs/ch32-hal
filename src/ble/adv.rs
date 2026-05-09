@@ -1,4 +1,4 @@
-// BLE advertising for CH32V208 — ADV_NONCONN_IND (non-connectable undirected).
+// BLE advertising for CH32V208 — legacy advertising PDU TX helpers.
 //
 // Spec ref: BLE Core Spec Vol 6 Part B §2.3 (PDU), Vol 6 Part B §4.4.2 (advertising channels).
 //
@@ -50,8 +50,14 @@ const ADV_ACCESS_ADDR: u32 = 0x8E89_BED6;
 /// CRC initial value for advertising (BLE spec Vol 6 Part B §3.1.1).
 const ADV_CRC_INIT: u32 = 0x55_5555;
 
+/// PDU type: ADV_IND (connectable undirected, type=0b0000).
+pub const PDU_TYPE_ADV_IND: u8 = 0b0000;
+
 /// PDU type: ADV_NONCONN_IND (non-connectable undirected, type=0b0010).
-const PDU_TYPE_ADV_NONCONN_IND: u8 = 0b0010;
+pub const PDU_TYPE_ADV_NONCONN_IND: u8 = 0b0010;
+
+/// PDU type: SCAN_RSP (scan response, type=0b0100).
+pub const PDU_TYPE_SCAN_RSP: u8 = 0b0100;
 
 /// Advertising channels: (index, freq_kHz). BLE spec Vol 6 §4.4.2.
 const ADV_CHANNELS: [(u8, u32); 3] = [(37, 2_402_000), (38, 2_426_000), (39, 2_480_000)];
@@ -69,21 +75,23 @@ static mut ADV_TX_BUF: [u8; 2 + 6 + ADV_DATA_MAX] = [0u8; 2 + 6 + ADV_DATA_MAX];
 
 // ── PDU builder ──────────────────────────────────────────────────────────────────────────────
 
-/// Build an ADV_NONCONN_IND PDU into `ADV_TX_BUF`.
+/// Build a legacy advertising-channel PDU into `ADV_TX_BUF`.
 ///
 /// `addr`: 6-byte device address (LE order, as stored in hardware address registers).
 /// `addr_is_random`: true = random address (TxAdd=1), false = public (TxAdd=0).
 /// `adv_data`: AD structure bytes (max 31B). Must be pre-formatted AD structures.
+/// `pdu_type`: one of [`PDU_TYPE_ADV_IND`], [`PDU_TYPE_ADV_NONCONN_IND`], or
+/// [`PDU_TYPE_SCAN_RSP`].
 ///
 /// Returns the total PDU length in bytes (header + AdvA + adv_data).
-pub unsafe fn build_adv_pdu(addr: &[u8; 6], addr_is_random: bool, adv_data: &[u8]) -> usize {
+pub unsafe fn build_legacy_adv_pdu(pdu_type: u8, addr: &[u8; 6], addr_is_random: bool, adv_data: &[u8]) -> usize {
     let adv_len = adv_data.len().min(ADV_DATA_MAX);
     let payload_len = 6 + adv_len; // AdvA(6) + AdvData
 
     // Header byte 0: PDU type | RFU(2b) | ChSel(1b) | TxAdd | RxAdd
-    // ADV_NONCONN_IND: ChSel=0, RxAdd=0, TxAdd from addr_is_random.
+    // Legacy advertising PDUs: ChSel=0, RxAdd=0, TxAdd from addr_is_random.
     let txadd: u8 = if addr_is_random { 1 << 6 } else { 0 };
-    ADV_TX_BUF[0] = PDU_TYPE_ADV_NONCONN_IND | txadd;
+    ADV_TX_BUF[0] = (pdu_type & 0x0F) | txadd;
     // Header byte 1: Length field (6-bit, value = payload_len).
     ADV_TX_BUF[1] = payload_len as u8 & 0x3F;
 
@@ -94,6 +102,11 @@ pub unsafe fn build_adv_pdu(addr: &[u8; 6], addr_is_random: bool, adv_data: &[u8
     ADV_TX_BUF[8..8 + adv_len].copy_from_slice(&adv_data[..adv_len]);
 
     2 + payload_len // total bytes used in TX buf
+}
+
+/// Build an ADV_NONCONN_IND PDU into `ADV_TX_BUF`.
+pub unsafe fn build_adv_pdu(addr: &[u8; 6], addr_is_random: bool, adv_data: &[u8]) -> usize {
+    build_legacy_adv_pdu(PDU_TYPE_ADV_NONCONN_IND, addr, addr_is_random, adv_data)
 }
 
 // ── AD structure helpers ─────────────────────────────────────────────────────────────────────
@@ -123,6 +136,20 @@ pub fn ad_complete_name<'a>(buf: &'a mut [u8], name: &[u8]) -> usize {
     buf[1] = 0x09; // type: Complete Local Name
     buf[2..2 + name_len].copy_from_slice(&name[..name_len]);
     2 + name_len
+}
+
+/// Write Complete List of 16-bit Service UUIDs AD structure (type 0x03) into `buf`.
+/// Returns number of bytes written.
+pub fn ad_uuid16_complete(buf: &mut [u8], uuid: u16) -> usize {
+    if buf.len() < 4 {
+        return 0;
+    }
+    let [lo, hi] = uuid.to_le_bytes();
+    buf[0] = 3; // length: type + UUID16
+    buf[1] = 0x03; // type: Complete List of 16-bit Service UUIDs
+    buf[2] = lo;
+    buf[3] = hi;
+    4
 }
 
 // ── TX trigger ───────────────────────────────────────────────────────────────────────────────
@@ -216,7 +243,7 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
     //   starts in the correct mode. ADV_NONCONN_IND burst cba=0 without this despite fix #1+#2.
     let ctrl = lle_read(0x00);
     lle_write(0x00, ctrl & !0x3000); // bits[13:12]=0 → 1Mbps PHY rate
-    bb_write(0x08, 0x2000);          // PHY rate lock (BLE_SetPHYTxMode step4)
+    bb_write(0x08, 0x2000); // PHY rate lock (BLE_SetPHYTxMode step4)
 
     // 13. ADV GO: LLE+0x00 |= 0x800000 (bit 23 — NOT bit 11).
     // Confirmed from lib `ll_advertise_tx` L39276-39280 (`lui a3,0x800` → a3=0x00800000).
@@ -233,7 +260,7 @@ unsafe fn adv_tx_burst(ch_idx: u8, freq_khz: u32) -> (u32, u32, u32) {
 
     // Post-trigger snapshot.
     let state_post = bb_read(0x1C);
-    let irq_post   = bb_read(0x08);
+    let irq_post = bb_read(0x08);
 
     (state_pre, state_post, irq_post)
 }
@@ -259,9 +286,9 @@ unsafe fn wait_adv_tx_done() -> (bool, u32, u32, u32) {
 /// Returns (lle_2c, bb04_armed, lle_ctrl).
 /// Call immediately after `adv_tx_burst` / `adv_event` for a snapshot.
 pub unsafe fn diag_read() -> (u32, u32, u32) {
-    let lle_2c = lle_read(0x2C);      // channel field bits[30:25], TX arm bits[1:0]
-    let bb04 = bb_read(0x04);         // TX armed flag bit0
-    let ctrl = lle_read(0x00);        // channel bits[6:0] + bit6=whitening + bit23=BLE enable
+    let lle_2c = lle_read(0x2C); // channel field bits[30:25], TX arm bits[1:0]
+    let bb04 = bb_read(0x04); // TX armed flag bit0
+    let ctrl = lle_read(0x00); // channel bits[6:0] + bit6=whitening + bit23=BLE enable
     (lle_2c, bb04, ctrl)
 }
 
@@ -277,17 +304,68 @@ pub unsafe fn diag_read() -> (u32, u32, u32) {
 ///   stats: per-channel tuple (bb64_init, bb64_final, irq_final, state_pre, state_post, irq_post_go).
 ///     state_pre/post: LLE state machine (108=Sleep); non-108 post means HW accepted GO.
 ///     irq_post_go: BB+0x08 bits[15:0] immediately after GO; non-zero = IRQ fired fast.
-pub unsafe fn adv_event_verbose(addr: &[u8; 6], addr_is_random: bool, adv_data: &[u8])
-    -> (u8, [(u32, u32, u32, u32, u32, u32); 3])
-{
+pub unsafe fn adv_event_verbose(
+    addr: &[u8; 6],
+    addr_is_random: bool,
+    adv_data: &[u8],
+) -> (u8, [(u32, u32, u32, u32, u32, u32); 3]) {
     build_adv_pdu(addr, addr_is_random, adv_data);
+    legacy_adv_event_from_current_buf()
+}
+
+/// Send one complete connectable advertising event: transmit ADV_IND on all 3
+/// advertising channels.
+///
+/// This is Phase 1 plumbing for Rust-only PeripheralRole.  It only transmits
+/// connectable advertising PDUs; the CONNECT_IND RX turnaround is implemented
+/// as a separate validation step through the listener capture path.
+pub unsafe fn connectable_adv_event_verbose(
+    addr: &[u8; 6],
+    addr_is_random: bool,
+    adv_data: &[u8],
+) -> (u8, [(u32, u32, u32, u32, u32, u32); 3]) {
+    build_legacy_adv_pdu(PDU_TYPE_ADV_IND, addr, addr_is_random, adv_data);
+    legacy_adv_event_from_current_buf()
+}
+
+/// Send one complete scan-response event: transmit SCAN_RSP on all 3 advertising channels.
+///
+/// This is a Phase 1 compatibility helper for active scanners.  The strict
+/// SCAN_REQ→SCAN_RSP turnaround is handled by the future connection/scan
+/// state machine; this helper validates the PDU builder and TX path.
+pub unsafe fn scan_response_event_verbose(
+    addr: &[u8; 6],
+    addr_is_random: bool,
+    scan_rsp_data: &[u8],
+) -> (u8, [(u32, u32, u32, u32, u32, u32); 3]) {
+    build_legacy_adv_pdu(PDU_TYPE_SCAN_RSP, addr, addr_is_random, scan_rsp_data);
+    legacy_adv_event_from_current_buf()
+}
+
+/// Send one connectable advertising event and return the number of channels
+/// that completed TX.
+pub unsafe fn connectable_adv_event(addr: &[u8; 6], addr_is_random: bool, adv_data: &[u8]) -> u8 {
+    let (ok, _) = connectable_adv_event_verbose(addr, addr_is_random, adv_data);
+    ok
+}
+
+/// Send one scan-response event and return the number of channels that
+/// completed TX.
+pub unsafe fn scan_response_event(addr: &[u8; 6], addr_is_random: bool, scan_rsp_data: &[u8]) -> u8 {
+    let (ok, _) = scan_response_event_verbose(addr, addr_is_random, scan_rsp_data);
+    ok
+}
+
+unsafe fn legacy_adv_event_from_current_buf() -> (u8, [(u32, u32, u32, u32, u32, u32); 3]) {
     let mut ok = 0u8;
     let mut stats = [(0u32, 0u32, 0u32, 0u32, 0u32, 0u32); 3];
     for (i, (ch_idx, freq_khz)) in ADV_CHANNELS.iter().enumerate() {
         let (state_pre, state_post, irq_post) = adv_tx_burst(*ch_idx, *freq_khz);
         let (done, init, fin, irq_final) = wait_adv_tx_done();
         stats[i] = (init, fin, irq_final, state_pre, state_post, irq_post);
-        if done { ok += 1; }
+        if done {
+            ok += 1;
+        }
     }
     (ok, stats)
 }

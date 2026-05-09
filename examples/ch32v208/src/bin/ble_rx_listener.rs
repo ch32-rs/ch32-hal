@@ -35,10 +35,10 @@
 #![no_std]
 #![no_main]
 
+use ch32_hal as hal;
 use embassy_executor::Spawner;
-use {ch32_hal as hal, panic_halt as _};
-
-use hal::ble::listener::{AdvFilter, BleListenerState, ble_set_phy_rx_mode_normal};
+use hal::ble::listener::{ble_set_phy_rx_mode_normal, AdvFilter, BleListenerState};
+use panic_halt as _;
 
 // ── Static listener state ─────────────────────────────────────────────────────
 
@@ -65,8 +65,8 @@ fn BB() {
 /// BLE scanner task — drives `LISTENER.next_pdu().await` and prints PDUs.
 ///
 /// Prints every PDU that passes the default legacy-ADV filter:
-/// * type ∈ {0=ADV_IND, 2=ADV_NONCONN_IND, 4=SCAN_RSP, 6=ADV_DIRECT_IND}
-/// * len ≤ 37 bytes
+/// * type ∈ {0=ADV_IND, 2=ADV_NONCONN_IND, 4=SCAN_RSP, 5=CONNECT_IND, 6=ADV_SCAN_IND}
+/// * advertising-like PDUs len ≤ 37 bytes; CONNECT_IND len = 34 bytes
 /// * known AD types decoded inline (Flags 0x01, Manufacturer 0xFF, Name 0x08/0x09)
 #[embassy_executor::task]
 async fn ble_scanner_task() {
@@ -80,15 +80,48 @@ async fn ble_scanner_task() {
         let pdu = LISTENER.next_pdu().await;
         pdu_n += 1;
 
-        // Print header on every PDU; AD decode inline.
+        if let Some(conn) = pdu.connect_ind() {
+            hal::println!(
+                "[#{pdu_n} ch{ch}] CONNECT_IND InitA={i5:02x}:{i4:02x}:{i3:02x}:{i2:02x}:{i1:02x}:{i0:02x} \
+                 AdvA={a5:02x}:{a4:02x}:{a3:02x}:{a2:02x}:{a1:02x}:{a0:02x} \
+                 aa=0x{aa:08x} crc=0x{crc:06x} interval={} timeout={} hop={} sca={}",
+                conn.interval,
+                conn.timeout,
+                conn.hop_increment,
+                conn.sleep_clock_accuracy,
+                ch = conn.ch,
+                i0 = conn.init_a[0],
+                i1 = conn.init_a[1],
+                i2 = conn.init_a[2],
+                i3 = conn.init_a[3],
+                i4 = conn.init_a[4],
+                i5 = conn.init_a[5],
+                a0 = conn.adv_a[0],
+                a1 = conn.adv_a[1],
+                a2 = conn.adv_a[2],
+                a3 = conn.adv_a[3],
+                a4 = conn.adv_a[4],
+                a5 = conn.adv_a[5],
+                aa = conn.access_addr,
+                crc = conn.crc_init,
+            );
+            continue;
+        }
+
+        // Print header on every advertising-like PDU; AD decode inline.
         hal::println!(
-            "[#{pdu_n} ch{ch}] type={ty:#x} len={len} \
+            "[#{pdu_n} ch{ch}] type={ty:#x} len={len} payload={payload_len} \
              AdvA={a5:02x}:{a4:02x}:{a3:02x}:{a2:02x}:{a1:02x}:{a0:02x}",
-            ch  = pdu.ch,
-            ty  = pdu.adv_type,
+            ch = pdu.ch,
+            ty = pdu.adv_type,
             len = pdu.ad_len,
-            a0  = pdu.adv_a[0], a1 = pdu.adv_a[1], a2 = pdu.adv_a[2],
-            a3  = pdu.adv_a[3], a4 = pdu.adv_a[4], a5 = pdu.adv_a[5],
+            payload_len = pdu.payload_len,
+            a0 = pdu.adv_a[0],
+            a1 = pdu.adv_a[1],
+            a2 = pdu.adv_a[2],
+            a3 = pdu.adv_a[3],
+            a4 = pdu.adv_a[4],
+            a5 = pdu.adv_a[5],
         );
 
         // Walk AD structures.

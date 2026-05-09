@@ -55,7 +55,8 @@ use core::cell::UnsafeCell;
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 
 // ── Register base addresses ───────────────────────────────────────────────────
 
@@ -97,11 +98,7 @@ const ADV_AA: u32 = 0x8E89_BED6;
 const ADV_CRC_INIT: u32 = 0x55_5555;
 
 /// BLE advertising channels: (logical_channel, freq_khz).
-pub const ADV_CHANNELS: [(u8, u32); 3] = [
-    (37, 2_402_000),
-    (38, 2_426_000),
-    (39, 2_480_000),
-];
+pub const ADV_CHANNELS: [(u8, u32); 3] = [(37, 2_402_000), (38, 2_426_000), (39, 2_480_000)];
 
 /// Per-window timer ticks written to `bb_*(0x64)`.
 ///
@@ -180,7 +177,7 @@ impl SyncUnsafeCell<u32> {
 /// ```text
 /// buf[0]    PDU header byte 0: bits[3:0] = type, bit6 = TxAdd, bit7 = RxAdd
 /// buf[1]    PDU header byte 1: bits[5:0] = total PDU length (AdvA + AD)
-/// buf[2..8] AdvA — 6 bytes, LE order as received
+/// buf[2..8] AdvA for advertising-like PDUs, InitA for CONNECT_IND
 /// buf[8..]  AD payload — buf[1]&0x3F − 6 bytes (max 31 for legacy ADV)
 /// ```
 #[derive(Clone, Copy)]
@@ -191,7 +188,8 @@ pub struct AdvPdu {
     /// PDU type field (header byte 0, bits[3:0]).
     ///
     /// **Default accepted** (`AdvFilter::accept_legacy = true`):
-    /// `0`=ADV_IND, `2`=ADV_NONCONN_IND, `4`=SCAN_RSP, `6`=ADV_SCAN_IND.
+    /// `0`=ADV_IND, `2`=ADV_NONCONN_IND, `4`=SCAN_RSP, `5`=CONNECT_IND,
+    /// `6`=ADV_SCAN_IND.
     ///
     /// **Anomaly (counted, not delivered)**:
     /// `3`=SCAN_REQ — `buf[2..8]` is ScanA (scanner addr), not AdvA; semantically
@@ -201,6 +199,9 @@ pub struct AdvPdu {
 
     /// Advertiser address (AdvA), raw bytes as received (little-endian).
     ///
+    /// For CONNECT_IND this field contains InitA for snapshot compatibility;
+    /// call [`connect_ind`](Self::connect_ind) to get both InitA and AdvA.
+    ///
     /// Display as `[5]:[4]:[3]:[2]:[1]:[0]` for colon-separated MAC notation.
     pub adv_a: [u8; 6],
 
@@ -209,13 +210,23 @@ pub struct AdvPdu {
 
     /// AD (Advertising Data) payload.  Only `ad[0..ad_len]` is valid.
     pub ad: [u8; 31],
+
+    /// Full legacy advertising-channel payload after the 2-byte header.
+    ///
+    /// For `CONNECT_IND`, this is `InitA(6) | AdvA(6) | LLData(22)`.
+    /// For advertising/scan-response PDUs, this is `AdvA(6) | AdvData`.
+    pub payload: [u8; 37],
+
+    /// Number of bytes valid in [`payload`](Self::payload).
+    pub payload_len: u8,
 }
 
 impl AdvPdu {
     /// Decode a 50-byte DMA snapshot into an `AdvPdu`.
     ///
-    /// Returns `Some((pdu, is_anomaly))` when `pdu_len ≥ 6` (contains a full AdvA).
-    /// `is_anomaly` is true when `type ∉ {0,2,3,4,6}` OR `len > 37` (§11 filter).
+    /// Returns `Some((pdu, is_anomaly))` when `pdu_len ≥ 6`.
+    /// `is_anomaly` is true when the type/length pair is not one of the legacy
+    /// advertising formats decoded by this listener.
     /// Returns `None` if the snapshot is too short to contain a valid AdvA.
     fn from_snapshot(snap: &[u8; 50], ch: u8) -> Option<(Self, bool)> {
         let pdu_type = snap[0] & 0x0F;
@@ -225,14 +236,18 @@ impl AdvPdu {
             return None; // Too short to contain AdvA
         }
 
-        // §11 / Cindy review: legacy accept = {0,2,4,6} only.
+        // Phase 1 PeripheralRole accepts legacy advertising-like PDUs plus
+        // CONNECT_IND capture when length is exactly 34.
         // type=3 (SCAN_REQ) has layout ScanA+AdvA — buf[2..8] is ScanA, not AdvA,
         // making the `adv_a` field semantically misleading.  Treat as anomaly.
         // type=0  ADV_IND          (connectable undirected)
         // type=2  ADV_NONCONN_IND  (non-connectable undirected)
         // type=4  SCAN_RSP         (scan response — AdvA at same offset, AD payload)
+        // type=5  CONNECT_IND      (InitA + AdvA + LLData)
         // type=6  ADV_SCAN_IND     (scannable undirected)
-        let is_anomaly = !matches!(pdu_type, 0 | 2 | 4 | 6) || pdu_len > 37;
+        let valid_connect_ind = pdu_type == 5 && pdu_len == 34;
+        let valid_adv_like = matches!(pdu_type, 0 | 2 | 4 | 6) && pdu_len <= 37;
+        let is_anomaly = !(valid_adv_like || valid_connect_ind);
 
         // AdvA: buf[2..8], stored as-received (LE order)
         let adv_a = [snap[2], snap[3], snap[4], snap[5], snap[6], snap[7]];
@@ -251,9 +266,43 @@ impl AdvPdu {
                 adv_a,
                 ad_len: ad_available as u8,
                 ad,
+                payload: {
+                    let mut payload = [0u8; 37];
+                    let n = (pdu_len as usize).min(payload.len()).min(50usize.saturating_sub(2));
+                    payload[..n].copy_from_slice(&snap[2..2 + n]);
+                    payload
+                },
+                payload_len: pdu_len.min(37),
             },
             is_anomaly,
         ))
+    }
+
+    /// Parse this PDU as a legacy `CONNECT_IND`.
+    ///
+    /// Returns `None` when the PDU type or payload length does not match the
+    /// legacy connection request format.
+    pub fn connect_ind(&self) -> Option<ConnectInd> {
+        if self.adv_type != 5 || self.payload_len != 34 {
+            return None;
+        }
+
+        let p = &self.payload;
+        Some(ConnectInd {
+            ch: self.ch,
+            init_a: [p[0], p[1], p[2], p[3], p[4], p[5]],
+            adv_a: [p[6], p[7], p[8], p[9], p[10], p[11]],
+            access_addr: u32::from_le_bytes([p[12], p[13], p[14], p[15]]),
+            crc_init: (p[16] as u32) | ((p[17] as u32) << 8) | ((p[18] as u32) << 16),
+            win_size: p[19],
+            win_offset: u16::from_le_bytes([p[20], p[21]]),
+            interval: u16::from_le_bytes([p[22], p[23]]),
+            latency: u16::from_le_bytes([p[24], p[25]]),
+            timeout: u16::from_le_bytes([p[26], p[27]]),
+            channel_map: [p[28], p[29], p[30], p[31], p[32]],
+            hop_increment: p[33] & 0x1F,
+            sleep_clock_accuracy: p[33] >> 5,
+        })
     }
 
     /// Iterate over AD structures in this PDU.
@@ -275,6 +324,37 @@ impl AdvPdu {
             pos: 0,
         }
     }
+}
+
+/// Decoded legacy `CONNECT_IND` payload.
+#[derive(Clone, Copy, Debug)]
+pub struct ConnectInd {
+    /// Advertising channel on which the packet was captured: 37, 38, or 39.
+    pub ch: u8,
+    /// Initiator address (`InitA`), little-endian as received.
+    pub init_a: [u8; 6],
+    /// Advertiser address (`AdvA`), little-endian as received.
+    pub adv_a: [u8; 6],
+    /// Connection access address for data channels.
+    pub access_addr: u32,
+    /// 24-bit data-channel CRC init in bits[23:0].
+    pub crc_init: u32,
+    /// Transmit window size, 1.25 ms units.
+    pub win_size: u8,
+    /// Transmit window offset, 1.25 ms units.
+    pub win_offset: u16,
+    /// Connection interval, 1.25 ms units.
+    pub interval: u16,
+    /// Peripheral latency, connection events.
+    pub latency: u16,
+    /// Supervision timeout, 10 ms units.
+    pub timeout: u16,
+    /// Data-channel map, bits 0..36.
+    pub channel_map: [u8; 5],
+    /// Hop increment, valid range 5..16 in spec-compliant packets.
+    pub hop_increment: u8,
+    /// Sleep clock accuracy field, raw 3-bit value.
+    pub sleep_clock_accuracy: u8,
 }
 
 /// A single entry in the Advertising Data structures.
@@ -319,8 +399,12 @@ impl<'a> Iterator for AdIterator<'a> {
 /// Configured at [`BleListenerState::start`] time, read-only during scanning.
 #[derive(Clone, Copy, Debug)]
 pub struct AdvFilter {
-    /// Accept legacy ADV PDUs (type ∈ {0,2,3,4,6} && len ≤ 37) and deliver them
-    /// via [`next_pdu`](BleListenerState::next_pdu).  Default: `true`.
+    /// Accept legacy ADV PDUs (type ∈ {0,2,4,5,6}; type 5 requires len=34)
+    /// and deliver them via [`next_pdu`](BleListenerState::next_pdu).
+    ///
+    /// Phase 1 routes CONNECT_IND through this gate; a later connection state
+    /// machine can split it into a dedicated `accept_connect_ind` knob.
+    /// Default: `true`.
     pub accept_legacy: bool,
 
     /// Count anomaly frames (type 7–15 OR len > 37) in the diagnostic stats.
@@ -550,8 +634,7 @@ impl BleListenerState {
             // Snapshot: copy DMA buffer bytes 0..50 → rx_snapshot, then bump gen.
             // Bump gen AFTER copy (prevents task from reading partial snapshot).
             unsafe {
-                self.snapshot_ch_idx
-                    .write(self.channel_idx.load(Ordering::Relaxed));
+                self.snapshot_ch_idx.write(self.channel_idx.load(Ordering::Relaxed));
                 let src = self.rx_buf.0.get().cast::<u8>();
                 let dst = self.rx_snapshot.0.get().cast::<u8>();
                 for i in 0..50usize {
@@ -608,10 +691,8 @@ impl BleListenerState {
     /// correct init order.
     pub fn start(&self, filter: AdvFilter) {
         // Store filter config
-        self.accept_legacy
-            .store(filter.accept_legacy, Ordering::Relaxed);
-        self.count_anomalies
-            .store(filter.count_anomalies, Ordering::Relaxed);
+        self.accept_legacy.store(filter.accept_legacy, Ordering::Relaxed);
+        self.count_anomalies.store(filter.count_anomalies, Ordering::Relaxed);
 
         // §10 / §4: SW state reset BEFORE HW cold_init.
         // First ISR after cold_init lands in S_RX_DONE → first task iteration traverses.
@@ -741,6 +822,8 @@ impl BleListenerState {
                     }
                     continue;
                 }
+                // Phase 1: CONNECT_IND (type 5) flows through the same
+                // accept_legacy gate as advertising-like PDUs.
                 if self.accept_legacy.load(Ordering::Relaxed) {
                     unsafe { self.frame_count.inc() };
                     return pdu;
@@ -769,11 +852,7 @@ impl BleListenerState {
 
         // Advance channel index BEFORE the traverse so the next bit2 labels the
         // snapshot with the new channel (ISR reads channel_idx at bit2 time).
-        let new_idx = self
-            .channel_idx
-            .load(Ordering::Relaxed)
-            .wrapping_add(1)
-            % 3;
+        let new_idx = self.channel_idx.load(Ordering::Relaxed).wrapping_add(1) % 3;
         self.channel_idx.store(new_idx, Ordering::Relaxed);
         let (logical_ch, _) = ADV_CHANNELS[new_idx];
 
@@ -836,10 +915,7 @@ impl BleListenerState {
         let int_div = (freq_khz / 64_000) & 0x1F;
         let frac_div = ((freq_khz % 64_000) << 10) / 250;
         let pll = rfend_read(0x44);
-        rfend_write(
-            0x44,
-            (pll & 0xFE0F_C000) | (int_div << 20) | (frac_div & 0x3FFF),
-        );
+        rfend_write(0x44, (pll & 0xFE0F_C000) | (int_div << 20) | (frac_div & 0x3FFF));
         let v = rfend_read(0x2C);
         rfend_write(0x2C, v | (1 << 1));
     }
