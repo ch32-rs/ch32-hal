@@ -154,8 +154,8 @@ async fn main(spawner: Spawner) -> ! {
         //         Must be called BEFORE start(); start() runs cold-init + IRQ enable.
         ble_set_phy_rx_mode_normal();
 
-        let rfend90 = core::ptr::read_volatile(0x4002_5090 as *const u32);
-        hal::println!("RFEND cal: co={}", rfend90 & 0x3F);
+        let tune = hal::pac::BLE_RFEND.tune_result().read();
+        hal::println!("RFEND cal: co={}", tune.co());
     }
 
     // Spawn scanner task — calls LISTENER.start() internally.
