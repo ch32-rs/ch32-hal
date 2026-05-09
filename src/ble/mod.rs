@@ -32,14 +32,13 @@ pub use rfend::rfend_dev_init;
 
 // ── Shared BLE TX completion primitive ──────────────────────────────────────
 
-/// gptrLLEReg base address — IRQ status at offset +0x08.
-const GPTRLLE_BASE: usize = 0x40024200;
-
 /// Wait for a BLE TX burst to fire and settle, using the DTM-style completion signal.
 ///
-/// **Completion signal**: `BB+0x08` bits 29+25 (`0x2200_0000`) are set by the GO
-/// strobe when a TX burst fires. These bits are sticky (not W1C-clearable): they
-/// transition 0 → non-zero at the first TX after reset and remain set permanently.
+/// **Completion signal**: `BLE_LLE.access_addr()` (gptrLLEReg+0x08) bits 29+25
+/// (`0x2200_0000`) are set by the GO strobe when a TX burst fires. These bits are
+/// sticky (not W1C-clearable): they transition 0 → non-zero at the first TX after
+/// reset and remain set permanently. The register is dual-purpose — write side is
+/// the BLE access address (e.g. ADV AA `0x8E89BED6`), read side is live IRQ status.
 ///
 /// **Timing contract**: this function MUST be called after the GO strobe has already
 /// been issued. For the first TX, it waits for the 0→non-zero transition; for all
@@ -48,11 +47,12 @@ const GPTRLLE_BASE: usize = 0x40024200;
 /// caller's responsibility to size it to cover the full over-the-air packet duration.
 ///
 /// Per-burst fire detection: to observe whether each individual GO causes a new TX
-/// (e.g. for diagnostics), write `bb_write(0x08, 0xFFFF_FFFF)` before each GO.
-/// On verified hardware bits 29+25 are NOT cleared by this write, but the write does
-/// clear bits[15:0] and is correct on other platforms where the sticky bits reset.
+/// (e.g. for diagnostics), write `BLE_LLE.access_addr().write_value(0xFFFF_FFFF)`
+/// before each GO. On verified hardware bits 29+25 are NOT cleared by this write,
+/// but the write does clear bits[15:0] and is correct on other platforms where the
+/// sticky bits reset.
 ///
-/// **BB+0x64 must NOT be used**: `gptrLLEReg+0x64` is event-driven and only
+/// **BLE_LLE.timer() must NOT be used**: gptrLLEReg+0x64 is event-driven and only
 /// decrements during active hardware connection events (`RF_Tx` path, asm line 72938).
 /// It never decrements for standalone DTM/ADV TX bursts — this function is correct.
 ///
@@ -69,9 +69,8 @@ const GPTRLLE_BASE: usize = 0x40024200;
 /// Must be called after `ble_phy_init()` and after the GO strobe has been written
 /// to the BLE link-layer engine. Caller is responsible for TX mode setup.
 pub unsafe fn ble_tx_wait_done(timeout_loops: u32, settle_loops: u32) -> bool {
-    let irq_reg = (GPTRLLE_BASE + 0x08) as *const u32;
     for _ in 0..timeout_loops {
-        if core::ptr::read_volatile(irq_reg) & 0x2200_0000 != 0 {
+        if crate::pac::BLE_LLE.access_addr().read() & 0x2200_0000 != 0 {
             // TX fired. Spin for packet-on-air completion before returning.
             for _ in 0..settle_loops {
                 core::hint::spin_loop();
