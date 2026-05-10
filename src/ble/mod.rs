@@ -196,6 +196,17 @@ extern "C" {
                                    // explicitly after startup zeroing (= TMOS_TimerInit(0) equiv).
 }
 
+/// Rust-side 1600 Hz system tick callback for `fnGetClockCBs`.
+///
+/// WCH's BB IRQ path expects this callback to return TMOS logical time in
+/// 625 us units. CH32V208 runs the CPU at 96 MHz in these BLE examples, so
+/// `mcycle / 60_000` gives the required 1600 Hz counter.
+unsafe extern "C" fn rust_get_sys_clock() -> u32 {
+    let cycle: u32;
+    core::arch::asm!("csrr {}, mcycle", out(reg) cycle, options(nomem, nostack));
+    cycle / 60_000
+}
+
 /// Pure-Rust replacement for WCH `BLE_IPCoreInit`.
 ///
 /// Sets the lib global MMIO pointer cache (required by `BB_IRQLibHandler` and
@@ -210,7 +221,7 @@ extern "C" {
 /// | WCH PDF step                      | This implementation            | Notes |
 /// |-----------------------------------|--------------------------------|-------|
 /// | `HAL_Init()` → SysClock + NVIC   | `hal::init()` by caller        | Done before `ble_hw_preamble` |
-/// | `HAL_TimeInit()` / RTC init       | **Explicit write** (Step 1)    | `TMOS_TimerInit(0)` = use RTC (PDF §8.1.1); we write `0x420B000A` directly (ROM's built-in RTC tick fn) since we don't call `TMOS_TimerInit`. ROM does NOT auto-install (baf71de gate). `fnGetClockCBs` is a COMMON/PCREL symbol — linker-placed, no address pin (Phase 2c; C ground truth 2026-05-09). |
+/// | `HAL_TimeInit()` / RTC init       | **Explicit write** (Step 1)    | We install `rust_get_sys_clock` with the same 1600 Hz / 625 us unit contract as `TMOS_TimerInit(0)`. `fnGetClockCBs` is a COMMON/PCREL symbol — linker-placed, no address pin (Phase 2c; C ground truth 2026-05-09). |
 /// | `WCHBLE_Init()` / `BLE_LibInit()` | **Skipped** (no libwchble)     | Replaced by `ble_ip_core_init` + Rust sub-inits |
 /// | `BLE_IPCoreInit()`                | This function                  | MMIO cache + 4 sub-inits |
 /// | `TMOS_TimerInit()` / clock config | **Skipped** (no TMOS)          | Not needed for ADV-only TX path |
@@ -227,22 +238,14 @@ pub unsafe fn ble_ip_core_init() {
     use core::ptr::{addr_of_mut, write_volatile};
 
     // ── Glue: mirror BLE_IPCoreInit steps 1-7 ────────────────────────────────
-    // ── Step 0: install ROM's built-in RTC tick fn into fnGetClockCBs slot ──────
-    // PDF §8.1.1: `TMOS_TimerInit(0)` = "选择 RTC 作为系统时钟" — internally the
-    // library writes the ROM's RTC tick fn address into this slot. Since we never
-    // call `TMOS_TimerInit`, we must do this explicitly.
+    // ── Step 0: install a 1600 Hz tick fn into fnGetClockCBs slot ──────────────
+    // BB IRQ .L7 calls this function pointer and stores its return value at
+    // gBleIPPara[0x1c]. The contract is TMOS logical time: 1600 Hz / 625 us.
     //
-    // 0x420B000A: ROM-internal LSI/RTC-derived tick fn on CH32V208WBU6 B1 silicon.
-    //   Returns a u32 counter at 1600 Hz / 625 µs per tick (PDF §3.3, Iron Law #35).
-    //   The bb_irq_lib_handler .L7 path reads this slot and stores the return value
-    //   at gBleIPPara[0x1c] for use by the BLE scheduler.
-    //
-    // Hardware-verified (2026-05-08):
-    //   - ROM does NOT auto-install: baf71de (NULL slot) → cba=0, slot stayed 0x00000000
-    //   - This write = equivalent of calling `TMOS_TimerInit(NULL)` per PDF
-    //   - B1-only: 0x420B000A is the ROM fn address for CH32V208WBU6 B1 silicon.
-    //     Other silicon revisions may use a different address (not yet verified).
-    const ROM_RTC_TICK_FN: u32 = 0x420B_000A; // B1 silicon ROM internal tick fn
+    // Previous standalone ADV builds wrote the ROM callback address 0x420B000A.
+    // Hardware readback on task #68 Phase C showed that address traps with
+    // mcause=2 on this path. The Rust replacement keeps the frequency contract
+    // and avoids executing the ROM callback from the BB IRQ hot path.
     // Phase 2c (2026-05-09): single symbol-resolved write is sufficient for the
     // frozen binary path. ROM IRQ reads absolute 0x20001c78 as fn ptr but is
     // NULL-tolerant: NULL → ROM internal fallback (= 0x420B000A); non-NULL valid →
@@ -253,10 +256,11 @@ pub unsafe fn ble_ip_core_init() {
     // scrub-0xDEADBEEF-then-reset cba=54, all PASS with 0x20001c78=NULL.
     // NOTE: minimal binary path (_ebss=0x200007c4, 0x20001c78 not BSS-covered) needs
     // separate treatment; out of scope for task #56 (frozen-only).
-    write_volatile(addr_of_mut!(fnGetClockCBs), ROM_RTC_TICK_FN);
+    let rust_get_sys_clock_fn = rust_get_sys_clock as *const () as usize as u32;
+    write_volatile(addr_of_mut!(fnGetClockCBs), rust_get_sys_clock_fn);
     debug_assert_eq!(
         core::ptr::read_volatile(core::ptr::addr_of!(fnGetClockCBs)),
-        ROM_RTC_TICK_FN,
+        rust_get_sys_clock_fn,
         "fnGetClockCBs write verify failed"
     );
 
