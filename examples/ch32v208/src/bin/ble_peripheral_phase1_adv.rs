@@ -1252,13 +1252,19 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
             bb_write(0x00, 2); // T=0: GO strobe
             if RX_TURNAROUND_PROBE {
                 let ip = core::ptr::addr_of!(gBleIPPara) as *const u8;
-                let start = mcycle();
+                // H2d fix (2026-05-11, RE5): QingKe V4 does NOT implement mcycle (CSR 0xB00)
+                // — absent from RM Table 8-1. Use SysTick CNTL (0xE000_F008) instead.
+                // SysTick runs at HCLK/8 = 12 MHz (free-running, STRE=false, init'd by
+                // hal::init() → embassy::init() before any task starts). 1 tick = 83.3 ns;
+                // 24_000 ticks ≈ 2 ms, matching the original 192_000-cycle timeout at 96 MHz.
+                let stk_cntl = 0xE000_F008 as *const u32;
+                let start = read_volatile(stk_cntl);
                 let mut ip4 = read_volatile(ip.add(4));
-                while ip4 != 1 && mcycle().wrapping_sub(start) < 192_000 {
+                while ip4 != 1 && read_volatile(stk_cntl).wrapping_sub(start) < 24_000 {
                     core::hint::spin_loop();
                     ip4 = read_volatile(ip.add(4));
                 }
-                let dt = mcycle().wrapping_sub(start);
+                let dt = read_volatile(stk_cntl).wrapping_sub(start); // SysTick ticks @ 12 MHz; dt/12 = µs
                 let reason = if ip4 == 1 { 0u8 } else { 1u8 };
                 hal::println!(
                     "# IP4WAIT dt={} reason={} ip4={:#04x} state={:#010x} bb08={:#010x}",
@@ -1957,7 +1963,9 @@ unsafe fn dump_ble_ram_state() {
 #[inline(always)]
 fn mcycle() -> u32 {
     let v: u32;
-    // SAFETY: bare-metal machine-mode context; mcycle CSR is available here.
+    // NOTE: QingKe V4 does NOT implement mcycle (CSR 0xB00) — RM Table 8-1 confirms absence.
+    // This function always returns 0 on CH32V208. Only retained for adv_delay_rng seeding
+    // (fixed XOR constant 0x68d5_1234 is acceptable for diagnostics). Do NOT use for timing.
     unsafe {
         core::arch::asm!("csrr {}, mcycle", out(reg) v, options(nomem, nostack));
     }
@@ -2291,10 +2299,9 @@ unsafe fn inject_evt_padvctx() {
 
 #[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(spawner: embassy_executor::Spawner) -> ! {
-    // CH32V208 QingKe V4F resets with machine counters inhibited; qingke-rt
-    // v0.6.1 leaves CSR 0x320 (mcountinhibit) untouched. Enable CY so
-    // mcycle()-based timeouts can advance.
-    unsafe { core::arch::asm!("csrw 0x320, zero", options(nomem, nostack)); }
+    // H2d (2026-05-11): csrw 0x320 (mcountinhibit) removed — QingKe V4 does NOT implement
+    // mcycle/mcountinhibit (RM Table 8-1 exhaustive CSR list confirms absence). The probe-wait
+    // loop in adv_tx_burst_ch37 now uses SysTick CNTL instead. See Z1/Z2/Z3 evidence.
 
     hal::debug::SDIPrint::enable();
 
