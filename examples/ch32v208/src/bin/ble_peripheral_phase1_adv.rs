@@ -531,6 +531,7 @@ static mut Y200_RFEND: [u32; 52] = [0; 52];
 const ADV_AA: u32 = 0x8E89_BED6;
 const ADV_CRC_INIT: u32 = 0x55_5555;
 const ADV_CH37_FREQ_KHZ: u32 = 2_402_000;
+const ADV_CHANNELS: [u8; 3] = [37, 38, 39];
 
 /// Device address, LE order.
 /// Over-the-air: C2:21:43:65:87:12 (reversed from this array).
@@ -724,10 +725,11 @@ fn LLE() {
 }
 
 unsafe fn build_common_ad_payload(mut pos: usize) -> usize {
-    // AD: Flags = BR/EDR Not Supported (EVT Broadcaster uses 0x04).
+    // AD: Flags = LE General Discoverable + BR/EDR Not Supported.
+    // Android scan UIs commonly hide legacy peripherals without the discoverable bit.
     TX_BUF[pos] = 2; // length
     TX_BUF[pos + 1] = 0x01; // type: Flags
-    TX_BUF[pos + 2] = 0x04; // value
+    TX_BUF[pos + 2] = 0x06; // value
     pos += 3;
 
     // AD: Manufacturer specific, EVT-compatible bytes "ble".
@@ -948,7 +950,7 @@ unsafe fn trace_bb_read(off: usize) -> u32 {
 /// Returns (state_pre_go, state_post_go, irq_post_go):
 ///   state_pre/post: BB+0x1C LLE state (108=Sleep, non-108 post = HW accepted GO)
 ///   irq_post_go: BB+0x08 bits[31:0] immediately after GO strobe
-unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
+unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) {
     if TRACE_ARMED {
         hal::ble::tracer::reset();
     }
@@ -1014,7 +1016,7 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
     //   Lucy: "代码可能本身就对" — bit6=0 might be correct.
     let ctrl = lle_read(0x00);
     trace_r(LLE_BASE as u32 + 0x00, ctrl);
-    let v = (ctrl & !0x7F) | 37u32; // 0x25: ch=37, bit6=0
+    let v = (ctrl & !0x7F) | adv_channel as u32; // bit6=0, logical adv channel
     trace_w(LLE_BASE as u32 + 0x00, v);
     lle_write(0x00, v);
 
@@ -1035,6 +1037,12 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
     let tx_slot = tx_ptr;
     trace_w(BB_BASE as u32 + 0x70, tx_slot);
     bb_write(0x70, tx_slot);
+    if RX_TURNAROUND_PROBE {
+        core::ptr::write_bytes(addr_of!(RX_TURNAROUND_BUF) as *mut u8, 0, 50);
+        let rx_ptr = addr_of!(RX_TURNAROUND_BUF) as u32;
+        trace_w(BB_BASE as u32 + 0x74, rx_ptr);
+        bb_write(0x74, rx_ptr);
+    }
 
     // Pre-trigger snapshot (before any GO writes).
     let state_pre = bb_read(0x1C); // expect 108 = Sleep
@@ -1228,15 +1236,17 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32) -> (u32, u32, u32) {
             trace_w(BB_BASE as u32 + 0x00, 2);
             bb_write(0x00, 2); // T=0: GO strobe
             hal::println!("# PATHC_IRQ_MARK post-go");
-            for alive in 0..3 {
-                // v7-probe.3-fix2 (2026-05-05): 240→72_000 cycles.
-                // Without production markers (ok=1 etc.), the ISR had no time to settle
-                // before the alive loop tried to print. The v7-probe.3-fix binary's
-                // ok=1 println provided ~435µs of accidental UART delay that masked this.
-                // 72_000 @144MHz @4 cycles/iter ≈ 500µs — lets BB ISR complete its
-                // TX-advance sequence (776-unit timer + TX air time + .L4 cleanup).
-                qingke::riscv::asm::delay(72_000);
-                hal::println!("# PATHC_ALIVE post-go {}", alive);
+            if !RX_TURNAROUND_PROBE {
+                for alive in 0..3 {
+                    // v7-probe.3-fix2 (2026-05-05): 240→72_000 cycles.
+                    // Without production markers (ok=1 etc.), the ISR had no time to settle
+                    // before the alive loop tried to print. The v7-probe.3-fix binary's
+                    // ok=1 println provided ~435µs of accidental UART delay that masked this.
+                    // 72_000 @144MHz @4 cycles/iter ≈ 500µs — lets BB ISR complete its
+                    // TX-advance sequence (776-unit timer + TX air time + .L4 cleanup).
+                    qingke::riscv::asm::delay(72_000);
+                    hal::println!("# PATHC_ALIVE post-go {}", alive);
+                }
             }
             // T12: FNGETCLOCKCBS_CALL_COUNT print removed (minimal Path B — no probe diagnostics).
             if PATHC_MANUAL_L6 {
@@ -1602,10 +1612,10 @@ unsafe fn wait_adv_tx_before_rx_turnaround() -> bool {
     // wait_tx_done() path intentionally spins longer to cover full on-air
     // completion before returning to the main loop; that opens the RX window
     // after CONNECT_IND has already passed.
-    hal::ble::ble_tx_wait_done(10_000, 14_400)
+    hal::ble::ble_tx_wait_done(10_000, 28_800)
 }
 
-unsafe fn rx_turnaround_capture_ch37() -> Option<[u8; 50]> {
+unsafe fn rx_turnaround_capture_ch37(adv_channel: u8) -> Option<[u8; 50]> {
     qingke::pfic::disable_interrupt(63);
     qingke::pfic::disable_interrupt(64);
 
@@ -1622,7 +1632,7 @@ unsafe fn rx_turnaround_capture_ch37() -> Option<[u8; 50]> {
     rfend_write(0x2C, rfend_read(0x2C) & !(1 << 1));
 
     let ctrl = lle_read(0x00);
-    lle_write(0x00, (ctrl & !0x7F) | 37);
+    lle_write(0x00, (ctrl & !0x7F) | adv_channel as u32);
     let ctrl = lle_read(0x00);
     lle_write(0x00, (ctrl & !0x180) | 0x100);
 
@@ -2037,7 +2047,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
         ADDR[1],
         ADDR[0]
     );
-    hal::println!("PDU: ADV_IND + SCAN_RSP, ch37=2402MHz, Flags=0x04, Mfr=\"ble\", Name=\"Simple\"");
+    hal::println!("PDU: ADV_IND + SCAN_RSP, ch37/38/39, Flags=0x06, Mfr=\"ble\", Name=\"Simple\"");
 
     unsafe {
         // ── Phase B: staged BLE PHY init with register snapshots between stages ──
@@ -2275,7 +2285,27 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
             }
 
             build_adv_pdu();
-            let (state_pre, state_post, irq_post) = adv_tx_burst_ch37(tx_n);
+            let mut state_pre = 0u32;
+            let mut state_post = 0u32;
+            let mut irq_post = 0u32;
+            let mut done = false;
+            for &adv_channel in &ADV_CHANNELS {
+                let (pre, post, irq) = adv_tx_burst_ch37(tx_n, adv_channel);
+                state_pre = pre;
+                state_post = post;
+                irq_post = irq;
+
+                if RX_TURNAROUND_PROBE {
+                    done |= wait_adv_tx_before_rx_turnaround();
+                    if let Some(snap) = rx_turnaround_capture_ch37(adv_channel) {
+                        if log_connect_ind(tx_n, &snap) {
+                            connect_n += 1;
+                        }
+                    }
+                } else {
+                    done |= wait_tx_done();
+                }
+            }
 
             if TRACE_ARMED {
                 // Dense post-trigger samples for 0x40024208 status/IRQ candidates.
@@ -2286,19 +2316,6 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
                 qingke::riscv::asm::delay(3_840);
                 let bb08_50us = bb_read(0x08);
                 trace_r(BB_BASE as u32 + 0x08, bb08_50us);
-            }
-
-            let done = if RX_TURNAROUND_PROBE {
-                wait_adv_tx_before_rx_turnaround()
-            } else {
-                wait_tx_done()
-            };
-            if RX_TURNAROUND_PROBE {
-                if let Some(snap) = rx_turnaround_capture_ch37() {
-                    if log_connect_ind(tx_n, &snap) {
-                        connect_n += 1;
-                    }
-                }
             }
 
             if TRACE_ARMED {
@@ -2325,8 +2342,11 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
             }
 
             build_scan_rsp_pdu();
-            let _ = adv_tx_burst_ch37(tx_n);
-            let scan_done = wait_tx_done();
+            let mut scan_done = false;
+            for &adv_channel in &ADV_CHANNELS {
+                let _ = adv_tx_burst_ch37(tx_n, adv_channel);
+                scan_done |= wait_tx_done();
+            }
 
             tx_n += 1;
             if done {

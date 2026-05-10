@@ -8,6 +8,7 @@ LOG="${LOG:-/tmp/task68_phase1_gate_${STAMP}_sdi.log}"
 PYLOG="${PYLOG:-/tmp/task68_phase1_gate_${STAMP}_mac.log}"
 NAME="${NAME:-Simple}"
 SCAN_SECONDS="${SCAN_SECONDS:-8}"
+CONNECT_AT="${CONNECT_AT:-0}"
 
 if [[ ! -x "$BIN" && ! -f "$BIN" ]]; then
   echo "missing binary: $BIN" >&2
@@ -36,6 +37,7 @@ python3 "$ROOT/tools/ble_phase1_verify.py" \
   --name "$NAME" \
   --scan-seconds "$SCAN_SECONDS" \
   --connect \
+  --connect-at "$CONNECT_AT" \
   --connect-timeout 8 \
   --hold-seconds 1 \
   --sdi-log "$LOG" \

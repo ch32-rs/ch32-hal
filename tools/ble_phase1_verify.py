@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name", default="Simple", help="substring of advertised local name")
     parser.add_argument("--scan-seconds", type=float, default=12.0)
     parser.add_argument("--connect", action="store_true", help="connect to the first matching device")
+    parser.add_argument("--connect-at", type=float, default=0.0, help="seconds after scan start to initiate connection")
     parser.add_argument("--connect-timeout", type=float, default=8.0)
     parser.add_argument("--hold-seconds", type=float, default=1.0)
     parser.add_argument("--sdi-log", type=pathlib.Path, help="firmware SDI log to check after connect")
@@ -34,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def scan(name: str, seconds: float) -> tuple[list[object], int]:
+async def scan(name: str, seconds: float, first_match: asyncio.Queue | None = None) -> tuple[list[object], int]:
     hits = 0
     devices = {}
 
@@ -44,6 +45,8 @@ async def scan(name: str, seconds: float) -> tuple[list[object], int]:
         if name in local_name:
             hits += 1
             devices[device.address] = device
+            if first_match is not None and first_match.empty():
+                first_match.put_nowait(device)
             print(f"HIT #{hits} name={local_name} addr={device.address} rssi={advertisement_data.rssi}")
 
     scanner = BleakScanner(on_adv)
@@ -80,16 +83,32 @@ def check_sdi_log(path: pathlib.Path) -> bool:
     return marker
 
 
+async def scan_and_connect(args: argparse.Namespace) -> tuple[list[object], int, bool]:
+    first_match: asyncio.Queue = asyncio.Queue(maxsize=1)
+    scan_task = asyncio.create_task(scan(args.name, args.scan_seconds, first_match))
+    connected = True
+
+    if args.connect:
+        try:
+            device = await asyncio.wait_for(first_match.get(), timeout=args.scan_seconds)
+        except asyncio.TimeoutError:
+            devices, hits = await scan_task
+            print(f"DONE scan hits={hits} devices={len(devices)}")
+            return devices, hits, False
+        if args.connect_at > 0:
+            await asyncio.sleep(args.connect_at)
+        connected = await connect_once(device, args.connect_timeout, args.hold_seconds)
+
+    devices, hits = await scan_task
+    print(f"DONE scan hits={hits} devices={len(devices)}")
+    return devices, hits, connected
+
+
 async def main() -> int:
     args = parse_args()
-    devices, hits = await scan(args.name, args.scan_seconds)
-    print(f"DONE scan hits={hits} devices={len(devices)}")
+    devices, hits, connected = await scan_and_connect(args)
     if hits == 0:
         return 2
-
-    connected = True
-    if args.connect:
-        connected = await connect_once(devices[0], args.connect_timeout, args.hold_seconds)
 
     marker = True
     if args.sdi_log:
