@@ -20,6 +20,8 @@ pub mod lle;
 pub mod listener;
 pub mod rfend;
 pub mod regint;
+#[cfg(feature = "embassy")]
+pub mod runtime;
 pub mod tracer;
 pub mod types;
 
