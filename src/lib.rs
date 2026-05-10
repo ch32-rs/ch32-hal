@@ -133,6 +133,9 @@ pub mod usbpd;
 #[cfg(can)]
 pub mod can;
 
+#[cfg(emac)]
+pub mod emac;
+
 #[cfg(flash)]
 pub mod flash;
 
