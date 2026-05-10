@@ -2291,6 +2291,11 @@ unsafe fn inject_evt_padvctx() {
 
 #[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(spawner: embassy_executor::Spawner) -> ! {
+    // CH32V208 QingKe V4F resets with machine counters inhibited; qingke-rt
+    // v0.6.1 leaves CSR 0x320 (mcountinhibit) untouched. Enable CY so
+    // mcycle()-based timeouts can advance.
+    unsafe { core::arch::asm!("csrw 0x320, zero", options(nomem, nostack)); }
+
     hal::debug::SDIPrint::enable();
 
     // 96 MHz from HSE 32 MHz crystal — required for RFEND calibration (same as DTM TX).
