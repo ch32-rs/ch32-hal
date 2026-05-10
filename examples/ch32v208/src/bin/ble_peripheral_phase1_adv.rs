@@ -553,6 +553,8 @@ static mut TRACE_ARMED: bool = false;
 /// Phase 2 entry probe: after ADV_IND TX completes, switch ch37 into RX and
 /// poll the advertising-channel DMA buffer for a central CONNECT_IND.
 const RX_TURNAROUND_PROBE: bool = true;
+const HARVEST_SINGLE_GO_DIAG: bool = false;
+const SCAN_RSP_REPLY: bool = true;
 
 // ── B experiment — BB+0x74 alignment ─────────────────────────────────────────
 //
@@ -606,6 +608,7 @@ static mut TX_BUF: [u8; 39] = [0u8; 39];
 
 #[link_section = ".bss.rx_turnaround_buf"]
 static mut RX_TURNAROUND_BUF: [u32; 70] = [0u32; 70];
+static mut SOLICITED_SCAN_RSP_N: u32 = 0;
 
 #[ch32_hal::interrupt]
 fn BB() {
@@ -1989,7 +1992,6 @@ async fn phase1_adv_loop() -> ! {
     let mut adv_delay_rng = mcycle() ^ 0x68d5_1234;
     let mut tx_n: u32 = 0;
     let mut ok_n: u32 = 0;
-    let mut scan_ok_n: u32 = 0;
     let mut connect_n: u32 = 0;
     hal::println!("scheduler: interval=200ms advDelay=0..10ms");
 
@@ -2018,6 +2020,17 @@ async fn phase1_adv_loop() -> ! {
                 if RX_TURNAROUND_PROBE {
                     done = true;
                     if let Some(snap) = rx_turnaround_capture_ch37(adv_channel) {
+                        let pdu_type = snap[0] & 0x0F;
+                        let pdu_len = snap[1] & 0x3F;
+                        if SCAN_RSP_REPLY && pdu_type == 3 && pdu_len >= 12 && &snap[8..14] == &ADDR[..] {
+                            build_scan_rsp_pdu();
+                            ble_set_phy_tx_mode_1mbps(TX_BUF[1]);
+                            bb_write(0x08, 0x8000);
+                            let ctrl = lle_read(0x00);
+                            lle_write(0x00, ctrl | 0x800000);
+                            qingke::riscv::asm::delay(72_000);
+                            SOLICITED_SCAN_RSP_N = SOLICITED_SCAN_RSP_N.wrapping_add(1);
+                        }
                         if log_connect_ind(tx_n, &snap) {
                             connect_n += 1;
                         }
@@ -2061,19 +2074,9 @@ async fn phase1_adv_loop() -> ! {
                 TRACE_ARMED = false;
             }
 
-            build_scan_rsp_pdu();
-            let mut scan_done = false;
-            for &adv_channel in &ADV_CHANNELS {
-                let _ = adv_tx_burst_ch37(tx_n, adv_channel);
-                scan_done |= wait_tx_done();
-            }
-
             tx_n += 1;
             if done {
                 ok_n += 1;
-            }
-            if scan_done {
-                scan_ok_n += 1;
             }
 
             // Print first 5, then every 100.
@@ -2081,11 +2084,12 @@ async fn phase1_adv_loop() -> ! {
                 let irq08 = bb_read(0x08);
                 let ctrl00 = lle_read(0x00);
                 let lle2c = lle_read(0x2C);
+                let solicited_scan_rsp_n = SOLICITED_SCAN_RSP_N;
                 hal::println!(
                     "tx#{tx_n}: done={done} state={state_pre}→{state_post} \
                      irq_post={irq_post:#010x} irq_now={irq08:#010x} \
                      ctrl00={ctrl00:#010x} lle2c={lle2c:#010x} \
-                     adv_delay_us={adv_delay_us} adv_ok={ok_n}/{tx_n} scan_ok={scan_ok_n}/{tx_n} conn={connect_n}",
+                     adv_delay_us={adv_delay_us} adv_ok={ok_n}/{tx_n} solicited_scan_rsp={solicited_scan_rsp_n} conn={connect_n}",
                 );
                 let y3_bb00_logged = Y3_BB00_LOGGED;
                 let y3_bb64_logged = Y3_BB64_LOGGED;
@@ -2108,7 +2112,12 @@ async fn phase1_adv_loop() -> ! {
                 );
                 // Liveness heartbeat: every 100 bursts ≈ 10s @100ms/burst.
                 // Confirms main loop is advancing and not stalled by ISR storm.
-                hal::println!("# tx_heartbeat tx_n={} adv_ok={} scan_ok={}", tx_n, ok_n, scan_ok_n);
+                hal::println!(
+                    "# tx_heartbeat tx_n={} adv_ok={} solicited_scan_rsp={}",
+                    tx_n,
+                    ok_n,
+                    solicited_scan_rsp_n
+                );
                 // V1.2 staged bisect: print stub results (visible only if BB_HANDLER_STAGE=0 or
                 // stage 1/2 that returns cleanly — confirms handler can enter+exit without fault).
                 // Stage 0 (no W1C): expect BB_STUB_ENTER_COUNT=BB_STUB_MAX_ENTRIES (50), then auto-disable.
