@@ -103,11 +103,11 @@ impl Default for TaskEvents {
 }
 
 /// Timer cancel token for `tmos_start_task`-style wrappers.
-pub struct TimerGeneration {
+pub struct BleTimer {
     value: Mutex<CriticalSectionRawMutex, Cell<u32>>,
 }
 
-impl TimerGeneration {
+impl BleTimer {
     pub const fn new() -> Self {
         Self {
             value: Mutex::new(Cell::new(0)),
@@ -134,7 +134,7 @@ impl TimerGeneration {
     }
 }
 
-impl Default for TimerGeneration {
+impl Default for BleTimer {
     fn default() -> Self {
         Self::new()
     }
@@ -149,7 +149,7 @@ pub enum LlEvent {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GapEvent {
-    LinkEstablished(ConnectionInfo),
+    LinkEstablished(ConnectionContext),
     LinkTerminated { reason: u8 },
 }
 
@@ -267,8 +267,12 @@ impl ConnectIndParams {
     }
 }
 
+/// LL connection state owned by `ble_ll_task`.
+///
+/// FUTURE: Phase 1 is single-link. Multi-link support needs an indexed context
+/// pool plus explicit connection-handle allocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ConnectionInfo {
+pub struct ConnectionContext {
     pub handle: u16,
     pub params: ConnectIndParams,
 }
