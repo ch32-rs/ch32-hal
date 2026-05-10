@@ -2084,6 +2084,12 @@ async fn phase1_adv_loop() -> ! {
                         let pdu_type = snap[0] & 0x0F;
                         let pdu_len = snap[1] & 0x3F;
                         if SCAN_RSP_REPLY && pdu_type == 3 && pdu_len >= 12 && &snap[8..14] == &ADDR[..] {
+                            hal::println!(
+                                "# MODE_E_SCAN_RSP_PRE tx_n={} ch={} solicited={}",
+                                tx_n,
+                                adv_channel,
+                                SOLICITED_SCAN_RSP_N,
+                            );
                             build_scan_rsp_pdu();
                             ble_set_phy_tx_mode_1mbps(TX_BUF[1]);
                             bb_write(0x08, 0x8000);
@@ -2091,6 +2097,12 @@ async fn phase1_adv_loop() -> ! {
                             lle_write(0x00, ctrl | 0x800000);
                             qingke::riscv::asm::delay(72_000);
                             SOLICITED_SCAN_RSP_N = SOLICITED_SCAN_RSP_N.wrapping_add(1);
+                            hal::println!(
+                                "# MODE_E_SCAN_RSP_POST tx_n={} ch={} solicited={}",
+                                tx_n,
+                                adv_channel,
+                                SOLICITED_SCAN_RSP_N,
+                            );
                         }
                         if log_connect_ind(tx_n, &snap) {
                             connect_n += 1;
