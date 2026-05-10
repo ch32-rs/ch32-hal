@@ -532,6 +532,9 @@ const ADV_AA: u32 = 0x8E89_BED6;
 const ADV_CRC_INIT: u32 = 0x55_5555;
 const ADV_CH37_FREQ_KHZ: u32 = 2_402_000;
 const ADV_CHANNELS: [u8; 3] = [37, 38, 39];
+const LL_EVT_START_ADV: u16 = 1 << 0;
+
+static LL_EVENTS: hal::ble::runtime::TaskEvents = hal::ble::runtime::TaskEvents::new();
 
 /// Device address, LE order.
 /// Over-the-air: C2:21:43:65:87:12 (reversed from this array).
@@ -1925,6 +1928,167 @@ fn next_adv_delay_us(state: &mut u32) -> u32 {
     xorshift32(state) % 10_001
 }
 
+#[embassy_executor::task]
+async fn phase1_ble_ll_task() -> ! {
+    loop {
+        let bits = LL_EVENTS.wait_and_take().await;
+        if bits & LL_EVT_START_ADV != 0 {
+            phase1_adv_loop().await;
+        }
+    }
+}
+
+async fn phase1_adv_loop() -> ! {
+    const ADV_INTERVAL: Duration = Duration::from_millis(200);
+
+    let mut next_adv = Instant::now();
+    let mut adv_delay_rng = mcycle() ^ 0x68d5_1234;
+    let mut tx_n: u32 = 0;
+    let mut ok_n: u32 = 0;
+    let mut scan_ok_n: u32 = 0;
+    let mut connect_n: u32 = 0;
+    hal::println!("scheduler: interval=200ms advDelay=0..10ms");
+
+    loop {
+        Timer::at(next_adv).await;
+        let adv_delay_us = next_adv_delay_us(&mut adv_delay_rng);
+        next_adv += ADV_INTERVAL + Duration::from_micros(adv_delay_us as u64);
+
+        // Keep all MMIO/global-static work out of await spans.
+        unsafe {
+            if (TRACE_FIRST_BURST && tx_n == 0) || (TRACE_EVERY_N != 0 && tx_n != 0 && tx_n % TRACE_EVERY_N == 0) {
+                TRACE_ARMED = true;
+            }
+
+            build_adv_pdu();
+            let mut state_pre = 0u32;
+            let mut state_post = 0u32;
+            let mut irq_post = 0u32;
+            let mut done = false;
+            for &adv_channel in &ADV_CHANNELS {
+                let (pre, post, irq) = adv_tx_burst_ch37(tx_n, adv_channel);
+                state_pre = pre;
+                state_post = post;
+                irq_post = irq;
+
+                if RX_TURNAROUND_PROBE {
+                    done |= wait_adv_tx_before_rx_turnaround();
+                    if let Some(snap) = rx_turnaround_capture_ch37(adv_channel) {
+                        if log_connect_ind(tx_n, &snap) {
+                            connect_n += 1;
+                        }
+                    }
+                } else {
+                    done |= wait_tx_done();
+                }
+            }
+
+            if TRACE_ARMED {
+                // Dense post-trigger samples for 0x40024208 status/IRQ candidates.
+                // 96 MHz: 960 cycles ≈ 10us, 3840 cycles ≈ 40us more (≈50us total).
+                qingke::riscv::asm::delay(960);
+                let bb08_10us = bb_read(0x08);
+                trace_r(BB_BASE as u32 + 0x08, bb08_10us);
+                qingke::riscv::asm::delay(3_840);
+                let bb08_50us = bb_read(0x08);
+                trace_r(BB_BASE as u32 + 0x08, bb08_50us);
+            }
+
+            if TRACE_ARMED {
+                let lle00_post = lle_read(0x00);
+                let bb08_post = bb_read(0x08);
+                let bb64_post = bb_read(0x64);
+                trace_r(LLE_BASE as u32 + 0x00, lle00_post);
+                trace_r(BB_BASE as u32 + 0x08, bb08_post);
+                trace_r(BB_BASE as u32 + 0x64, bb64_post);
+
+                hal::println!(
+                    "# txbuf addr={:#010x} len={} first21",
+                    addr_of!(TX_BUF) as u32,
+                    TX_BUF[1] as usize + 2
+                );
+                hal::println!(
+                    "# txbuf {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+                    TX_BUF[0], TX_BUF[1], TX_BUF[2], TX_BUF[3], TX_BUF[4], TX_BUF[5], TX_BUF[6],
+                    TX_BUF[7], TX_BUF[8], TX_BUF[9], TX_BUF[10], TX_BUF[11], TX_BUF[12], TX_BUF[13],
+                    TX_BUF[14], TX_BUF[15], TX_BUF[16], TX_BUF[17], TX_BUF[18], TX_BUF[19], TX_BUF[20],
+                );
+                hal::ble::tracer::dump();
+                TRACE_ARMED = false;
+            }
+
+            build_scan_rsp_pdu();
+            let mut scan_done = false;
+            for &adv_channel in &ADV_CHANNELS {
+                let _ = adv_tx_burst_ch37(tx_n, adv_channel);
+                scan_done |= wait_tx_done();
+            }
+
+            tx_n += 1;
+            if done {
+                ok_n += 1;
+            }
+            if scan_done {
+                scan_ok_n += 1;
+            }
+
+            // Print first 5, then every 100.
+            if tx_n <= 5 || tx_n % 100 == 0 {
+                let irq08 = bb_read(0x08);
+                let ctrl00 = lle_read(0x00);
+                let lle2c = lle_read(0x2C);
+                hal::println!(
+                    "tx#{tx_n}: done={done} state={state_pre}→{state_post} \
+                     irq_post={irq_post:#010x} irq_now={irq08:#010x} \
+                     ctrl00={ctrl00:#010x} lle2c={lle2c:#010x} \
+                     adv_delay_us={adv_delay_us} adv_ok={ok_n}/{tx_n} scan_ok={scan_ok_n}/{tx_n} conn={connect_n}",
+                );
+                let y3_bb00_logged = Y3_BB00_LOGGED;
+                let y3_bb64_logged = Y3_BB64_LOGGED;
+                hal::println!(
+                    "# Y3_RUN total_bursts={} bb00_logged={} bb64_logged={}",
+                    tx_n,
+                    y3_bb00_logged,
+                    y3_bb64_logged,
+                );
+                let bb_irq_entry = BB_IRQ_ENTRY;
+                let bb_irq_exit = BB_IRQ_EXIT;
+                let lle_irq_entry = LLE_IRQ_ENTRY;
+                let lle_irq_exit = LLE_IRQ_EXIT;
+                hal::println!(
+                    "# PATHC_IRQ counters BB={}/{} LLE={}/{}",
+                    bb_irq_entry,
+                    bb_irq_exit,
+                    lle_irq_entry,
+                    lle_irq_exit,
+                );
+                // Liveness heartbeat: every 100 bursts ≈ 10s @100ms/burst.
+                // Confirms main loop is advancing and not stalled by ISR storm.
+                hal::println!("# tx_heartbeat tx_n={} adv_ok={} scan_ok={}", tx_n, ok_n, scan_ok_n);
+                // V1.2 staged bisect: print stub results (visible only if BB_HANDLER_STAGE=0 or
+                // stage 1/2 that returns cleanly — confirms handler can enter+exit without fault).
+                // Stage 0 (no W1C): expect BB_STUB_ENTER_COUNT=BB_STUB_MAX_ENTRIES (50), then auto-disable.
+                // Stage 1+: expect BB_STUB_ENTER_COUNT=0 (stub statics unused; full path runs).
+                hal::println!(
+                    "# BB_STUB stage={} enter_count={} blk0={:#010x}/ip4={:#04x}/bb08={:#010x} blk1={:#010x}/ip4={:#04x}/bb08={:#010x}",
+                    BB_HANDLER_STAGE,
+                    BB_STUB_ENTER_COUNT,
+                    BB_STUB_BLK[0], BB_STUB_IP4[0], BB_STUB_BB08[0],
+                    BB_STUB_BLK[1], BB_STUB_IP4[1], BB_STUB_BB08[1],
+                );
+                // NOTE: all SDI diagnostics (done/state/irq) are self-report only and
+                // may not reflect actual air TX. Acceptance gate = nRF/HackRF visible packet.
+                //   done=true      → ble_tx_wait_done() settle delay elapsed (always true)
+                //   state_post≠108 → HW left Sleep state after trigger (informational)
+                //   irq_post bits[15:0] → TX completion IRQ flags (bits[29+25] always-set)
+            }
+
+            // Event spacing is driven by Embassy time. Radio-level microsecond
+            // windows remain inside `adv_tx_burst_ch37` / `wait_tx_done`.
+        }
+    }
+}
+
 // ── H_PADVCTX experiment ──────────────────────────────────────────────────────
 //
 // Hypothesis (Lucy msg f2e2549f, 2026-05-02):
@@ -2000,7 +2164,7 @@ unsafe fn inject_evt_padvctx() {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[embassy_executor::main(entry = "ch32_hal::entry")]
-async fn main(_spawner: embassy_executor::Spawner) -> ! {
+async fn main(spawner: embassy_executor::Spawner) -> ! {
     hal::debug::SDIPrint::enable();
 
     // 96 MHz from HSE 32 MHz crystal — required for RFEND calibration (same as DTM TX).
@@ -2266,150 +2430,12 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
             scan_rsp_len,
             scan_rsp_len - 2
         );
+    }
 
-        const ADV_INTERVAL: Duration = Duration::from_millis(200);
-        let mut next_adv = Instant::now();
-        let mut adv_delay_rng = mcycle() ^ 0x68d5_1234;
-        let mut tx_n: u32 = 0;
-        let mut ok_n: u32 = 0;
-        let mut scan_ok_n: u32 = 0;
-        let mut connect_n: u32 = 0;
-        hal::println!("scheduler: interval=200ms advDelay=0..10ms");
+    let _ = spawner.spawn(phase1_ble_ll_task());
+    LL_EVENTS.set(LL_EVT_START_ADV);
 
-        loop {
-            Timer::at(next_adv).await;
-            let adv_delay_us = next_adv_delay_us(&mut adv_delay_rng);
-            next_adv += ADV_INTERVAL + Duration::from_micros(adv_delay_us as u64);
-
-            if (TRACE_FIRST_BURST && tx_n == 0) || (TRACE_EVERY_N != 0 && tx_n != 0 && tx_n % TRACE_EVERY_N == 0) {
-                TRACE_ARMED = true;
-            }
-
-            build_adv_pdu();
-            let mut state_pre = 0u32;
-            let mut state_post = 0u32;
-            let mut irq_post = 0u32;
-            let mut done = false;
-            for &adv_channel in &ADV_CHANNELS {
-                let (pre, post, irq) = adv_tx_burst_ch37(tx_n, adv_channel);
-                state_pre = pre;
-                state_post = post;
-                irq_post = irq;
-
-                if RX_TURNAROUND_PROBE {
-                    done |= wait_adv_tx_before_rx_turnaround();
-                    if let Some(snap) = rx_turnaround_capture_ch37(adv_channel) {
-                        if log_connect_ind(tx_n, &snap) {
-                            connect_n += 1;
-                        }
-                    }
-                } else {
-                    done |= wait_tx_done();
-                }
-            }
-
-            if TRACE_ARMED {
-                // Dense post-trigger samples for 0x40024208 status/IRQ candidates.
-                // 96 MHz: 960 cycles ≈ 10us, 3840 cycles ≈ 40us more (≈50us total).
-                qingke::riscv::asm::delay(960);
-                let bb08_10us = bb_read(0x08);
-                trace_r(BB_BASE as u32 + 0x08, bb08_10us);
-                qingke::riscv::asm::delay(3_840);
-                let bb08_50us = bb_read(0x08);
-                trace_r(BB_BASE as u32 + 0x08, bb08_50us);
-            }
-
-            if TRACE_ARMED {
-                let lle00_post = lle_read(0x00);
-                let bb08_post = bb_read(0x08);
-                let bb64_post = bb_read(0x64);
-                trace_r(LLE_BASE as u32 + 0x00, lle00_post);
-                trace_r(BB_BASE as u32 + 0x08, bb08_post);
-                trace_r(BB_BASE as u32 + 0x64, bb64_post);
-
-                hal::println!(
-                    "# txbuf addr={:#010x} len={} first21",
-                    addr_of!(TX_BUF) as u32,
-                    TX_BUF[1] as usize + 2
-                );
-                hal::println!(
-                    "# txbuf {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
-                    TX_BUF[0], TX_BUF[1], TX_BUF[2], TX_BUF[3], TX_BUF[4], TX_BUF[5], TX_BUF[6],
-                    TX_BUF[7], TX_BUF[8], TX_BUF[9], TX_BUF[10], TX_BUF[11], TX_BUF[12], TX_BUF[13],
-                    TX_BUF[14], TX_BUF[15], TX_BUF[16], TX_BUF[17], TX_BUF[18], TX_BUF[19], TX_BUF[20],
-                );
-                hal::ble::tracer::dump();
-                TRACE_ARMED = false;
-            }
-
-            build_scan_rsp_pdu();
-            let mut scan_done = false;
-            for &adv_channel in &ADV_CHANNELS {
-                let _ = adv_tx_burst_ch37(tx_n, adv_channel);
-                scan_done |= wait_tx_done();
-            }
-
-            tx_n += 1;
-            if done {
-                ok_n += 1;
-            }
-            if scan_done {
-                scan_ok_n += 1;
-            }
-
-            // Print first 5, then every 100.
-            if tx_n <= 5 || tx_n % 100 == 0 {
-                let irq08 = bb_read(0x08);
-                let ctrl00 = lle_read(0x00);
-                let lle2c = lle_read(0x2C);
-                hal::println!(
-                    "tx#{tx_n}: done={done} state={state_pre}→{state_post} \
-                     irq_post={irq_post:#010x} irq_now={irq08:#010x} \
-                     ctrl00={ctrl00:#010x} lle2c={lle2c:#010x} \
-                     adv_delay_us={adv_delay_us} adv_ok={ok_n}/{tx_n} scan_ok={scan_ok_n}/{tx_n} conn={connect_n}",
-                );
-                let y3_bb00_logged = Y3_BB00_LOGGED;
-                let y3_bb64_logged = Y3_BB64_LOGGED;
-                hal::println!(
-                    "# Y3_RUN total_bursts={} bb00_logged={} bb64_logged={}",
-                    tx_n,
-                    y3_bb00_logged,
-                    y3_bb64_logged,
-                );
-                let bb_irq_entry = BB_IRQ_ENTRY;
-                let bb_irq_exit = BB_IRQ_EXIT;
-                let lle_irq_entry = LLE_IRQ_ENTRY;
-                let lle_irq_exit = LLE_IRQ_EXIT;
-                hal::println!(
-                    "# PATHC_IRQ counters BB={}/{} LLE={}/{}",
-                    bb_irq_entry,
-                    bb_irq_exit,
-                    lle_irq_entry,
-                    lle_irq_exit,
-                );
-                // Liveness heartbeat: every 100 bursts ≈ 10s @100ms/burst.
-                // Confirms main loop is advancing and not stalled by ISR storm.
-                hal::println!("# tx_heartbeat tx_n={} adv_ok={} scan_ok={}", tx_n, ok_n, scan_ok_n);
-                // V1.2 staged bisect: print stub results (visible only if BB_HANDLER_STAGE=0 or
-                // stage 1/2 that returns cleanly — confirms handler can enter+exit without fault).
-                // Stage 0 (no W1C): expect BB_STUB_ENTER_COUNT=BB_STUB_MAX_ENTRIES (50), then auto-disable.
-                // Stage 1+: expect BB_STUB_ENTER_COUNT=0 (stub statics unused; full path runs).
-                hal::println!(
-                    "# BB_STUB stage={} enter_count={} blk0={:#010x}/ip4={:#04x}/bb08={:#010x} blk1={:#010x}/ip4={:#04x}/bb08={:#010x}",
-                    BB_HANDLER_STAGE,
-                    BB_STUB_ENTER_COUNT,
-                    BB_STUB_BLK[0], BB_STUB_IP4[0], BB_STUB_BB08[0],
-                    BB_STUB_BLK[1], BB_STUB_IP4[1], BB_STUB_BB08[1],
-                );
-                // NOTE: all SDI diagnostics (done/state/irq) are self-report only and
-                // may not reflect actual air TX. Acceptance gate = nRF/HackRF visible packet.
-                //   done=true      → ble_tx_wait_done() settle delay elapsed (always true)
-                //   state_post≠108 → HW left Sleep state after trigger (informational)
-                //   irq_post bits[15:0] → TX completion IRQ flags (bits[29+25] always-set)
-            }
-
-            // Event spacing is driven by Embassy time. Radio-level microsecond
-            // windows remain inside `adv_tx_burst_ch37` / `wait_tx_done`.
-        }
+    loop {
+        Timer::after(Duration::from_secs(60)).await;
     }
 }
