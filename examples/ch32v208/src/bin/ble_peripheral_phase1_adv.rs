@@ -609,6 +609,10 @@ static mut TX_BUF: [u8; 39] = [0u8; 39];
 #[link_section = ".bss.rx_turnaround_buf"]
 static mut RX_TURNAROUND_BUF: [u32; 70] = [0u32; 70];
 static mut SOLICITED_SCAN_RSP_N: u32 = 0;
+static mut MODE_E_ADV_PRE_N: u32 = 0;
+static mut MODE_E_ADV_POST_N: u32 = 0;
+static mut MODE_E_RX_PRE_N: u32 = 0;
+static mut MODE_E_RX_POST_N: u32 = 0;
 
 #[ch32_hal::interrupt]
 fn BB() {
@@ -2012,14 +2016,71 @@ async fn phase1_adv_loop() -> ! {
             let mut irq_post = 0u32;
             let mut done = false;
             for &adv_channel in &ADV_CHANNELS {
+                MODE_E_ADV_PRE_N = MODE_E_ADV_PRE_N.wrapping_add(1);
+                if tx_n < 5 || tx_n % 100 == 0 {
+                    let mode_e_adv_pre = MODE_E_ADV_PRE_N;
+                    let mode_e_adv_post = MODE_E_ADV_POST_N;
+                    let mode_e_rx_pre = MODE_E_RX_PRE_N;
+                    let mode_e_rx_post = MODE_E_RX_POST_N;
+                    hal::println!(
+                        "# MODE_E_ADV_CALL_PRE tx_n={} ch={} adv_pre={} adv_post={} rx_pre={} rx_post={}",
+                        tx_n,
+                        adv_channel,
+                        mode_e_adv_pre,
+                        mode_e_adv_post,
+                        mode_e_rx_pre,
+                        mode_e_rx_post,
+                    );
+                }
                 let (pre, post, irq) = adv_tx_burst_ch37(tx_n, adv_channel);
+                MODE_E_ADV_POST_N = MODE_E_ADV_POST_N.wrapping_add(1);
+                if tx_n < 5 || tx_n % 100 == 0 {
+                    let mode_e_adv_pre = MODE_E_ADV_PRE_N;
+                    let mode_e_adv_post = MODE_E_ADV_POST_N;
+                    hal::println!(
+                        "# MODE_E_ADV_CALL_POST tx_n={} ch={} adv_pre={} adv_post={} pre={} post={} irq={:#010x}",
+                        tx_n,
+                        adv_channel,
+                        mode_e_adv_pre,
+                        mode_e_adv_post,
+                        pre,
+                        post,
+                        irq,
+                    );
+                }
                 state_pre = pre;
                 state_post = post;
                 irq_post = irq;
 
                 if RX_TURNAROUND_PROBE {
                     done = true;
-                    if let Some(snap) = rx_turnaround_capture_ch37(adv_channel) {
+                    MODE_E_RX_PRE_N = MODE_E_RX_PRE_N.wrapping_add(1);
+                    if tx_n < 5 || tx_n % 100 == 0 {
+                        let mode_e_rx_pre = MODE_E_RX_PRE_N;
+                        let mode_e_rx_post = MODE_E_RX_POST_N;
+                        hal::println!(
+                            "# MODE_E_RX_CALL_PRE tx_n={} ch={} rx_pre={} rx_post={}",
+                            tx_n,
+                            adv_channel,
+                            mode_e_rx_pre,
+                            mode_e_rx_post,
+                        );
+                    }
+                    let rx_snap = rx_turnaround_capture_ch37(adv_channel);
+                    MODE_E_RX_POST_N = MODE_E_RX_POST_N.wrapping_add(1);
+                    if tx_n < 5 || tx_n % 100 == 0 {
+                        let mode_e_rx_pre = MODE_E_RX_PRE_N;
+                        let mode_e_rx_post = MODE_E_RX_POST_N;
+                        hal::println!(
+                            "# MODE_E_RX_CALL_POST tx_n={} ch={} some={} rx_pre={} rx_post={}",
+                            tx_n,
+                            adv_channel,
+                            rx_snap.is_some(),
+                            mode_e_rx_pre,
+                            mode_e_rx_post,
+                        );
+                    }
+                    if let Some(snap) = rx_snap {
                         let pdu_type = snap[0] & 0x0F;
                         let pdu_len = snap[1] & 0x3F;
                         if SCAN_RSP_REPLY && pdu_type == 3 && pdu_len >= 12 && &snap[8..14] == &ADDR[..] {
