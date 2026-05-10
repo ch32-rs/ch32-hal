@@ -1239,6 +1239,16 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
             // the first PATHC_LIB_IRQ block + ble_set_phy_tx_mode_1mbps step 6. Removed.
             trace_w(BB_BASE as u32 + 0x00, 2);
             bb_write(0x00, 2); // T=0: GO strobe
+            if RX_TURNAROUND_PROBE {
+                let ip = core::ptr::addr_of!(gBleIPPara) as *const u8;
+                let start = mcycle();
+                let mut ip4 = read_volatile(ip.add(4));
+                while ip4 != 1 && mcycle().wrapping_sub(start) < 192_000 {
+                    core::hint::spin_loop();
+                    ip4 = read_volatile(ip.add(4));
+                }
+                return (state_pre, bb_read(0x1C), ip4 as u32);
+            }
             hal::println!("# PATHC_IRQ_MARK post-go");
             if !RX_TURNAROUND_PROBE {
                 for alive in 0..3 {
@@ -1620,9 +1630,6 @@ unsafe fn wait_adv_tx_before_rx_turnaround() -> bool {
 }
 
 unsafe fn rx_turnaround_capture_ch37(adv_channel: u8) -> Option<[u8; 50]> {
-    qingke::pfic::disable_interrupt(63);
-    qingke::pfic::disable_interrupt(64);
-
     core::ptr::write_bytes(addr_of!(RX_TURNAROUND_BUF) as *mut u8, 0, 50);
 
     bb_write(0x64, 0);
@@ -1637,44 +1644,67 @@ unsafe fn rx_turnaround_capture_ch37(adv_channel: u8) -> Option<[u8; 50]> {
 
     let ctrl = lle_read(0x00);
     lle_write(0x00, (ctrl & !0x7F) | adv_channel as u32);
-    let ctrl = lle_read(0x00);
-    lle_write(0x00, (ctrl & !0x180) | 0x100);
 
-    rfend_write(0x08, rfend_read(0x08) | 0x0033_0000);
-    bb_write(0x50, 89);
-    bb_write(0x64, 406);
-    bb_write(0x00, 1);
+    hal::ble::listener::ble_set_phy_rx_mode_normal();
 
-    for _ in 0..300_000u32 {
-        let irq = bb_read(0x08);
-        if irq & (1 << 2) != 0 {
-            bb_write(0x08, irq);
-            bb_write(0x1C, 93);
+    let saved_0c = bb_read(0x0C);
+    bb_write(0x0C, saved_0c & !0x2000);
+    core::arch::asm!("fence.i", options(nomem, nostack));
+    bb_write(0x08, 0x2000);
+    let bb_mode = (bb_read(0x00) >> 12) & 0x3;
+    let rx_timer = match bb_mode {
+        0 => 406,
+        2 => 1086,
+        _ => 446,
+    };
+    bb_write(0x64, rx_timer);
+    bb_write(0x0C, saved_0c);
 
+    // Empirical Phase-C diagnostic deadline: T_IFS 150us + CONNECT_IND air
+    // time 44B*8us = 352us + margin. lib timer 406 ticks has TBD units.
+    let deadline = Instant::now() + Duration::from_micros(600);
+    loop {
+        // WCH gptrLLEReg+0x08 maps to this example's BB_BASE+0x08 accessor.
+        let lle08 = bb_read(0x08);
+        if lle08 & (1 << 3) != 0 {
             let mut snap = [0u8; 50];
             let src = addr_of!(RX_TURNAROUND_BUF) as *const u8;
             for (i, b) in snap.iter_mut().enumerate() {
                 *b = read_volatile(src.add(i));
             }
+            let bb64 = bb_read(0x64);
+            let bb00 = bb_read(0x00);
+            let bb38 = bb_read(0x38);
+            // W1C after snapshot keeps the completion bit visible for this trace.
+            bb_write(0x08, 1 << 3);
             bb_write(0x64, 0);
-            qingke::pfic::unpend_interrupt(63);
-            qingke::pfic::unpend_interrupt(64);
-            qingke::pfic::enable_interrupt(63);
-            if PATHC_ENABLE_LLE_IRQ {
-                qingke::pfic::enable_interrupt(64);
-            }
+            hal::println!(
+                "# RX_TURNAROUND_DONE ch={} lle08={:#010x} bb64={:#010x} bb00={:#010x} bb38={:#010x} hdr={:02x} {:02x}",
+                adv_channel,
+                lle08,
+                bb64,
+                bb00,
+                bb38,
+                snap[0],
+                snap[1]
+            );
             return Some(snap);
+        }
+        if Instant::now() >= deadline {
+            break;
         }
         core::hint::spin_loop();
     }
 
+    hal::println!(
+        "# RX_TURNAROUND_TIMEOUT ch={} lle08={:#010x} bb64={:#010x} bb00={:#010x} bb38={:#010x}",
+        adv_channel,
+        bb_read(0x08),
+        bb_read(0x64),
+        bb_read(0x00),
+        bb_read(0x38)
+    );
     bb_write(0x64, 0);
-    qingke::pfic::unpend_interrupt(63);
-    qingke::pfic::unpend_interrupt(64);
-    qingke::pfic::enable_interrupt(63);
-    if PATHC_ENABLE_LLE_IRQ {
-        qingke::pfic::enable_interrupt(64);
-    }
     None
 }
 
@@ -1972,7 +2002,7 @@ async fn phase1_adv_loop() -> ! {
                 irq_post = irq;
 
                 if RX_TURNAROUND_PROBE {
-                    done |= wait_adv_tx_before_rx_turnaround();
+                    done = true;
                     if let Some(snap) = rx_turnaround_capture_ch37(adv_channel) {
                         if log_connect_ind(tx_n, &snap) {
                             connect_n += 1;
