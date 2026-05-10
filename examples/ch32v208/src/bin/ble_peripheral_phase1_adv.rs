@@ -537,8 +537,9 @@ const ADV_CHANNELS: [u8; 3] = [37, 38, 39];
 /// Over-the-air: C2:21:43:65:87:12 (reversed from this array).
 const ADDR: [u8; 6] = [0x12, 0x87, 0x65, 0x43, 0x21, 0xC2];
 
-/// Match EVT broadcaster header style: public address (TxAdd=0).
-const TXADD_RANDOM: bool = false;
+// ADDR is a static random address (top two bits of the most significant
+// address octet are `11`), so legacy ADV/SCAN_RSP must set TxAdd=1.
+const TXADD_RANDOM: bool = true;
 
 /// Capture TX bursts as register traces. The trace is printed after the burst
 /// finishes so SDI output does not perturb the trigger sequence.
