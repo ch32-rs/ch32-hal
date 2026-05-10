@@ -41,6 +41,9 @@ pub enum BleTaskId {
 
 /// TMOS-style 16-bit event mask plus a single wake signal.
 ///
+/// `set()` is safe to call from ISR context on single-core CH32 RISC-V:
+/// `CriticalSectionRawMutex` disables interrupts idempotently in ISR.
+///
 /// The signal only wakes the task. Event identity lives in `bits`, so multiple
 /// ISR-side `set()` calls coalesce safely before the task drains them.
 pub struct TaskEvents {
@@ -64,6 +67,9 @@ impl TaskEvents {
     }
 
     /// Equivalent to `tmos_clear_event(task, event)`.
+    ///
+    /// Use only for explicit cancellation. Dispatch loops should prefer
+    /// `take()` and process the local copy to avoid clearing ISR-set bits.
     #[inline]
     pub fn clear(&self, event: u16) {
         self.bits.lock(|bits| bits.set(bits.get() & !event));
