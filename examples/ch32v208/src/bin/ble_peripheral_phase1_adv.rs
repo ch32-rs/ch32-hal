@@ -1247,6 +1247,16 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
                     core::hint::spin_loop();
                     ip4 = read_volatile(ip.add(4));
                 }
+                let dt = mcycle().wrapping_sub(start);
+                let reason = if ip4 == 1 { 0u8 } else { 1u8 };
+                hal::println!(
+                    "# IP4WAIT dt={} reason={} ip4={:#04x} state={:#010x} bb08={:#010x}",
+                    dt,
+                    reason,
+                    ip4,
+                    bb_read(0x1C),
+                    bb_read(0x08)
+                );
                 return (state_pre, bb_read(0x1C), ip4 as u32);
             }
             hal::println!("# PATHC_IRQ_MARK post-go");
