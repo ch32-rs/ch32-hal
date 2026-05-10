@@ -49,6 +49,9 @@ The old docs stop at flow-level detail. This note adds the IRQ state and MMIO wr
 | `ll_advertise_legacy_rx` | `.text.ll_advertise_legacy_rx + 0x000` | `0x12c` | `symbols.txt:7129`; `/tmp/libwchble_v208_dr.asm:53243` | high |
 | `ll_advertise_process` | `.text.ll_advertise_process + 0x000` | `>= 0x5c2` | `/tmp/libwchble_v208_dr.asm:53431` | high |
 | `BB_IRQLibHandler` | `.highcode + 0x000` | `0x114` | `/tmp/libwchble_v208_dr.asm:69270`; `src/ble/bb.rs` Rust port | high |
+| `LLE_IRQLibHandler` | `.highcode.LLE_IRQHandler + 0x002` | `0x038` | `/tmp/libwchble_v208_dr.asm:90539` | high |
+| `LLE_IRQSubHandler` | `.highcode + 0x000` | `0x1f8` | `/tmp/libwchble_v208_dr.asm:93513` | high |
+| `lle_irq_process` | `.highcode + 0x1f8` | `>= 0x13c` | `/tmp/libwchble_v208_dr.asm:93848` | high |
 | `ll_tx_wait_finish` | `.highcode + 0x0c0` | `0x0fe` | `/tmp/libwchble_v208_dr.asm:91473`; `symbols.txt:11388` | high |
 | `BLE_SetPHYRxMode` | `.text.BLE_SetPHYRxMode + 0x000` | `0x11a` | `/tmp/libwchble_v208_dr.asm:70141`; `symbols.txt:11389` | high |
 
@@ -68,6 +71,84 @@ Register names in this note use WCH lib symbol names plus current Rust aliases:
 | Legacy ADV RX setup | `ll_advertise_process` state `.L443` | clears `gBleIPPara[3]` before CRC check | `BLE_SetPHYRxMode(0, 37, 0)` then `ll_tx_wait_finish(1, 0, 37)` | official RX window setup happens in task process, driven by `ll_tx_wait_finish`, then CRC + legacy parser runs if `gBleIPPara[3] bit0` is set | `ll_advertise_process +0x66..0xae` | high |
 | `ll_tx_wait_finish(1, ...)` | `a0 == 1` | writes `gBleIPPara[4]=0x80` | saves `BLE_LLE.irq_mask(+0x0c)`; clears bit13 in saved mask; `fence.i`; writes `BLE_LLE.access_addr(+0x08)=0x2000`; sets timer 406/1086/446 based on `BLE_BB.ctrl(+0x00)[13:12]`; restores irq mask | arms the RX wait window and waits for `gBleIPPara[2] bit0` or `gBleIPPara[3] bit0` or timer expiry | `ll_tx_wait_finish +0x164..0x1bc` | high |
 | RX completion gate | `ll_tx_wait_finish` wait loop | reads `gBleIPPara[2]` and `gBleIPPara[3]` | no direct MMIO in loop except `BLE_LLE.timer(+0x64)` read | returns when either bit is set or timer reaches zero | `ll_tx_wait_finish +0x11c..0x13a` | high |
+| LLE IRQ RX completion | `LLE.statr(+0x08) bit2` | ORs `gBleIPPara[3] bit0`; clears `gBleIPPara[5]` | W1C `BLE_LLE.access_addr(+0x08)=0x04`; state ACK via `BLE_LLE.settle(+0x1c)=2/93/97/101/105/107/108`; updates `BLE_BB.timing(+0x2c)` low bits | this is the lib-side setter that lets `ll_tx_wait_finish` observe legacy ADV RX completion | `LLE_IRQSubHandler +0x84..0x1c8`; `lle_irq_process +0x256..0x334` | high |
+| LLE IRQ TX/RX auxiliary completion | `LLE.statr(+0x08) bit3` | ORs `gBleIPPara[2] bit0`; writes `gBleIPPara[4]=0x80` | W1C `BLE_LLE.access_addr(+0x08)=0x08` | secondary wait completion path used by `ll_tx_wait_finish` | `LLE_IRQSubHandler +0x3a..0x64`; `lle_irq_process +0x20c..0x23a` | high |
+
+## LLE IRQ completion path addendum
+
+Task #68 Phase C v1 mirrored `ll_tx_wait_finish(1)` in task context and waited for `gBleIPPara[2]` / `gBleIPPara[3]`. Both bytes stayed zero. The missing setter is in the LLE interrupt path, not in the BB interrupt path.
+
+`LLE_IRQLibHandler` dispatches through two modes:
+
+```asm
+LLE_IRQLibHandler +0x0a:
+  0a: lb   t1,0(t0)              ; tmosSign
+  0e: sb   zero,0(t0)
+  12: beqz t1,.L1
+  28: jal  lle_irq_process       ; scheduler mode
+  32: jal  LLE_IRQSubHandler     ; normal IRQ mode
+```
+
+`LLE_IRQSubHandler` and `lle_irq_process` share the same relevant logic. The normal path is shown here.
+
+`LLE.statr(+0x08) bit3` sets `gBleIPPara[2] bit0` and acknowledges bit3:
+
+```asm
+LLE_IRQSubHandler +0x3a:
+  3a: lw   a4,8(a5)              ; BLE_LLE+0x08 status
+  3c: srli a4,a4,0x3
+  40: beqz a4,.L3
+  42: lbu  a4,gBleIPPara+2
+  4a: ori  a4,a4,1
+  52: sb   a4,gBleIPPara+2
+  5a: sb   -128,gBleIPPara+4     ; ip4 = 0x80
+  62: li   a4,8
+  64: sw   a4,8(a5)              ; W1C bit3
+```
+
+`LLE.statr(+0x08) bit2` sets `gBleIPPara[3] bit0`, then acknowledges bit2:
+
+```asm
+LLE_IRQSubHandler +0x94:
+  94: sb   zero,gBleIPPara+5
+  9c: lw   a4,8(a5)              ; BLE_LLE+0x08 status
+  ae: srli a4,a4,0x2
+  b6: beqz a4,.L7
+  ...
+LLE_IRQSubHandler +0x1b6:
+  1b6: lbu  a4,gBleIPPara+3
+  1ba: ori  a4,a4,1
+  1c2: sb   a4,gBleIPPara+3
+  1c6: li   a4,2
+  1c8: sw   a4,8(a5)             ; W1C bit2
+```
+
+The bit2 branch also writes `BLE_LLE.settle(+0x1c)` and `BLE_BB.timing(+0x2c)`:
+
+```asm
+LLE_IRQSubHandler +0xba:
+  ba: lw   a4,0(a3)              ; BLE_BB+0x00
+  bc: srli a4,a4,0xc
+  c0: bnez a4,.L8                ; non-idle -> settle 108
+  c2: lw   a2,80(a5)             ; BLE_LLE+0x50
+  c4: lw   a4,36(a1)             ; gBleIPPara[36] pointer
+  ce: beqz a2,.L9
+  ...
+LLE_IRQSubHandler +0xd2:
+  d2: li   a4,93                 ; settle value for common RX path
+  d6: sw   a4,28(a5)             ; BLE_LLE+0x1c
+  d8: lbu  a4,gBleIPPara
+  e0: ori  a4,a4,1
+  e4: sb   a4,gBleIPPara
+  e8: li   a4,4
+  ea: sw   a4,8(a5)              ; W1C bit2 or bit1 group
+  ec: lw   a4,44(a3)             ; BLE_BB+0x2c
+  ee: and  a4,a4,-4
+  f0: ori  a4,a4,1
+  f4: sw   a4,44(a3)
+```
+
+`lle_irq_process` has the same setters at `+0x20c..0x23a` for bit3 and `+0x256..0x334` for bit2, with an extra snapshot store of `BLE_LLE+0x08` into `gBleIPPara[0x18..0x1b]`.
 
 ## Six task questions
 
@@ -186,7 +267,7 @@ ll_advertise_process +0x86:
   aa: call ll_advertise_legacy_rx
 ```
 
-Answer: call depth is `BB/LLE IRQ updates gBleIPPara flags` -> TMOS schedules/runs `ll_advertise_process` -> `ll_tx_wait_finish` waits on flags/timer -> `ll_advertise_legacy_rx` parses the received PDU.
+Answer: call depth is `LLE IRQ updates gBleIPPara flags` -> TMOS schedules/runs `ll_advertise_process` -> `ll_tx_wait_finish` waits on flags/timer -> `ll_advertise_legacy_rx` parses the received PDU. The relevant setters are `LLE.statr bit2 -> gBleIPPara[3] bit0` and `LLE.statr bit3 -> gBleIPPara[2] bit0`.
 
 Confidence: high.
 
@@ -213,7 +294,7 @@ ll_tx_wait_finish +0x126:
   138: bnez a5,.L83
 ```
 
-Answer: `ip4=1` is a cleanup/re-arm marker. The RX receive completion criterion for legacy ADV is `gBleIPPara[3] bit0` plus CRC success.
+Answer: `ip4=1` is a cleanup/re-arm marker. The RX receive completion criterion for legacy ADV is `gBleIPPara[3] bit0` plus CRC success. `gBleIPPara[3] bit0` is set by the LLE IRQ bit2 path.
 
 Confidence: high.
 
@@ -262,14 +343,13 @@ Confidence: high for listed state, medium for RFEND inheritance.
 ## Phase C implications
 
 1. Phase C should treat `ip4=1` as a cleanup/re-arm marker, not as the RX-arm decision point.
-2. The closest lib-faithful one-shot path is:
-   - call or mirror `BLE_SetPHYRxMode(0, channel, 0)` after the ADV TX PDU is committed,
-   - mirror `ll_tx_wait_finish(1, 0, channel)` setup: save `BLE_LLE+0x0c`, clear bit13 in the mask, write `BLE_LLE+0x08=0x2000`, set `gBleIPPara[4]=0x80`, program `BLE_LLE+0x64`, restore `BLE_LLE+0x0c`,
-   - wait on a bounded condition equivalent to `gBleIPPara[3] bit0` or timer expiry,
-   - parse `CONNECT_IND` from the DMA buffer in task context.
-3. A direct ISR write at bit4/bit7 time explains the `state=108 -> 108` regression: that point is downstream cleanup, while the lib RX wait window is armed through `ll_tx_wait_finish`.
-4. The `886e8b2` fix v4 mask cleared `bits[8:7]`, set `bits[13:12]=01`, and rewrote the channel field. The disasm confirms `BLE_SetPHYRxMode` sets `bits[13:12]`; it does not confirm a lib-side clear of `bits[8:7]` in that function. Clearing `bits[8:7]` inside the BB ISR remains an experimental deviation from the lib path.
-5. `b7b4408` task-side handoff staying ADV-visible matches the disasm: task context is the correct layer, but the handoff must mirror the `ll_tx_wait_finish` state machine instead of waiting for `adv_tx_burst` to return through the diagnostic path.
+2. Phase C v1 mirrored `ll_tx_wait_finish` in task context, while the Rust example kept IRQ64 masked and its `LLE()` vector as a counter-only stub. The wait flags therefore had no active setter.
+3. The closest lib-faithful one-shot path has two required halves:
+   - TX/RX wait setup: `BLE_SetPHYRxMode(0, channel, 0)` plus the `ll_tx_wait_finish(1, 0, channel)` command/timer sequence.
+   - RX completion setter: an LLE IRQ bit2/bit3 handler that W1Cs `BLE_LLE+0x08` and signals a Rust-owned completion path.
+4. A direct BB ISR write at bit4/bit7 time explains the `state=108 -> 108` regression: that point is downstream cleanup, while the lib RX wait window is armed through `ll_tx_wait_finish` and completed by LLE IRQ bits.
+5. The `886e8b2` fix v4 mask cleared `bits[8:7]`, set `bits[13:12]=01`, and rewrote the channel field. The disasm confirms `BLE_SetPHYRxMode` sets `bits[13:12]`; it does not confirm a lib-side clear of `bits[8:7]` in that function. Clearing `bits[8:7]` inside the BB ISR remains an experimental deviation from the lib path.
+6. `b7b4408` task-side handoff staying ADV-visible matches the disasm: task context is the correct orchestration layer, and LLE IRQ completion is the missing signal source.
 
 ## Evidence table
 
@@ -280,17 +360,104 @@ Confidence: high for listed state, medium for RFEND inheritance.
 | `ll_advertise_legacy_rx` parses PDU type 3 / 5 after AdvA match and filter pass. | `/tmp/libwchble_v208_dr.asm:53245-53354` | objdump | high |
 | `BB_IRQLibHandler` bit6 sets `ip4=0xC0`, writes `BLE_LLE+0x08=0x2000`, and programs `BLE_LLE+0x64`. | `/tmp/libwchble_v208_dr.asm:69270-69340`; `src/ble/bb.rs` | objdump + Rust port | high |
 | `BB_IRQLibHandler` bit4 and bit7 both set `ip4=1`. | `/tmp/libwchble_v208_dr.asm:69341-69365`; `src/ble/bb.rs` | objdump + Rust port | high |
+| `LLE_IRQSubHandler` bit3 sets `gBleIPPara[2] bit0`, sets `ip4=0x80`, and W1Cs `BLE_LLE+0x08` bit3. | `/tmp/libwchble_v208_dr.asm:93551-93564` | objdump | high |
+| `LLE_IRQSubHandler` bit2 sets `gBleIPPara[3] bit0` and W1Cs `BLE_LLE+0x08` bit2. | `/tmp/libwchble_v208_dr.asm:93597-93816` | objdump | high |
+| `lle_irq_process` duplicates the bit3 and bit2 completion setters and snapshots `BLE_LLE+0x08` into `gBleIPPara[0x18..0x1b]`. | `/tmp/libwchble_v208_dr.asm:93848-94006` | objdump | high |
 | `ll_tx_wait_finish(1)` saves/restores `BLE_LLE+0x0c`, writes `BLE_LLE+0x08=0x2000`, sets `ip4=0x80`, and selects timer 406/1086/446. | `/tmp/libwchble_v208_dr.asm:91518-91636` | objdump | high |
 | `BLE_SetPHYRxMode(0,...)` writes the RX PHY register block and sets `BLE_LLE+0x00 bit12`. | `/tmp/libwchble_v208_dr.asm:70141-70260` | objdump | high |
 | Existing early docs have correct high-level function order and incomplete IRQ dispatch detail. | `09-ll-layer-complete.md`, `25-advertising-scanning.md`, this objdump | doc + objdump | high |
 
 ## Minimal reopen contract for task #68 Phase C
 
-The next implementation should use `441e7b1` as baseline and treat the sequence above as the Phase C reference. The first code experiment should mirror `ll_tx_wait_finish(1,0,ch)` as a bounded diagnostic helper and print:
+The next implementation should use `441e7b1` as baseline and treat the sequence above as the Phase C reference.
 
-- `gBleIPPara[2]`, `gBleIPPara[3]`, `gBleIPPara[4]`
-- `BLE_LLE+0x08`, `+0x0c`, `+0x64`
-- `BLE_BB+0x00`, `+0x38`
-- DMA buffer first 40 bytes
+Implementation contract:
+
+- Keep the existing BB IRQ TX path order intact.
+- Add a minimal LLE IRQ completion path for task #68 Phase C, preferably Rust-owned completion state (`TaskEvents` / `Signal` / `Mutex<Cell>`), so task code can wait without writing `gBleIPPara`.
+- Handle at least `BLE_LLE+0x08` bit2 and bit3:
+  - bit2: W1C bit2 and report RX completion for legacy ADV (`gBleIPPara[3]` equivalent).
+  - bit3: W1C bit3 and report auxiliary completion (`gBleIPPara[2]` equivalent).
+- Keep `BLE_LLE+0x00 bits[8:7]` unchanged by the completion handler.
+- Diagnostic output should include `BLE_LLE+0x08`, `BLE_LLE+0x64`, `BLE_BB+0x00`, `BLE_BB+0x38`, and DMA buffer first 40 bytes.
 
 Review gate: ADV still visible, and one of the three DoD states from Phase C applies: parsed CONNECT_IND, classified snapshot, or regression with a bad branch.
+
+## Addendum: Full BB_IRQLibHandler + LLE_IRQSubHandler RX completion path
+
+Added 2026-05-10 as task #68 Phase C v3 prerequisite. Source: `/tmp/libwchble_v208_dr.asm`.
+
+### BB_IRQLibHandler — complete 0x114-byte structure
+
+The handler handles exactly 4 paths. There is **no RX completion handler**:
+
+| Label | Offset | Trigger | Action |
+|---|---|---|---|
+| entry | +0x00..+0x1a | — | Load gptrBBReg; read BB+0x38; check bit6 |
+| bit6 preamble | +0x1c..+0x5a | bit6 SET | W1C 0x60; if ip0.bit6: call fnGetClockCBs→ip0x1c, clear ip0.bit6 |
+| .L5 | +0x5c..+0x88 | ip0.bit5 SET | clear ip0.bit5; write LLE+0x08=0x8000; LLE+0x6c=ip20<<1 (scan pre-arm) |
+| .L6 | +0x8a..+0xba | ip4.bit6 CLEAR | gBleIPPara[5]=1; LLE+0x08=0x2000; gBleIPPara[4]=0xC0; LLE+0x64=ip16 |
+| .L4 | +0xbc..+0xd2 | statr bit4 | W1C 0x10; gBleIPPara[4]=1 |
+| .L8 | +0xd4..+0xea | statr bit7 | W1C 0x80; gBleIPPara[4]=1 |
+| .L9 | +0xec..+0x108 | AES.statr bit1 | clear bit1, clear bit0 |
+| .L2 | +0x10a..+0x112 | — | epilogue / ret |
+
+**Confirmed: BB_IRQLibHandler has NO path that sets gBleIPPara[2] or gBleIPPara[3].**
+
+### LLE_IRQSubHandler — RX completion flag setters
+
+`LLE_IRQSubHandler` is called from `LLE_IRQLibHandler` (LLE IRQ, IRQ64). It dispatches on `LLE+0x08` status bits:
+
+| LLE+0x08 bit | Offset | Action |
+|---|---|---|
+| bit3 (RX data done) | +0x3a..+0x64 | **`gBleIPPara[2] \|= 1`**; gBleIPPara[4]=0x80; W1C LLE+0x08=8 |
+| bit0 (timeout/other) | +0x66..+0x82 | gBleIPPara[1] \|= 1; W1C LLE+0x08=1 |
+| bit2 + bit1 | +0x84..+0x92 | routes to .L5 (connection PDU path) |
+| — | +0x1b6..+0x1c8 (.L7) | **`gBleIPPara[3] \|= 1`**; W1C LLE+0x08=2 |
+
+Key asm evidence (gBleIPPara[2] bit0):
+```asm
+LLE_IRQSubHandler +0x3a:
+  3a: lw a4, 8(a5)       ; read LLE+0x08
+  3c: srl a4, a4, 3      ; shift right 3
+  3e: and a4, a4, 1      ; check bit3
+  40: beqz a4, .L3       ; skip if bit3 CLEAR
+  42: lbu a4, gBleIPPara+2  ; read gBleIPPara[2]
+  4a: or a4, a4, 1          ; set bit0
+  52: sb a4, gBleIPPara+2   ; write back → gBleIPPara[2] |= 1
+  56: li a4, -128 (=0x80)
+  5e: sb a4, gBleIPPara+4   ; gBleIPPara[4] = 0x80
+  62: li a4, 8
+  64: sw a4, 8(a5)           ; LLE+0x08 = 8 (W1C bit3)
+```
+
+### Root cause of Phase C v1/v2 failures
+
+IRQ64 (LLE interrupt) is NVIC-disabled in the current Rust example. Therefore:
+1. `LLE_IRQSubHandler` never runs
+2. `gBleIPPara[2/3]` are never set by LLE bit3 completion event
+3. `ll_tx_wait_finish` polling loop exits only via `BLE_LLE+0x64` timer expiry
+4. DMA buffer is empty at timeout (0x00 0x00 header)
+
+### Phase C v3 fix path (no LLE IRQ needed)
+
+**Direct polling approach**: Instead of relying on gBleIPPara[2/3], poll `LLE+0x08 bit3` directly in task context. `LLE+0x08 bit3` is a W1C status bit set by hardware when RX data is ready.
+
+```rust
+// After BLE_LLE+0x08=0x2000 advance + timer setup:
+// Poll LLE+0x08 bit3 with bounded timeout (~600µs)
+let deadline = Instant::now() + Duration::from_micros(600);
+loop {
+    let lle08 = lle_read(0x08);
+    if lle08 & (1 << 3) != 0 {
+        lle_write(0x08, 8);  // W1C bit3
+        // read DMA buffer
+        break;
+    }
+    if Instant::now() >= deadline { break; }  // timeout
+}
+```
+
+This avoids enabling IRQ64 or implementing LLE_IRQSubHandler. No ISR changes required.
+
+Confidence: high (disasm evidence for bit3 → gBleIPPara[2] write path is unambiguous).
