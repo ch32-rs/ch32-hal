@@ -1238,6 +1238,9 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
             // and reaches post-go cleanly. gBleIPPara[16..19] and bb64 are already set by
             // the first PATHC_LIB_IRQ block + ble_set_phy_tx_mode_1mbps step 6. Removed.
             trace_w(BB_BASE as u32 + 0x00, 2);
+            if RX_TURNAROUND_PROBE {
+                hal::println!("# RXPROBE_ENTRY pre-go");
+            }
             bb_write(0x00, 2); // T=0: GO strobe
             if RX_TURNAROUND_PROBE {
                 let ip = core::ptr::addr_of!(gBleIPPara) as *const u8;
