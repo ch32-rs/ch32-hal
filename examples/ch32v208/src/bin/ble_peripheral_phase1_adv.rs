@@ -1214,6 +1214,7 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
                 // bb_write(0x38,...) writes to BB_BASE+0x38 = 0x40024138 = WCH_BBR+0x38. ✓
                 bb_write(0x38, 0xFF);
                 lle_write(0x38, 0x0000_00F0);
+                bb_write(0x08, 0x8000);
                 qingke::pfic::unpend_interrupt(63);
                 qingke::pfic::unpend_interrupt(64);
                 hal::println!("# PATHC_IRQ_MARK pre-enable");
