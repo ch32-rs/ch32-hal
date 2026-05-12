@@ -155,8 +155,13 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
         T::set_remap(REMAP);
 
-        scl.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
-        sda.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
+        #[cfg(not(gpio_x0))]
+        let af_type = AFType::OutputOpenDrain;
+        #[cfg(gpio_x0)]
+        let af_type = AFType::OutputPushPull;
+
+        scl.set_as_af_output(af_type, Speed::High);
+        sda.set_as_af_output(af_type, Speed::High);
 
         unsafe { T::EventInterrupt::enable() };
         unsafe { T::ErrorInterrupt::enable() };
