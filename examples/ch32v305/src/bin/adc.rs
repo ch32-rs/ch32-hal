@@ -6,7 +6,7 @@
 use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_time::{Delay, Duration, Timer};
-use hal::adc::SampleTime;
+use hal::adc::{SampleTime, Pga};
 use hal::gpio::{Level, Output};
 use hal::println;
 
@@ -32,7 +32,7 @@ async fn main(spawner: Spawner) -> ! {
         Timer::after(Duration::from_millis(500)).await;
 
         println!("Starting conversion!");
-        let val = adc.convert(&mut ch, SampleTime::CYCLES239_5);
+        let val = adc.convert(&mut ch, SampleTime::CYCLES239_5, Pga::X1);
 
         println!("val => {}", val);
     }
