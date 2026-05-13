@@ -546,8 +546,8 @@ const TXADD_RANDOM: bool = true;
 
 /// Capture TX bursts as register traces. The trace is printed after the burst
 /// finishes so SDI output does not perturb the trigger sequence.
-const TRACE_FIRST_BURST: bool = true;
-const TRACE_EVERY_N: u32 = 100;
+const TRACE_FIRST_BURST: bool = false;
+const TRACE_EVERY_N: u32 = 0;
 static mut TRACE_ARMED: bool = false;
 
 /// Phase 2 entry probe: after ADV_IND TX completes, switch ch37 into RX and
@@ -555,6 +555,7 @@ static mut TRACE_ARMED: bool = false;
 const RX_TURNAROUND_PROBE: bool = true;
 const HARVEST_SINGLE_GO_DIAG: bool = false;
 const SCAN_RSP_REPLY: bool = true;
+const MINIMAL_SDI: bool = true;
 
 // ── B experiment — BB+0x74 alignment ─────────────────────────────────────────
 //
@@ -613,6 +614,12 @@ static mut MODE_E_ADV_PRE_N: u32 = 0;
 static mut MODE_E_ADV_POST_N: u32 = 0;
 static mut MODE_E_RX_PRE_N: u32 = 0;
 static mut MODE_E_RX_POST_N: u32 = 0;
+static mut OUTER_WAIT_IP2_N: u32 = 0;
+static mut OUTER_WAIT_IP3_N: u32 = 0;
+static mut OUTER_WAIT_LLE_IDLE_N: u32 = 0;
+static mut OUTER_WAIT_TIMEOUT_N: u32 = 0;
+static mut RX_TURNAROUND_DONE_N: u32 = 0;
+static mut RX_TURNAROUND_TIMEOUT_N: u32 = 0;
 
 #[ch32_hal::interrupt]
 fn BB() {
@@ -860,11 +867,13 @@ unsafe fn set_channel_freq(freq_khz: u32) {
 /// Must be called in the trigger sequence: after BB+0x04|=1, before BB+0x00=2.
 unsafe fn ble_set_phy_tx_mode_1mbps(pdu_body_len: u8) {
     let ip = core::ptr::addr_of!(gBleIPPara) as *const u8;
-    hal::println!(
-        "# PATHC_TIMER pre-setphy ip16={:#010x} bb64={:#010x}",
-        read_volatile(ip.add(16) as *const u32),
-        bb_read(0x64)
-    );
+    if !MINIMAL_SDI {
+        hal::println!(
+            "# PATHC_TIMER pre-setphy ip16={:#010x} bb64={:#010x}",
+            read_volatile(ip.add(16) as *const u32),
+            bb_read(0x64)
+        );
+    }
 
     // gPaControl path: CH32V208 has integrated PA; enabled via RFEND+0x08 in adv_tx_burst.
 
@@ -906,12 +915,14 @@ unsafe fn ble_set_phy_tx_mode_1mbps(pdu_body_len: u8) {
     let timer = (((len_plus_1 + 11) << 2) + 158) << 1;
     trace_w(BB_BASE as u32 + 0x64, timer);
     bb_write(0x64, timer);
-    hal::println!(
-        "# PATHC_TIMER post-setphy timer={} ip16={:#010x} bb64={:#010x}",
-        timer,
-        read_volatile(ip.add(16) as *const u32),
-        bb_read(0x64)
-    );
+    if !MINIMAL_SDI {
+        hal::println!(
+            "# PATHC_TIMER post-setphy timer={} ip16={:#010x} bb64={:#010x}",
+            timer,
+            read_volatile(ip.add(16) as *const u32),
+            bb_read(0x64)
+        );
+    }
 
     // Step 7: 32-bit restore (no-op strobe since saved_0c=0 in both EVT and us post-init).
     //   lib asm L91838: sw a0, 12(lib_LLE_base)  (32-bit store — NOT sb; corrected msg=ca653fe3)
@@ -1203,17 +1214,21 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
             if PATHC_LIB_IRQ {
                 // Keep interrupts disabled during SDI dumps. Enable immediately before GO
                 // so the lib handlers only see the TX-trigger IRQ sequence.
-                hal::println!("# PATHC_IRQ_MARK pre-clear");
+                if !MINIMAL_SDI {
+                    hal::println!("# PATHC_IRQ_MARK pre-clear");
+                }
                 let ip = core::ptr::addr_of_mut!(gBleIPPara) as *mut u8;
                 write_volatile(ip.add(4), 0x80);
                 write_volatile(ip.add(5), 0);
                 // EVT pre-GO holds BB+0x64 at 0x308. Match the observed GO-time value.
                 write_volatile(ip.add(16) as *mut u32, 776);
-                hal::println!(
-                    "# PATHC_TIMER pre-go ip16={:#010x} bb64={:#010x}",
-                    read_volatile(ip.add(16) as *const u32),
-                    bb_read(0x64)
-                );
+                if !MINIMAL_SDI {
+                    hal::println!(
+                        "# PATHC_TIMER pre-go ip16={:#010x} bb64={:#010x}",
+                        read_volatile(ip.add(16) as *const u32),
+                        bb_read(0x64)
+                    );
+                }
                 bb_write(0x08, 0x0000_FFFF);
                 // v7-probe.3-fix2 (2026-05-05): W1C-clear 0x40024138 (WCH_BBR+0x38) bit6 before
                 // enabling IRQ 63. Without this, a stale bit6 (timer expired, bb64=0) triggers
@@ -1224,14 +1239,22 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
                 bb_write(0x08, 0x8000);
                 qingke::pfic::unpend_interrupt(63);
                 qingke::pfic::unpend_interrupt(64);
-                hal::println!("# PATHC_IRQ_MARK pre-enable");
+                if !MINIMAL_SDI {
+                    hal::println!("# PATHC_IRQ_MARK pre-enable");
+                }
                 qingke::pfic::enable_interrupt(63);
-                hal::println!("# PATHC_IRQ_MARK post-enable63");
+                if !MINIMAL_SDI {
+                    hal::println!("# PATHC_IRQ_MARK post-enable63");
+                }
                 if PATHC_ENABLE_LLE_IRQ {
                     qingke::pfic::enable_interrupt(64);
-                    hal::println!("# PATHC_IRQ_MARK post-enable64");
+                    if !MINIMAL_SDI {
+                        hal::println!("# PATHC_IRQ_MARK post-enable64");
+                    }
                 } else {
-                    hal::println!("# PATHC_IRQ_MARK skip-enable64");
+                    if !MINIMAL_SDI {
+                        hal::println!("# PATHC_IRQ_MARK skip-enable64");
+                    }
                 }
                 // v7-probe.3-fix2 (2026-05-05): explicit pre-GO settle delay.
                 // Replaces the ~435µs UART delay that ok=1 marker accidentally provided.
@@ -1246,7 +1269,7 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
             // and reaches post-go cleanly. gBleIPPara[16..19] and bb64 are already set by
             // the first PATHC_LIB_IRQ block + ble_set_phy_tx_mode_1mbps step 6. Removed.
             trace_w(BB_BASE as u32 + 0x00, 2);
-            if RX_TURNAROUND_PROBE {
+            if RX_TURNAROUND_PROBE && !MINIMAL_SDI {
                 hal::println!("# RXPROBE_ENTRY pre-go");
             }
             bb_write(0x00, 2); // T=0: GO strobe
@@ -1259,22 +1282,49 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
                 // 24_000 ticks ≈ 2 ms, matching the original 192_000-cycle timeout at 96 MHz.
                 let stk_cntl = 0xE000_F008 as *const u32;
                 let start = read_volatile(stk_cntl);
-                let mut ip4 = read_volatile(ip.add(4));
-                while ip4 != 1 && read_volatile(stk_cntl).wrapping_sub(start) < 24_000 {
+                let mut ip2 = read_volatile(ip.add(2));
+                let mut ip3 = read_volatile(ip.add(3));
+                let mut bb64 = bb_read(0x64);
+                while (ip2 & 1) == 0
+                    && (ip3 & 1) == 0
+                    && bb64 != 0
+                    && read_volatile(stk_cntl).wrapping_sub(start) < 24_000
+                {
                     core::hint::spin_loop();
-                    ip4 = read_volatile(ip.add(4));
+                    ip2 = read_volatile(ip.add(2));
+                    ip3 = read_volatile(ip.add(3));
+                    bb64 = bb_read(0x64);
                 }
                 let dt = read_volatile(stk_cntl).wrapping_sub(start); // SysTick ticks @ 12 MHz; dt/12 = µs
-                let reason = if ip4 == 1 { 0u8 } else { 1u8 };
-                hal::println!(
-                    "# IP4WAIT dt={} reason={} ip4={:#04x} state={:#010x} bb08={:#010x}",
-                    dt,
-                    reason,
-                    ip4,
-                    bb_read(0x1C),
-                    bb_read(0x08)
-                );
-                return (state_pre, bb_read(0x1C), ip4 as u32);
+                let mut source = 0u32;
+                if (ip2 & 1) != 0 {
+                    source |= 0x1;
+                    OUTER_WAIT_IP2_N = OUTER_WAIT_IP2_N.wrapping_add(1);
+                }
+                if (ip3 & 1) != 0 {
+                    source |= 0x2;
+                    OUTER_WAIT_IP3_N = OUTER_WAIT_IP3_N.wrapping_add(1);
+                }
+                if bb64 == 0 {
+                    source |= 0x4;
+                    OUTER_WAIT_LLE_IDLE_N = OUTER_WAIT_LLE_IDLE_N.wrapping_add(1);
+                }
+                if source == 0 {
+                    OUTER_WAIT_TIMEOUT_N = OUTER_WAIT_TIMEOUT_N.wrapping_add(1);
+                }
+                if !MINIMAL_SDI {
+                    hal::println!(
+                        "# TXWAIT3 dt={} source={:#04x} ip2={:#04x} ip3={:#04x} bb64={:#010x} state={:#010x} bb08={:#010x}",
+                        dt,
+                        source,
+                        ip2,
+                        ip3,
+                        bb64,
+                        bb_read(0x1C),
+                        bb_read(0x08)
+                    );
+                }
+                return (state_pre, bb_read(0x1C), source);
             }
             hal::println!("# PATHC_IRQ_MARK post-go");
             if !RX_TURNAROUND_PROBE {
@@ -1709,18 +1759,21 @@ unsafe fn rx_turnaround_capture_ch37(adv_channel: u8) -> Option<[u8; 50]> {
             // W1C after snapshot keeps the completion bit visible for this trace.
             bb_write(0x08, 1 << 3);
             bb_write(0x64, 0);
-            hal::println!(
-                "# RX_TURNAROUND_DONE ch={} ip2={:#04x} ip3={:#04x} lle08={:#010x} bb64={:#010x} bb00={:#010x} bb38={:#010x} hdr={:02x} {:02x}",
-                adv_channel,
-                ip2,
-                ip3,
-                lle08,
-                bb64,
-                bb00,
-                bb38,
-                snap[0],
-                snap[1]
-            );
+            RX_TURNAROUND_DONE_N = RX_TURNAROUND_DONE_N.wrapping_add(1);
+            if !MINIMAL_SDI {
+                hal::println!(
+                    "# RX_TURNAROUND_DONE ch={} ip2={:#04x} ip3={:#04x} lle08={:#010x} bb64={:#010x} bb00={:#010x} bb38={:#010x} hdr={:02x} {:02x}",
+                    adv_channel,
+                    ip2,
+                    ip3,
+                    lle08,
+                    bb64,
+                    bb00,
+                    bb38,
+                    snap[0],
+                    snap[1]
+                );
+            }
             return Some(snap);
         }
         if Instant::now() >= deadline {
@@ -1729,14 +1782,17 @@ unsafe fn rx_turnaround_capture_ch37(adv_channel: u8) -> Option<[u8; 50]> {
         core::hint::spin_loop();
     }
 
-    hal::println!(
-        "# RX_TURNAROUND_TIMEOUT ch={} lle08={:#010x} bb64={:#010x} bb00={:#010x} bb38={:#010x}",
-        adv_channel,
-        bb_read(0x08),
-        bb_read(0x64),
-        bb_read(0x00),
-        bb_read(0x38)
-    );
+    RX_TURNAROUND_TIMEOUT_N = RX_TURNAROUND_TIMEOUT_N.wrapping_add(1);
+    if !MINIMAL_SDI {
+        hal::println!(
+            "# RX_TURNAROUND_TIMEOUT ch={} lle08={:#010x} bb64={:#010x} bb00={:#010x} bb38={:#010x}",
+            adv_channel,
+            bb_read(0x08),
+            bb_read(0x64),
+            bb_read(0x00),
+            bb_read(0x38)
+        );
+    }
     bb_write(0x64, 0);
     None
 }
@@ -1789,13 +1845,15 @@ unsafe fn log_connect_ind(tx_n: u32, snap: &[u8; 50]) -> bool {
         );
         true
     } else {
-        hal::println!(
-            "# RX_TURNAROUND tx#{tx_n} pdu_type={} len={} hdr={:02x} {:02x}",
-            pdu_type,
-            pdu_len,
-            snap[0],
-            snap[1],
-        );
+        if !MINIMAL_SDI {
+            hal::println!(
+                "# RX_TURNAROUND tx#{tx_n} pdu_type={} len={} hdr={:02x} {:02x}",
+                pdu_type,
+                pdu_len,
+                snap[0],
+                snap[1],
+            );
+        }
         false
     }
 }
@@ -2031,7 +2089,7 @@ async fn phase1_adv_loop() -> ! {
             let mut done = false;
             for &adv_channel in &ADV_CHANNELS {
                 MODE_E_ADV_PRE_N = MODE_E_ADV_PRE_N.wrapping_add(1);
-                if tx_n < 5 || tx_n % 100 == 0 {
+                if !MINIMAL_SDI && (tx_n < 5 || tx_n % 100 == 0) {
                     let mode_e_adv_pre = MODE_E_ADV_PRE_N;
                     let mode_e_adv_post = MODE_E_ADV_POST_N;
                     let mode_e_rx_pre = MODE_E_RX_PRE_N;
@@ -2048,7 +2106,7 @@ async fn phase1_adv_loop() -> ! {
                 }
                 let (pre, post, irq) = adv_tx_burst_ch37(tx_n, adv_channel);
                 MODE_E_ADV_POST_N = MODE_E_ADV_POST_N.wrapping_add(1);
-                if tx_n < 5 || tx_n % 100 == 0 {
+                if !MINIMAL_SDI && (tx_n < 5 || tx_n % 100 == 0) {
                     let mode_e_adv_pre = MODE_E_ADV_PRE_N;
                     let mode_e_adv_post = MODE_E_ADV_POST_N;
                     hal::println!(
@@ -2069,7 +2127,7 @@ async fn phase1_adv_loop() -> ! {
                 if RX_TURNAROUND_PROBE {
                     done = true;
                     MODE_E_RX_PRE_N = MODE_E_RX_PRE_N.wrapping_add(1);
-                    if tx_n < 5 || tx_n % 100 == 0 {
+                    if !MINIMAL_SDI && (tx_n < 5 || tx_n % 100 == 0) {
                         let mode_e_rx_pre = MODE_E_RX_PRE_N;
                         let mode_e_rx_post = MODE_E_RX_POST_N;
                         hal::println!(
@@ -2082,7 +2140,7 @@ async fn phase1_adv_loop() -> ! {
                     }
                     let rx_snap = rx_turnaround_capture_ch37(adv_channel);
                     MODE_E_RX_POST_N = MODE_E_RX_POST_N.wrapping_add(1);
-                    if tx_n < 5 || tx_n % 100 == 0 {
+                    if !MINIMAL_SDI && (tx_n < 5 || tx_n % 100 == 0) {
                         let mode_e_rx_pre = MODE_E_RX_PRE_N;
                         let mode_e_rx_post = MODE_E_RX_POST_N;
                         hal::println!(
@@ -2098,12 +2156,14 @@ async fn phase1_adv_loop() -> ! {
                         let pdu_type = snap[0] & 0x0F;
                         let pdu_len = snap[1] & 0x3F;
                         if SCAN_RSP_REPLY && pdu_type == 3 && pdu_len >= 12 && &snap[8..14] == &ADDR[..] {
-                            hal::println!(
-                                "# MODE_E_SCAN_RSP_PRE tx_n={} ch={} solicited={}",
-                                tx_n,
-                                adv_channel,
-                                SOLICITED_SCAN_RSP_N,
-                            );
+                            if !MINIMAL_SDI {
+                                hal::println!(
+                                    "# MODE_E_SCAN_RSP_PRE tx_n={} ch={} solicited={}",
+                                    tx_n,
+                                    adv_channel,
+                                    SOLICITED_SCAN_RSP_N,
+                                );
+                            }
                             build_scan_rsp_pdu();
                             ble_set_phy_tx_mode_1mbps(TX_BUF[1]);
                             bb_write(0x08, 0x8000);
@@ -2111,12 +2171,14 @@ async fn phase1_adv_loop() -> ! {
                             lle_write(0x00, ctrl | 0x800000);
                             qingke::riscv::asm::delay(72_000);
                             SOLICITED_SCAN_RSP_N = SOLICITED_SCAN_RSP_N.wrapping_add(1);
-                            hal::println!(
-                                "# MODE_E_SCAN_RSP_POST tx_n={} ch={} solicited={}",
-                                tx_n,
-                                adv_channel,
-                                SOLICITED_SCAN_RSP_N,
-                            );
+                            if !MINIMAL_SDI {
+                                hal::println!(
+                                    "# MODE_E_SCAN_RSP_POST tx_n={} ch={} solicited={}",
+                                    tx_n,
+                                    adv_channel,
+                                    SOLICITED_SCAN_RSP_N,
+                                );
+                            }
                         }
                         if log_connect_ind(tx_n, &snap) {
                             connect_n += 1;
@@ -2166,8 +2228,9 @@ async fn phase1_adv_loop() -> ! {
                 ok_n += 1;
             }
 
-            // Print first 5, then every 100.
-            if tx_n <= 5 || tx_n % 100 == 0 {
+            // Print first 5 in diagnostic mode, then every 100. Minimal-SDI mode
+            // keeps only the periodic summary so SDI does not perturb hot timing.
+            if (!MINIMAL_SDI && tx_n <= 5) || tx_n % 100 == 0 {
                 let irq08 = bb_read(0x08);
                 let ctrl00 = lle_read(0x00);
                 let lle2c = lle_read(0x2C);
@@ -2205,6 +2268,23 @@ async fn phase1_adv_loop() -> ! {
                     ok_n,
                     solicited_scan_rsp_n
                 );
+                if MINIMAL_SDI {
+                    let outer_ip2 = OUTER_WAIT_IP2_N;
+                    let outer_ip3 = OUTER_WAIT_IP3_N;
+                    let outer_idle = OUTER_WAIT_LLE_IDLE_N;
+                    let outer_timeout = OUTER_WAIT_TIMEOUT_N;
+                    let rx_done = RX_TURNAROUND_DONE_N;
+                    let rx_timeout = RX_TURNAROUND_TIMEOUT_N;
+                    hal::println!(
+                        "# WAIT_SUMMARY outer_ip2={} outer_ip3={} outer_idle={} outer_timeout={} rx_done={} rx_timeout={}",
+                        outer_ip2,
+                        outer_ip3,
+                        outer_idle,
+                        outer_timeout,
+                        rx_done,
+                        rx_timeout
+                    );
+                }
                 // V1.2 staged bisect: print stub results (visible only if BB_HANDLER_STAGE=0 or
                 // stage 1/2 that returns cleanly — confirms handler can enter+exit without fault).
                 // Stage 0 (no W1C): expect BB_STUB_ENTER_COUNT=BB_STUB_MAX_ENTRIES (50), then auto-disable.

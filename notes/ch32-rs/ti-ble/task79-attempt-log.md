@@ -91,6 +91,26 @@ Root cause confirmed (Vega review, serial analysis):
 
 **Decision: A1 pivot (task #80) is the correct next step.** Gate patch is closed.
 
+### A1 result (2026-05-14 02:12, task #80)
+
+- Drop gate, add `gBleIPPara[4]=0x80`, replace inner wait with three-source (`gBleIPPara[2]&1 || gBleIPPara[3]&1 || bb_read(0x64)==0`)
+- Build PASS: `/tmp/task80_a1_mode1_align_build_20260514_0212.log`
+- Flash PASS: `/tmp/task80_a1_mode1_align_flash_20260514_0212.log`
+- Pcap: `/tmp/task79_scan_rsp_step2/task80_a1_mode1_align_sniff60.pcapng`
+- Result: ambient 16489, target 0. FAIL. Tag: `bad/scan-rsp-step2-a1-mode1-align-no-air-20260514`
+- Serial: empty (SDI not captured) — A1 inner wait outcome unknown
+
+Key observation: option 2 (rx_turnaround never ran) AND A1 (rx_turnaround ran with fixes) both yield 0 Hz.
+TX failure is UPSTREAM of rx_turnaround — the OUTER probe-wait block is the suppressor.
+
+### Next attempt: combined (a)+(b) — OUTER wait + minimal SDI
+
+- (a) OUTER probe-wait in `adv_tx_burst_ch37`: replace `ip4==1 || 2ms` with three-source wait
+- (b) Minimal SDI: remove per-iteration prints from ADV/RX hot-loop; counters only
+- Both axes together isolate SDI interference vs wait-condition independently
+
+**If still 0 Hz after (a)+(b)**: next candidate = PATHC_LIB_IRQ / Delta Y (PHY re-arm `bb_write(0x08, 0x8000)` after W1C — present in `98cd7d7` worktree but may not be in `7f04104`)
+
 Tags to apply on result:
 - PASS: `probe-control/scan-rsp-step2-gate-patch-pass-YYYYMMDD`
 - FAIL: `bad/scan-rsp-step2-gate-patch-fail-{symptom}-YYYYMMDD`
@@ -179,6 +199,71 @@ Candidate causes to prove next:
 2. Existing `adv_tx_burst_ch37()` probe-wait still uses `ip4 == 1 || SysTick 2ms timeout`; Vega's 421-sample evidence shows `ip4` stays `0x80`, so that wait condition is no longer meaningful.
 3. SDI prints around ADV loop may still perturb timing. A minimal no-SDI build variant should be the next low-cost isolation if Andelf approves.
 4. The proper fix may require moving the whole post-TX wait to libwchble `.L83` three-source condition before any RX-prep decision, instead of only aligning the RX helper.
+5. **PATHC_LIB_IRQ / Delta Y (PHY re-arm) path** (Vega `57a9fa39` post-A1 triage candidate): if combined (a)+(b) experiment also FAILs, this is the next hypothesis — TX suppressor located in the PATHC/PHY-rearm sequence before probe-wait, not in the wait condition or RX helper.
+
+**Vega A1 milestone observation (`57a9fa39`)**: in option 2 (gate, rx_turnaround never ran), TX *still* failed → TX suppressor is in the OUTER probe-wait block or earlier, NOT inside rx_turnaround. A1 fixing rx_turnaround internals was necessary-but-not-sufficient. Combined (a)+(b) endorsed as the correct next step.
+
+**Lucy disambiguation note (`80380516`)**: after the combined (a)+(b) pcap, split judgment using counter telemetry — `count(inner_wait_timeout)` vs `count(inner_wait_succeed)` per ADV cycle isolates whether the OUTER three-source wait is producing real completion signals or still timing out the same way as `ip4 == 1`.
+
+---
+
+## §11. Attempt C: OUTER three-source wait + minimal SDI
+
+Goal: test Lucy's combined `(a)+(b)` recommendation:
+
+- `(a)` replace the OUTER `adv_tx_burst_ch37()` wait condition from `ip4 == 1 || 2ms timeout` to the libwchble three-source condition: `gBleIPPara[2]&1 || gBleIPPara[3]&1 || bb_read(0x64)==0`.
+- `(b)` remove hot-loop SDI prints from ADV/RX/SCAN_RSP path; keep counters and one periodic summary every 100 bursts.
+- Preserve A1 inner RX-prep alignment from §10.
+
+Patch details:
+
+- `TRACE_FIRST_BURST=false`, `TRACE_EVERY_N=0`, `MINIMAL_SDI=true`.
+- Added counters:
+  - `OUTER_WAIT_IP2_N`
+  - `OUTER_WAIT_IP3_N`
+  - `OUTER_WAIT_LLE_IDLE_N`
+  - `OUTER_WAIT_TIMEOUT_N`
+  - `RX_TURNAROUND_DONE_N`
+  - `RX_TURNAROUND_TIMEOUT_N`
+- OUTER wait returns a bitmask source: bit0=`ip2`, bit1=`ip3`, bit2=`bb64==0`.
+- Hot-path `hal::println!` calls are guarded by `!MINIMAL_SDI`; periodic summary still prints `tx#...`, `PATHC_IRQ counters`, `tx_heartbeat`, and `WAIT_SUMMARY`.
+
+Artifacts:
+
+- First build log (pre-final hot-log guard): `/tmp/task80_outer3_min_sdi_build_20260514_0217.log`
+- First flash log (pre-final hot-log guard): `/tmp/task80_outer3_min_sdi_flash_20260514_0217.log`
+- First pcap (pre-final hot-log guard): `/tmp/task79_scan_rsp_step2/task80_outer3_min_sdi_sniff60.pcapng`
+- First pcap raw evidence: ambient BLE ADV-AA = 16148, target AdvA bytes = 0, `Simple` name bytes = 0.
+- Serial check revealed a remaining hot-loop line (`# RX_TURNAROUND tx#... pdu_type=0 len=0`), so the build was tightened further before final judgment.
+
+Final artifacts:
+
+- Build log: `/tmp/task80_outer3_min_sdi_build2_20260514_0226.log`
+- Flash log: `/tmp/task80_outer3_min_sdi_flash2_20260514_0226.log`
+- Pcap: `/tmp/task79_scan_rsp_step2/task80_outer3_min_sdi_v2_sniff60.pcapng`
+- Pcap raw evidence: ambient BLE ADV-AA = 15988, target AdvA bytes = 0, `Simple` name bytes = 0, target ADV prefix = 0, target SCAN_RSP prefix = 0.
+- Serial watch log: `/tmp/task79_scan_rsp_step2/task80_outer3_min_sdi_v2_flash_watch35.log`
+- Serial summary at `tx#100`: `done=true`, `state=108→108`, `irq_post=0x00000004`, `irq_now=0x33002000`, `adv_ok=100/100`, `solicited_scan_rsp=0`, `conn=0`.
+- Counter summary at `tx#100`: `outer_ip2=0 outer_ip3=0 outer_idle=300 outer_timeout=0 rx_done=300 rx_timeout=0`.
+
+Result: FAIL — target remains air-silent with OUTER three-source wait and minimal SDI.
+
+Interpretation:
+
+- OUTER wait always exits via `bb_read(0x64)==0` (`outer_idle=300`) with no `gBleIPPara[2]/[3]` completion flags.
+- Inner RX helper also always exits as done (`rx_done=300`) with no timeouts, so A1's inner three-source condition fires, but the captured buffer is empty (`pdu_type=0 len=0` in the pre-final serial run).
+- `state=108→108` at summary means the sampled post state is Sleep; `irq_now=0x33002000` stays in the same no-air pattern.
+- Minimal-SDI did not recover air visibility, so SDI interference is no longer the primary explanation for the zero-air symptom.
+
+Next candidate to prove:
+
+- **PATHC_LIB_IRQ / Delta Y (PHY re-arm)**: focus on the pre-GO and GO-adjacent path, especially `bb_write(0x08, 0x8000)` / W1C / IRQ-enable ordering and `BB+0x64` lifecycle before GO. This matches Vega's post-A1 hypothesis that the suppressor sits before or at the OUTER wait boundary.
+
+Preservation:
+
+- Commit/tag this state before the next patch:
+  - commit: `bad(ble): archive outer wait minimal sdi failure`
+  - tag: `bad/scan-rsp-step2-outer3-min-sdi-no-air-20260514`
 
 ---
 
