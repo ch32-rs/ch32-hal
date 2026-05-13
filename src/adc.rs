@@ -125,7 +125,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         });
 
         // regular sequence config
-        assert!(rank < 17 || rank > 0);
+        debug_assert!(rank > 0 && rank <= 16);
         if rank < 7 {
             T::regs()
                 .rsqr3()
@@ -151,6 +151,8 @@ impl<'d, T: Instance> Adc<'d, T> {
         if channel < 10 {
             T::regs().samptr2().modify(|w| w.set_smp(channel as usize, sample_time));
         } else {
+            // V00x has no SAMPTR1: channels >= 10 (e.g. Vcal on ch 10) use a
+            // hardware-fixed sample time and `sample_time` is silently ignored.
             #[cfg(not(adc_v00x))]
             T::regs()
                 .samptr1()
@@ -158,7 +160,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         }
 
         // regular sequence config
-        assert!(rank < 17 || rank > 0);
+        debug_assert!(rank > 0 && rank <= 16);
         if rank < 7 {
             T::regs()
                 .rsqr3()
@@ -379,6 +381,12 @@ mod ch_internal {
         }
     }
 
+    /// Internal calibration voltage channel.
+    ///
+    /// Note: on V00x, Vcal is on ADC channel 10. V00x has no `SAMPTR1`
+    /// register, so the `sample_time` argument to `configure_channel`/
+    /// `convert` is silently ignored for this channel — Vcal uses a
+    /// hardware-fixed sample time.
     pub struct Vcal;
     impl<T: Instance> AdcChannel<T> for Vcal {}
     impl<T: Instance> SealedAdcChannel<T> for Vcal {
