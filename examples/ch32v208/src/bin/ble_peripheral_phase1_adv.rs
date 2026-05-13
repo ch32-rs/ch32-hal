@@ -2074,7 +2074,11 @@ async fn phase1_adv_loop() -> ! {
                             mode_e_rx_post,
                         );
                     }
-                    let rx_snap = rx_turnaround_capture_ch37(adv_channel);
+                    let rx_snap = if irq == 1 {
+                        rx_turnaround_capture_ch37(adv_channel)
+                    } else {
+                        None
+                    };
                     MODE_E_RX_POST_N = MODE_E_RX_POST_N.wrapping_add(1);
                     if tx_n < 5 || tx_n % 100 == 0 {
                         let mode_e_rx_pre = MODE_E_RX_PRE_N;
