@@ -126,7 +126,7 @@ impl<'a> ExtiInputFuture<'a> {
             let port = port as u8;
             let pin = pin as usize;
 
-            #[cfg(afio_v0)]
+            #[cfg(any(afio_v003, afio_v00x))]
             {
                 // AFIO_EXTICR
                 // stride: 2, len: 15, 8 lines
@@ -238,7 +238,7 @@ mod _exti_8lines {
     impl_exti!(EXTI7, 7);
 }
 
-#[cfg(not(any(ch32v0, ch643)))]
+#[cfg(not(any(ch32v0, ch32m0, ch643)))]
 mod _exti_16lines {
     use super::*;
 

@@ -1,6 +1,4 @@
-use core::ops;
-
-use crate::pac::rcc::vals::{Hpre as AHBPrescaler, Pllsrc as PllSource, Ppre as APBPrescaler, Sw as Sysclk};
+use crate::pac::rcc::vals::{Hpre as HBPrescaler, Pllsrc as PllSource, Sw as Sysclk};
 use crate::pac::{AFIO, FLASH, RCC};
 use crate::time::Hertz;
 
@@ -32,29 +30,22 @@ pub struct Config {
 
     pub pll_src: PllSource,
 
-    pub ahb_pre: AHBPrescaler,
-    // ADCPRE is actually splitted from APB2
-    pub apb2_pre: APBPrescaler,
+    pub hb_pre: HBPrescaler,
 }
 
 impl Config {
+    pub const SYSCLK_FREQ_24MHZ_HSI: Config = Config {
+        hse: None,
+        sys: Sysclk::HSI,
+        pll_src: PllSource::HSI,
+        hb_pre: HBPrescaler::DIV1,
+    };
+
     pub const SYSCLK_FREQ_48MHZ_HSI: Config = Config {
         hse: None,
         sys: Sysclk::PLL,
         pll_src: PllSource::HSI,
-        ahb_pre: AHBPrescaler::DIV1,
-        apb2_pre: APBPrescaler::DIV1,
-    };
-
-    pub const SYSCLK_FREQ_48MHZ_HSE: Config = Config {
-        hse: Some(Hse {
-            freq: Hertz(24_000_000),
-            mode: HseMode::Oscillator,
-        }),
-        sys: Sysclk::PLL,
-        pll_src: PllSource::HSE,
-        ahb_pre: AHBPrescaler::DIV1,
-        apb2_pre: APBPrescaler::DIV1,
+        hb_pre: HBPrescaler::DIV1,
     };
 
     pub const SYSCLK_FREQ_24MHZ_HSE: Config = Config {
@@ -64,8 +55,17 @@ impl Config {
         }),
         sys: Sysclk::HSE,
         pll_src: PllSource::HSE,
-        ahb_pre: AHBPrescaler::DIV1,
-        apb2_pre: APBPrescaler::DIV1,
+        hb_pre: HBPrescaler::DIV1,
+    };
+
+    pub const SYSCLK_FREQ_48MHZ_HSE: Config = Config {
+        hse: Some(Hse {
+            freq: Hertz(24_000_000),
+            mode: HseMode::Oscillator,
+        }),
+        sys: Sysclk::PLL,
+        pll_src: PllSource::HSE,
+        hb_pre: HBPrescaler::DIV1,
     };
 }
 
@@ -76,8 +76,7 @@ impl Default for Config {
             hse: None,
             sys: Sysclk::HSI,
             pll_src: PllSource::HSI,
-            ahb_pre: AHBPrescaler::DIV3,
-            apb2_pre: APBPrescaler::DIV1,
+            hb_pre: HBPrescaler::DIV3,
         }
     }
 }
@@ -86,8 +85,8 @@ impl Default for Config {
 pub(crate) unsafe fn init(config: Config) {
     if config.sys == Sysclk::HSE || (config.sys == Sysclk::PLL && config.pll_src == PllSource::HSE) {
         // enable HSE pins
-        RCC.apb2pcenr().modify(|w| w.set_afioen(true));
-        AFIO.pcfr1().modify(|w| w.set_pa12_rm(true));
+        RCC.pb2pcenr().modify(|w| w.set_afioen(true));
+        AFIO.pcfr1().modify(|w| w.set_pa1pa2_rm(true));
 
         // enable HSE
         RCC.ctlr().modify(|w| {
@@ -120,79 +119,43 @@ pub(crate) unsafe fn init(config: Config) {
             match config.pll_src {
                 PllSource::HSI => HSI_FREQUENCY.0 * 2,
                 PllSource::HSE => config.hse.unwrap().freq.0 * 2,
-                _ => unreachable!(),
             }
         }
         _ => unreachable!(),
     };
 
-    // V003 RM section 16.3.1:
-    //   00: 0 wait (0  <= SYSCLK <= 24 MHz)
-    //   01: 1 wait (24 <  SYSCLK <= 48 MHz)
-    #[cfg(ch32v003)]
-    let latency = match sysclk {
-        0..=24_000_000 => 0b00,
-        _ => 0b01,
-    };
-
-    // V00x RM section 18.3.1:
-    //   00: 0 wait (0  <= SYSCLK <= 15 MHz)
-    //   01: 1 wait (15 <  SYSCLK <= 24 MHz)
-    //   10: 2 wait (24 <  SYSCLK <= 48 MHz)
-    #[cfg(any(ch32v002, ch32v004, ch32v005, ch32v006, ch32v007))]
-    let latency = match sysclk {
-        0..=15_000_000 => 0b00,
-        15_000_001..=24_000_000 => 0b01,
-        _ => 0b10,
-    };
-
-    FLASH.actlr().modify(|w| w.set_latency(latency));
+    if sysclk > 24_000_000 {
+        FLASH.actlr().modify(|w| w.set_latency(2));
+    } else if sysclk > 15_000_000 {
+        FLASH.actlr().modify(|w| w.set_latency(1));
+    }
 
     RCC.cfgr0().modify(|w| {
-        w.set_hpre(config.ahb_pre);
-        w.set_ppre2(config.apb2_pre); // FIXME: this is undocumented, only for ADC2?
+        w.set_hpre(config.hb_pre);
     });
 
-    // TODO: handle APBPrescaler
-    let hclk = match config.ahb_pre {
-        AHBPrescaler::DIV1 => sysclk,
-        AHBPrescaler::DIV2 => sysclk / 2,
-        AHBPrescaler::DIV3 => sysclk / 3,
-        AHBPrescaler::DIV4 => sysclk / 4,
-        AHBPrescaler::DIV5 => sysclk / 5,
-        AHBPrescaler::DIV6 => sysclk / 6,
-        AHBPrescaler::DIV7 => sysclk / 7,
-        AHBPrescaler::DIV8 => sysclk / 8,
-        AHBPrescaler::DIV16 => sysclk / 16,
-        AHBPrescaler::DIV32 => sysclk / 32,
-        AHBPrescaler::DIV64 => sysclk / 64,
-        AHBPrescaler::DIV128 => sysclk / 128,
-        AHBPrescaler::DIV256 => sysclk / 256,
+    let hclk = match config.hb_pre {
+        HBPrescaler::DIV1 => sysclk,
+        HBPrescaler::DIV2 => sysclk / 2,
+        HBPrescaler::DIV3 => sysclk / 3,
+        HBPrescaler::DIV4 => sysclk / 4,
+        HBPrescaler::DIV5 => sysclk / 5,
+        HBPrescaler::DIV6 => sysclk / 6,
+        HBPrescaler::DIV7 => sysclk / 7,
+        HBPrescaler::DIV8 => sysclk / 8,
+        HBPrescaler::DIV16 => sysclk / 16,
+        HBPrescaler::DIV32 => sysclk / 32,
+        HBPrescaler::DIV64 => sysclk / 64,
+        HBPrescaler::DIV128 => sysclk / 128,
+        HBPrescaler::DIV256 => sysclk / 256,
         _ => panic!(),
     };
-
-    let pclk2 = Hertz(hclk) / config.apb2_pre;
 
     super::CLOCKS.sysclk = Hertz(sysclk);
     super::CLOCKS.hclk = Hertz(hclk);
     super::CLOCKS.pclk1 = Hertz(hclk);
-    super::CLOCKS.pclk2 = pclk2;
+    super::CLOCKS.pclk2 = Hertz(hclk);
 
     super::CLOCKS.pclk1_tim = Hertz(sysclk);
     super::CLOCKS.pclk2_tim = Hertz(sysclk);
-}
-
-impl ops::Div<APBPrescaler> for Hertz {
-    type Output = Hertz;
-    fn div(self, rhs: APBPrescaler) -> Hertz {
-        let raw = rhs as u32;
-        if raw >= 0b100 {
-            // 2, 4, 8, 16
-            let d = raw - 0b100 + 1;
-            Hertz(self.0 >> d)
-        } else {
-            // DIV1
-            self
-        }
-    }
 }
