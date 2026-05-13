@@ -6,6 +6,7 @@ runner = "wlink flash --enable-sdi-print --watch-serial"
 # runner = "wlink -v flash --no-erase --dry-run"
 # runner = "probe-rs run --chip CH32V307"
 # runner = "wlink -v flash"
+# runner = "wchisp flash"
 
 # Use the following or build.rs
 #rustflags = [
