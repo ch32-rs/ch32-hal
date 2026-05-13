@@ -19,7 +19,7 @@ use pac::InterruptNumber;
 use crate::gpio::Pull;
 use crate::mode::{Async, Blocking, Mode};
 use crate::pac::usbpd::vals;
-use crate::{interrupt, pac, println, Peri, PeripheralType, RccPeripheral};
+use crate::{interrupt, pac, Peri, PeripheralType, RccPeripheral};
 
 #[derive(Debug)]
 pub enum Error {
@@ -52,18 +52,11 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         let status = usbpd.status().read();
 
-        // println!("irq 0x{:02x}", status.0);
-
         if status.if_tx_end() {
-            // println!(">");
-            //         T::REGS.port_cc1().modify(|w| w.set_cc_lve(false));
-            // T::REGS.port_cc2().modify(|w| w.set_cc_lve(false));
-
             T::REGS.config().modify(|w| w.set_ie_tx_end(false));
         }
 
         if status.if_rx_act() {
-            // println!("< {}", T::REGS.bmc_byte_cnt().read().bmc_byte_cnt());
             T::REGS.control().modify(|w| w.set_bmc_start(false)); // stop
             T::REGS.config().modify(|w| w.set_ie_rx_act(false));
         }
@@ -73,7 +66,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
         }
 
         if status.buf_err() {
-            crate::println!("TODO: buf_err");
+            // TODO: surface buf_err to the caller
         }
 
         T::REGS.status().write_value(status);
@@ -214,8 +207,6 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
         }
         self.prepare_receive();
 
-        println!("begin blocking recv");
-
         loop {
             let status = T::REGS.status().read();
             if status.if_rx_act() {
@@ -350,8 +341,6 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
         if T::port_cc_reg(self.cc1).read().pa_cc_ai() {
             // CC1 is connected
             T::REGS.config().modify(|w| w.set_cc_sel(vals::CcSel::CC1));
-
-            crate::println!("CC1 connected");
             Ok(())
         } else {
             T::port_cc_reg(self.cc2).modify(|w| w.set_cc_ce(vals::PortCcCe::V0_22));
@@ -360,11 +349,8 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
             if T::port_cc_reg(self.cc2).read().pa_cc_ai() {
                 // CC2 is connected
                 T::REGS.config().modify(|w| w.set_cc_sel(vals::CcSel::CC2));
-                crate::println!("CC2 connected");
                 Ok(())
             } else {
-                crate::println!("CC not connected");
-
                 Err(Error::CCNotConnected)
             }
         }
