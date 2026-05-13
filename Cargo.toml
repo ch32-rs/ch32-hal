@@ -60,7 +60,7 @@ proc-macro2 = "1.0"
 quote = "1.0"
 
 [features]
-default = ["embassy", "rt"]
+default = ["embassy", "rt", "exti"]
 rt = ["dep:qingke-rt", "rt-wfi"]
 highcode = ["qingke-rt/highcode"]
 embassy = [
@@ -70,6 +70,8 @@ embassy = [
 ]
 defmt = ["dep:defmt"]
 memory-x = ["ch32-metapac/memory-x"]
+## Built-in EXTI driver and interrupt handlers. Disable to provide your own.
+exti = []
 
 
 # Features starting with `_` are for internal use only. They're not intended
