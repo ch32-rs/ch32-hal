@@ -17,6 +17,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use pac::InterruptNumber;
 
 use crate::gpio::Pull;
+use crate::mode::{Async, Blocking, Mode};
 use crate::pac::usbpd::vals;
 use crate::{interrupt, pac, println, Peri, PeripheralType, RccPeripheral};
 
@@ -27,9 +28,17 @@ pub enum Error {
     CCNotConnected,
     NotSupported,
     HardReset,
-    /// Unexpeted message type
+    /// Unexpected message type
     Protocol(u8),
     MaxRetry,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Sop {
+    Sop = 0b00_00_00_00,
+    SopPrime = 0b00_00_01_01,
+    SopDoublePrime = 0b00_01_00_01,
+    HardReset = 0b10_10_10_01,
 }
 
 /// Interrupt handler.
@@ -43,10 +52,10 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         let status = usbpd.status().read();
 
-        println!("irq 0x{:02x}", status.0);
+        // println!("irq 0x{:02x}", status.0);
 
         if status.if_tx_end() {
-            println!(">");
+            // println!(">");
             //         T::REGS.port_cc1().modify(|w| w.set_cc_lve(false));
             // T::REGS.port_cc2().modify(|w| w.set_cc_lve(false));
 
@@ -61,7 +70,6 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         if status.if_rx_reset() {
             T::REGS.config().modify(|w| w.set_ie_rx_reset(false));
-            crate::println!("TODO: reset");
         }
 
         if status.buf_err() {
@@ -75,19 +83,183 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
     }
 }
 
-pub struct UsbPdPhy<'d, T: Instance> {
-    _marker: PhantomData<&'d mut T>,
-    cc1: vals::CcSel,
-    cc2: vals::CcSel,
+#[repr(align(4))]
+struct UsbPdMsg {
+    pub data: [u8; 30],
+}
+impl UsbPdMsg {
+    fn new() -> Self {
+        Self { data: [0u8; 30] }
+    }
+
+    fn to_slice(&self) -> &[u8] {
+        &self.data
+    }
+
+    fn address(&self) -> u16 {
+        self.data.as_ptr() as u16
+    }
+
+    fn mut_address(&mut self) -> u16 {
+        self.data.as_mut_ptr() as u16
+    }
 }
 
-impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
-    /// Create a new SPI driver.
-    pub fn new(
-        _peri: Peri<'d, T>,
+pub struct UsbPdPhy<'d, T: Instance, M: Mode> {
+    _marker: PhantomData<(&'d mut T, M)>,
+    cc1: vals::CcSel,
+    cc2: vals::CcSel,
+    buffer: UsbPdMsg,
+}
+
+impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
+    pub fn new_async(
+        peri: Peri<'d, T>,
         cc1: Peri<'d, impl CcPin<T>>,
         cc2: Peri<'d, impl CcPin<T>>,
-    ) -> Result<Self, Error> {
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+    ) -> UsbPdPhy<'d, T, Async> {
+        unsafe {
+            use crate::interrupt::typelevel::Interrupt;
+            T::Interrupt::enable();
+        };
+
+        Self::new_inner(peri, cc1, cc2)
+    }
+
+    fn enable_rx_interrupt(&mut self) {
+        T::REGS.config().modify(|w| {
+            w.set_ie_rx_act(true); // Receive completion interrupt enable
+            w.set_ie_rx_reset(true); // Receive reset interrupt enable
+            w.set_ie_tx_end(false); // End-of-transmit interrupt disable
+        });
+    }
+
+    fn enable_tx_interrupt(&mut self) {
+        T::REGS.config().modify(|w| {
+            w.set_ie_rx_act(false); // Receive completion interrupt disable
+            w.set_ie_rx_reset(false); // Receive reset interrupt disable
+            w.set_ie_tx_end(true); // End-of-transmit interrupt enable
+        });
+    }
+
+    /// Receives a PD message into the provided buffer.
+    ///
+    /// Returns the number of received bytes or an error.
+    pub async fn receive(&mut self, buf: &mut [u8]) -> Result<(Sop, usize), Error> {
+        self.enable_rx_interrupt();
+        self.prepare_receive();
+
+        poll_fn(|cx| {
+            T::state().waker.register(cx.waker());
+
+            if !T::REGS.config().read().ie_rx_reset() {
+                return Poll::Ready(Err(Error::HardReset));
+            }
+
+            if !T::REGS.config().read().ie_rx_act() {
+                Poll::Ready(Ok(()))
+            } else {
+                Poll::Pending
+            }
+        })
+        .await?;
+        self.post_receive(buf)
+    }
+
+    pub async fn transmit(&mut self, buf: &[u8]) {
+        self.enable_tx_interrupt();
+        self.transmit_inner(Sop::Sop, buf);
+        self.wait_for_tx_complete().await;
+
+        T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
+        T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
+    }
+
+    /// Transmit a hard reset.
+    pub async fn transmit_hardreset(&mut self) {
+        self.enable_tx_interrupt();
+        self.transmit_inner(Sop::HardReset, &[]);
+        self.wait_for_tx_complete().await;
+
+        T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
+        T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
+    }
+
+    async fn wait_for_tx_complete(&mut self) {
+        poll_fn(|cx| {
+            T::state().waker.register(cx.waker());
+            let config = T::REGS.config().read();
+            if !config.ie_tx_end() {
+                return Poll::Ready(());
+            }
+            Poll::Pending
+        })
+        .await;
+    }
+}
+
+impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
+    pub fn new_blocking(
+        peri: Peri<'d, T>,
+        cc1: Peri<'d, impl CcPin<T>>,
+        cc2: Peri<'d, impl CcPin<T>>,
+    ) -> UsbPdPhy<'d, T, Blocking> {
+        Self::new_inner(peri, cc1, cc2)
+    }
+
+    pub fn receive(&mut self, buf: &mut [u8]) -> Result<(Sop, usize), Error> {
+        unsafe {
+            qingke::pfic::disable_interrupt(interrupt::USBPD.number() as _);
+        }
+        self.prepare_receive();
+
+        println!("begin blocking recv");
+
+        loop {
+            let status = T::REGS.status().read();
+            if status.if_rx_act() {
+                break;
+            }
+            if status.if_rx_reset() {
+                unsafe {
+                    qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
+                }
+                return Err(Error::HardReset);
+            }
+            #[cfg(feature = "embassy")]
+            embassy_futures::yield_now();
+        }
+
+        unsafe {
+            qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
+        }
+        self.post_receive(buf)
+    }
+
+    pub fn transmit(&mut self, buf: &[u8]) {
+        unsafe {
+            qingke::pfic::disable_interrupt(interrupt::USBPD.number() as _);
+        }
+        self.transmit_inner(Sop::Sop, buf);
+
+        while !T::REGS.status().read().if_tx_end() {
+            #[cfg(feature = "embassy")]
+            embassy_futures::yield_now();
+        }
+
+        T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
+        T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
+
+        unsafe {
+            qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
+        }
+    }
+}
+
+impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
+    /// Create a new USB-PD driver.
+    fn new_inner(_peri: Peri<'d, T>, cc1: Peri<'d, impl CcPin<T>>, cc2: Peri<'d, impl CcPin<T>>) -> Self {
         assert!(cc1.port_sel() != cc2.port_sel(), "CC1 and CC2 should be different");
 
         #[allow(unused)]
@@ -107,6 +279,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         });
         #[cfg(ch32l1)]
         afio.cr().modify(|w| {
+            // PD pin PB6/PD7 High threshold input mode.
             w.set_usbpd_in_hvt(true);
         });
 
@@ -115,7 +288,14 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
             //    w.set_pd_filt_en(true);
             //  w.set_pd_rst_en(true);
         });
-        T::REGS.status().write(|w| w.0 = 0b111111_00); // write 1 to clear
+        T::REGS.status().write(|w| {
+            w.set_if_tx_end(true);
+            w.set_if_rx_reset(true);
+            w.set_if_rx_act(true);
+            w.set_if_rx_byte(true);
+            w.set_if_rx_bit(true);
+            w.set_buf_err(true);
+        });
 
         // pd_phy_reset
 
@@ -126,10 +306,10 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
             _marker: PhantomData,
             cc1: cc1.port_sel(),
             cc2: cc2.port_sel(),
+            buffer: UsbPdMsg::new(),
         };
-        this.detect_cc()?;
 
-        Ok(this)
+        this
     }
 
     pub fn reset(&mut self) -> Result<(), Error> {
@@ -139,7 +319,14 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
             w.set_pd_dma_en(true);
             //    w.set_pd_filt_en(true);
         });
-        T::REGS.status().write(|w| w.0 = 0b111111_00); // write 1 to clear
+        T::REGS.status().write(|w| {
+            w.set_if_tx_end(true);
+            w.set_if_rx_reset(true);
+            w.set_if_rx_act(true);
+            w.set_if_rx_byte(true);
+            w.set_if_rx_bit(true);
+            w.set_buf_err(true);
+        });
 
         T::port_cc_reg(self.cc1).modify(|w| w.set_cc_lve(false));
         T::port_cc_reg(self.cc2).modify(|w| w.set_cc_lve(false));
@@ -153,7 +340,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         Ok(())
     }
 
-    fn detect_cc(&mut self) -> Result<(), Error> {
+    pub fn detect_cc(&self) -> Result<(), Error> {
         // CH32X035 has no internal CC pull down support
         // The detection voltage is 0.22V, sufficient to detect the default power(500mA/900mA)
 
@@ -183,107 +370,40 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         }
     }
 
-    fn enable_rx_interrupt(&mut self) {
-        T::REGS.config().modify(|w| {
-            w.set_ie_rx_act(true);
-            w.set_ie_rx_reset(true);
-            w.set_ie_tx_end(false);
-        });
-    }
-
-    fn enable_tx_interrupt(&mut self) {
-        T::REGS.config().modify(|w| {
-            w.set_ie_rx_act(false);
-            w.set_ie_rx_reset(true);
-            w.set_ie_tx_end(true);
-        });
-    }
-
-    /// Receives a PD message into the provided buffer.
-    ///
-    /// Returns the number of received bytes or an error.
-    pub async fn receive(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+    /// Prepares the PHY for receiving a PD message into a buffer.
+    fn prepare_receive(&mut self) {
         // set rx mode
-        // println!("before clear {}", T::REGS.status().read().0);
         T::REGS.config().modify(|w| w.set_pd_all_clr(true));
-        // println!("after clear0 {}", T::REGS.status().read().0);
         T::REGS.config().modify(|w| w.set_pd_all_clr(false));
-        //        println!("after clear1 {}", T::REGS.status().read().0);
 
-        T::REGS.dma().write_value((buf.as_mut_ptr() as u32 & 0xFFFF) as u16);
+        T::REGS.dma().write_value(self.buffer.mut_address());
 
         T::REGS.control().modify(|w| w.set_pd_tx_en(false)); // RX
         T::REGS
             .bmc_clk_cnt()
             .modify(|w| w.set_bmc_clk_cnt(calc_bmc_clk_for_rx()));
 
-        self.enable_rx_interrupt();
         T::REGS.control().modify(|w| w.set_bmc_start(true));
-
-        poll_fn(|cx| {
-            T::state().waker.register(cx.waker());
-
-            if !T::REGS.config().read().ie_rx_reset() {
-                return Poll::Ready(Err(Error::HardReset));
-            }
-
-            if !T::REGS.config().read().ie_rx_act() {
-                match T::REGS.status().read().bmc_aux() {
-                    vals::BmcAux::SOP0 => {
-                        // println!("ctrl {}", T::REGS.control().read().0);
-                        // println!("=> {}", T::REGS.bmc_byte_cnt().read().bmc_byte_cnt());
-                        return Poll::Ready(Ok(T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize));
-                    }
-                    vals::BmcAux::SOP1 => {
-                        // hard reset
-                        return Poll::Ready(Err(Error::HardReset));
-                    }
-                    _ => {
-                        self.enable_rx_interrupt();
-                        return Poll::Pending;
-                    }
-                }
-            }
-            Poll::Pending
-        })
-        .await
     }
 
-    pub fn blocking_receive(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        // set rx mode
-        // println!("before clear {}", T::REGS.status().read().0);
-        T::REGS.config().modify(|w| w.set_pd_all_clr(true));
-        // println!("after clear0 {}", T::REGS.status().read().0);
-        T::REGS.config().modify(|w| w.set_pd_all_clr(false));
-        //        println!("after clear1 {}", T::REGS.status().read().0);
-
-        T::REGS.dma().write_value((buf.as_mut_ptr() as u32 & 0xFFFF) as u16);
-
-        T::REGS.control().modify(|w| w.set_pd_tx_en(false)); // RX
-        T::REGS
-            .bmc_clk_cnt()
-            .modify(|w| w.set_bmc_clk_cnt(calc_bmc_clk_for_rx()));
-
-        self.enable_rx_interrupt();
-        unsafe {
-            qingke::pfic::disable_interrupt(interrupt::USBPD.number() as _);
+    /// Decodes the received PD message and returns a tuple (Sop, length) or an error.
+    fn post_receive(&self, buf: &mut [u8]) -> Result<(Sop, usize), Error> {
+        if T::REGS.status().read().if_rx_reset() {
+            return Err(Error::HardReset);
         }
-        println!("begin blocking recv");
-
-        T::REGS.control().modify(|w| w.set_bmc_start(true));
-
-        while !T::REGS.status().read().if_rx_act() {
-            // println!("wait");
+        let byte_count = T::REGS.bmc_byte_cnt().read().bmc_byte_cnt() as usize;
+        let byte_count = byte_count.saturating_sub(4); // Strip the 4-byte CRC
+        let byte_count = byte_count.min(buf.len()).min(30); // Cap to buffer size and our internal buffer size
+        buf[..byte_count].copy_from_slice(&self.buffer.to_slice()[..byte_count]);
+        match T::REGS.status().read().bmc_aux() {
+            vals::BmcAux::SOP0 => Ok((Sop::Sop, byte_count)),
+            vals::BmcAux::SOP1 => Ok((Sop::SopPrime, byte_count)),
+            vals::BmcAux::SOP2 => Ok((Sop::SopDoublePrime, byte_count)),
+            _ => Err(Error::Rejected),
         }
-
-        unsafe {
-            qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
-        }
-
-        Ok(10)
     }
 
-    fn transmit(&mut self, sop: u8, buf: &[u8]) -> Result<(), Error> {
+    fn transmit_inner(&mut self, sop: Sop, buf: &[u8]) {
         T::port_cc_reg(T::REGS.config().read().cc_sel()).modify(|w| w.set_cc_lve(true));
 
         T::REGS
@@ -293,65 +413,27 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T> {
         if buf.is_empty() {
             T::REGS.dma().write_value(0);
         } else {
-            T::REGS.dma().write_value(buf.as_ptr() as u16);
+            // We use our own buffer to ensure it is 4-byte aligned, as required by the hardware.
+            let len = buf.len().min(30);
+            self.buffer.data[..len].copy_from_slice(&buf[..len]);
+            T::REGS.dma().write_value(self.buffer.address());
         }
 
-        T::REGS.tx_sel().write(|w| w.0 = sop);
+        T::REGS.tx_sel().write(|w| w.0 = sop as u8);
 
         T::REGS.bmc_tx_sz().write(|w| w.set_bmc_tx_sz(buf.len() as _));
         T::REGS.control().modify(|w| w.set_pd_tx_en(true)); // TX
 
-        T::REGS.status().write(|w| w.0 = 0b11111100);
+        T::REGS.status().write(|w| {
+            w.set_if_tx_end(true);
+            w.set_if_rx_reset(true);
+            w.set_if_rx_act(true);
+            w.set_if_rx_byte(true);
+            w.set_if_rx_bit(true);
+            w.set_buf_err(true);
+        });
 
         T::REGS.control().modify(|w| w.set_bmc_start(true));
-
-        Ok(())
-    }
-
-    /// Transmit a hard reset.
-    pub async fn transmit_hardreset(&mut self) {
-        const TX_SEL_HARD_RESET: u8 = 0b10_10_10_01;
-
-        // self.enable_tx_interrupt();
-        // self.transmit(TX_SEL_HARD_RESET, &[])?;
-        // send_phy_empty_playload
-
-        T::port_cc_reg(T::REGS.config().read().cc_sel()).modify(|w| w.set_cc_lve(true));
-
-        T::REGS
-            .bmc_clk_cnt()
-            .write(|w| w.set_bmc_clk_cnt(calc_bmc_clk_for_tx()));
-
-        T::REGS.dma().write_value(0);
-        T::REGS.tx_sel().write(|w| w.0 = TX_SEL_HARD_RESET);
-        T::REGS.bmc_byte_cnt().write(|w| w.set_bmc_byte_cnt(0));
-
-        T::REGS.control().modify(|w| w.set_pd_tx_en(true)); // TX
-
-        T::REGS.status().write(|w| w.0 = 0b11111100);
-
-        T::REGS.control().modify(|w| w.set_bmc_start(true));
-
-        /*
-
-        poll_fn(|cx| {
-            T::state().waker.register(cx.waker());
-            let config = T::REGS.config().read();
-            if !config.ie_tx_end() {
-                return Poll::Ready(());
-            }
-            Poll::Pending
-        })
-        .await;
-
-        // T::REGS.port_cc1().modify(|w| w.set_cc_lve(false));
-        // T::REGS.port_cc2().modify(|w| w.set_cc_lve(false));
-
-        //        T::REGS.port_cc1().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
-        //      T::REGS.port_cc2().write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
-
-        Ok(())
-        */
     }
 }
 
