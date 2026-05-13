@@ -1241,11 +1241,7 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
                 qingke::pfic::unpend_interrupt(63);
                 qingke::pfic::unpend_interrupt(64);
                 if !MINIMAL_SDI {
-                    hal::println!("# PATHC_IRQ_MARK pre-enable");
-                }
-                qingke::pfic::enable_interrupt(63);
-                if !MINIMAL_SDI {
-                    hal::println!("# PATHC_IRQ_MARK post-enable63");
+                    hal::println!("# PATHC_IRQ_MARK pre-go-irq-deferred");
                 }
                 if PATHC_ENABLE_LLE_IRQ {
                     qingke::pfic::enable_interrupt(64);
@@ -1274,6 +1270,12 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
                 hal::println!("# RXPROBE_ENTRY pre-go");
             }
             bb_write(0x00, 2); // T=0: GO strobe
+            if PATHC_LIB_IRQ {
+                qingke::pfic::enable_interrupt(63);
+                if !MINIMAL_SDI {
+                    hal::println!("# PATHC_IRQ_MARK post-go-enable63");
+                }
+            }
             if RX_TURNAROUND_PROBE {
                 let ip = core::ptr::addr_of!(gBleIPPara) as *const u8;
                 // H2d fix (2026-05-11, RE5): QingKe V4 does NOT implement mcycle (CSR 0xB00)

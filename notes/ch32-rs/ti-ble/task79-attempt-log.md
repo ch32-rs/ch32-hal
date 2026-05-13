@@ -263,6 +263,7 @@ Next candidate to prove:
 
 Specific review questions for the §5 candidate triage:
 1. Does `src/ble/bb.rs` ISR write `ip.add(2)` / `ip.add(3)` to `gBleIPPara`? Cindy `c00c1a7f` verified `ip.add(4)` is touched (pre-GO arm + probe-wait reads), but did not enumerate `[2]/[3]` writes. If the ISR is missing those writes, A1/A2 wait-condition patches are treating a symptom — root cause is incomplete ISR.
+   - **Lucy answer (2026-05-14 02:50)**: `rg "ip\.add\(2\)|ip\.add\(3\)|gBleIPPara\[2\]|gBleIPPara\[3\]" src/` → **zero matches across all of `src/`**. The Rust port of `BB_IRQLibHandler` writes only `ip.add(4)` (`.L6` arm to 0xC0; `.L4` bit4 + `.L8` bit7 → 1). Slots `[2]/[3]` are never touched by any Rust code path. Implication: if Vega's path-B IRQ-reorder gates ip4==1 visibility, project's [4] substitute is the right wait target; if path-B fails, next candidate must include obtaining `ip.o` disasm to find the libwchble BB-ISR sources for `[2]/[3]` writes (currently unknown — disasm we have is LL.o only).
 2. PFIC IRQ enable state for BB IRQ — is it actually enabled at the point ADV-cycle TX is kicked? What register is `irq_now = 0x33002000` sampling?
 3. Cross-check libwchble `ip.o` disasm for the BB ISR — find the exact instruction that writes `gBleIPPara[2]/[3]` after TX completion, then verify the project ISR has an equivalent.
 
@@ -318,6 +319,51 @@ Preservation:
 - Commit/tag this state before the next patch:
   - commit: `probe(ble): archive ip4 50ms marginal air result`
   - tag: `probe/scan-rsp-step2-ip4-50ms-marginal-air-20260514`
+
+---
+
+## §13. Attempt E: Path B post-GO IRQ enable
+
+Goal: test Vega's Path B hypothesis from ip4-50ms review:
+
+- Move `enable_interrupt(63)` from the PATHC pre-GO block to immediately after `bb_write(0x00, 2)` (GO strobe).
+- Keep ip4 50 ms OUTER wait.
+- Keep minimal-SDI and A1 inner helper.
+
+Patch details:
+
+- PATHC pre-GO block still clears W1C/status and unpends IRQ 63/64.
+- `qingke::pfic::enable_interrupt(63)` executes after the GO strobe.
+- LLE IRQ 64 handling remains unchanged.
+
+Artifacts:
+
+- Build log: `/tmp/task80_pathb_postgo_irq_build_20260514_0248.log`
+- Flash log: `/tmp/task80_pathb_postgo_irq_flash_20260514_0248.log`
+- Pcap: `/tmp/task79_scan_rsp_step2/task80_pathb_postgo_irq_sniff60.pcapng`
+- Pcap raw evidence: ambient BLE ADV-AA = 21683, target AdvA bytes = 0, `Simple` name bytes = 0, target ADV prefix = 0, target SCAN_RSP prefix = 0.
+- Serial watch: `/tmp/task79_scan_rsp_step2/task80_pathb_postgo_irq_flash_watch35.log`
+- Serial summary at `tx#100`: `outer_ip2=0 outer_ip3=0 outer_ip4=0 outer_idle=0 outer_timeout=300 rx_done=300 rx_timeout=0`, `BB=5/5`, `irq_now=0x39002000`.
+
+Result: FAIL — moving IRQ63 enable post-GO did not recover target ADV.
+
+Interpretation:
+
+- Pre-GO IRQ fire was not the sole suppressor.
+- `ip4==1` still does not fire in 300 attempts.
+- BB IRQ entry count is tiny (`5/5` by `tx#100`) and still does not produce the project completion signal.
+- `irq_now=0x39002000` persists, matching the previous stuck/no-air family.
+
+Next candidate to prove:
+
+- PATHC canonical fix likely needs to stop doing per-iteration PATHC W1C/re-arm at all (Path A: move PATHC setup once at init), or directly compare the current per-GO W1C/status-clearing sequence against EVT/libwchble's `ll_tx_wait_finish(mode=0)` cold-TX shape.
+- Do not continue changing wait predicates; all wait variants now show the same completion-signal absence.
+
+Preservation:
+
+- Commit/tag this state before the next patch:
+  - commit: `bad(ble): archive post-go irq enable failure`
+  - tag: `bad/scan-rsp-step2-postgo-irq-no-air-20260514`
 
 ---
 
