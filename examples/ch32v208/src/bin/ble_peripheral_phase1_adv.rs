@@ -616,6 +616,7 @@ static mut MODE_E_RX_PRE_N: u32 = 0;
 static mut MODE_E_RX_POST_N: u32 = 0;
 static mut OUTER_WAIT_IP2_N: u32 = 0;
 static mut OUTER_WAIT_IP3_N: u32 = 0;
+static mut OUTER_WAIT_IP4_N: u32 = 0;
 static mut OUTER_WAIT_LLE_IDLE_N: u32 = 0;
 static mut OUTER_WAIT_TIMEOUT_N: u32 = 0;
 static mut RX_TURNAROUND_DONE_N: u32 = 0;
@@ -1279,47 +1280,29 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
                 // — absent from RM Table 8-1. Use SysTick CNTL (0xE000_F008) instead.
                 // SysTick runs at HCLK/8 = 12 MHz (free-running, STRE=false, init'd by
                 // hal::init() → embassy::init() before any task starts). 1 tick = 83.3 ns;
-                // 24_000 ticks ≈ 2 ms, matching the original 192_000-cycle timeout at 96 MHz.
+                // 600_000 ticks ≈ 50 ms. Project bb.rs exposes TX completion through
+                // gBleIPPara[4] (ip4), while libwchble's ip2/ip3 completion bits are
+                // produced by an ip.o-layer IRQ handler we do not currently mirror.
                 let stk_cntl = 0xE000_F008 as *const u32;
                 let start = read_volatile(stk_cntl);
-                let mut ip2 = read_volatile(ip.add(2));
-                let mut ip3 = read_volatile(ip.add(3));
-                let mut bb64 = bb_read(0x64);
-                while (ip2 & 1) == 0
-                    && (ip3 & 1) == 0
-                    && bb64 != 0
-                    && read_volatile(stk_cntl).wrapping_sub(start) < 24_000
-                {
+                let mut ip4 = read_volatile(ip.add(4));
+                while ip4 != 1 && read_volatile(stk_cntl).wrapping_sub(start) < 600_000 {
                     core::hint::spin_loop();
-                    ip2 = read_volatile(ip.add(2));
-                    ip3 = read_volatile(ip.add(3));
-                    bb64 = bb_read(0x64);
+                    ip4 = read_volatile(ip.add(4));
                 }
                 let dt = read_volatile(stk_cntl).wrapping_sub(start); // SysTick ticks @ 12 MHz; dt/12 = µs
-                let mut source = 0u32;
-                if (ip2 & 1) != 0 {
-                    source |= 0x1;
-                    OUTER_WAIT_IP2_N = OUTER_WAIT_IP2_N.wrapping_add(1);
-                }
-                if (ip3 & 1) != 0 {
-                    source |= 0x2;
-                    OUTER_WAIT_IP3_N = OUTER_WAIT_IP3_N.wrapping_add(1);
-                }
-                if bb64 == 0 {
-                    source |= 0x4;
-                    OUTER_WAIT_LLE_IDLE_N = OUTER_WAIT_LLE_IDLE_N.wrapping_add(1);
-                }
-                if source == 0 {
+                let source = if ip4 == 1 { 0x8 } else { 0 };
+                if ip4 == 1 {
+                    OUTER_WAIT_IP4_N = OUTER_WAIT_IP4_N.wrapping_add(1);
+                } else {
                     OUTER_WAIT_TIMEOUT_N = OUTER_WAIT_TIMEOUT_N.wrapping_add(1);
                 }
                 if !MINIMAL_SDI {
                     hal::println!(
-                        "# TXWAIT3 dt={} source={:#04x} ip2={:#04x} ip3={:#04x} bb64={:#010x} state={:#010x} bb08={:#010x}",
+                        "# TXWAIT_IP4 dt={} source={:#04x} ip4={:#04x} state={:#010x} bb08={:#010x}",
                         dt,
                         source,
-                        ip2,
-                        ip3,
-                        bb64,
+                        ip4,
                         bb_read(0x1C),
                         bb_read(0x08)
                     );
@@ -2271,14 +2254,16 @@ async fn phase1_adv_loop() -> ! {
                 if MINIMAL_SDI {
                     let outer_ip2 = OUTER_WAIT_IP2_N;
                     let outer_ip3 = OUTER_WAIT_IP3_N;
+                    let outer_ip4 = OUTER_WAIT_IP4_N;
                     let outer_idle = OUTER_WAIT_LLE_IDLE_N;
                     let outer_timeout = OUTER_WAIT_TIMEOUT_N;
                     let rx_done = RX_TURNAROUND_DONE_N;
                     let rx_timeout = RX_TURNAROUND_TIMEOUT_N;
                     hal::println!(
-                        "# WAIT_SUMMARY outer_ip2={} outer_ip3={} outer_idle={} outer_timeout={} rx_done={} rx_timeout={}",
+                        "# WAIT_SUMMARY outer_ip2={} outer_ip3={} outer_ip4={} outer_idle={} outer_timeout={} rx_done={} rx_timeout={}",
                         outer_ip2,
                         outer_ip3,
+                        outer_ip4,
                         outer_idle,
                         outer_timeout,
                         rx_done,

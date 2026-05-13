@@ -259,11 +259,65 @@ Next candidate to prove:
 
 - **PATHC_LIB_IRQ / Delta Y (PHY re-arm)**: focus on the pre-GO and GO-adjacent path, especially `bb_write(0x08, 0x8000)` / W1C / IRQ-enable ordering and `BB+0x64` lifecycle before GO. This matches Vega's post-A1 hypothesis that the suppressor sits before or at the OUTER wait boundary.
 
+**Lucy disasm anchor (`3b96e6a5`, source `ll-tx-completion-disasm.md` §3 line 467-470)**: `gBleIPPara[2]/[3]` bit 0 is set by the **BB/PHY IRQ handler in `ip.o` (not LL.o)**; `LLE[100] == 0` (= `bb_read(0x64) == 0`) is the **hardware self-clear fallback for IRQ-miss recovery**. Mapping to telemetry: `outer_ip2=0 / outer_ip3=0 / outer_idle=300` means every iteration falls through the fallback path — i.e. **the BB/PHY IRQ handler that writes `gBleIPPara[2]/[3]` is never firing**. Same root cause as `ip4 = 0x80` stable (BB ISR not writing `gBleIPPara[4] = 1` on TX done either).
+
+Specific review questions for the §5 candidate triage:
+1. Does `src/ble/bb.rs` ISR write `ip.add(2)` / `ip.add(3)` to `gBleIPPara`? Cindy `c00c1a7f` verified `ip.add(4)` is touched (pre-GO arm + probe-wait reads), but did not enumerate `[2]/[3]` writes. If the ISR is missing those writes, A1/A2 wait-condition patches are treating a symptom — root cause is incomplete ISR.
+2. PFIC IRQ enable state for BB IRQ — is it actually enabled at the point ADV-cycle TX is kicked? What register is `irq_now = 0x33002000` sampling?
+3. Cross-check libwchble `ip.o` disasm for the BB ISR — find the exact instruction that writes `gBleIPPara[2]/[3]` after TX completion, then verify the project ISR has an equivalent.
+
 Preservation:
 
 - Commit/tag this state before the next patch:
   - commit: `bad(ble): archive outer wait minimal sdi failure`
   - tag: `bad/scan-rsp-step2-outer3-min-sdi-no-air-20260514`
+
+---
+
+## §12. Attempt D: OUTER project-ip4 wait, 50 ms timeout, minimal SDI
+
+Goal: apply Vega's milestone review recommendation after Attempt C:
+
+- Keep project-native completion signal `gBleIPPara[4]` (`ip4`), because project `src/ble/bb.rs` writes only this slot.
+- Increase OUTER wait timeout from `24_000` SysTick ticks (2 ms) to `600_000` SysTick ticks (50 ms).
+- Preserve minimal-SDI and A1 inner helper from §10/§11.
+
+Patch details:
+
+- OUTER wait condition: `while ip4 != 1 && SysTickDelta < 600_000 { spin }`.
+- Added `OUTER_WAIT_IP4_N` counter and extended `WAIT_SUMMARY`.
+- Removed the incorrect OUTER `ip2/ip3/bb64==0` condition from Attempt C.
+
+Artifacts:
+
+- Build log: `/tmp/task80_ip4_50ms_min_sdi_build_20260514_0241.log`
+- Flash log: `/tmp/task80_ip4_50ms_min_sdi_flash_20260514_0241.log`
+- Pcap R1: `/tmp/task79_scan_rsp_step2/task80_ip4_50ms_min_sdi_sniff60.pcapng`
+- Pcap R1 raw evidence: ambient BLE ADV-AA = 15453, target AdvA bytes = 1, target ADV prefix = 1, `Simple` name bytes = 0.
+- Serial watch: `/tmp/task79_scan_rsp_step2/task80_ip4_50ms_min_sdi_flash_watch35.log`
+- Serial summary at `tx#100`: `outer_ip2=0 outer_ip3=0 outer_ip4=0 outer_idle=0 outer_timeout=300 rx_done=300 rx_timeout=0`, `BB=4/4`, `irq_now=0x39002000`.
+- Pcap R2 after serial-watch reflash: `/tmp/task79_scan_rsp_step2/task80_ip4_50ms_min_sdi_r2_sniff60.pcapng`
+- Pcap R2 raw evidence: ambient BLE ADV-AA = 15708, target AdvA bytes = 1, target ADV prefix = 1, `Simple` name bytes = 1.
+
+Result: MARGINAL AIR — two independent 60s pcap runs saw exactly one target ADV each.
+
+Interpretation:
+
+- Air visibility recovered from 0/60s to about 1 frame/60s, still far below the historical `df26837` 17.1 Hz behavior.
+- `outer_ip4=0 outer_timeout=300` means `ip4==1` did not fire in the serial-watch run even with 50 ms timeout. The rare air frames appear to be race leakage, not clean project-ISR completion.
+- `BB=4/4` shows BB IRQ can enter/exit during the serial-watch run, but not enough to set `ip4==1` on the sampled path.
+- This result satisfies the original loose "≥1 target frame" control visibility criterion only in the weakest possible form. It is not a stable baseline for SCAN_RSP implementation.
+
+Next candidate to prove:
+
+- PATHC_LIB_IRQ / Delta Y remains the main path: the pre-GO/GO-adjacent re-arm and W1C ordering can still suppress the TX path most iterations.
+- Specifically inspect why BB IRQ entry reaches only `4/4` by `tx#100` while `ip4` completion never fires, and compare `bb.rs` bit4/bit7 conditions against the current `irq_now=0x39002000` state.
+
+Preservation:
+
+- Commit/tag this state before the next patch:
+  - commit: `probe(ble): archive ip4 50ms marginal air result`
+  - tag: `probe/scan-rsp-step2-ip4-50ms-marginal-air-20260514`
 
 ---
 
