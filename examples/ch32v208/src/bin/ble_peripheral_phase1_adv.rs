@@ -1658,6 +1658,7 @@ unsafe fn wait_adv_tx_before_rx_turnaround() -> bool {
 
 unsafe fn rx_turnaround_capture_ch37(adv_channel: u8) -> Option<[u8; 50]> {
     core::ptr::write_bytes(addr_of!(RX_TURNAROUND_BUF) as *mut u8, 0, 50);
+    let ip = core::ptr::addr_of_mut!(gBleIPPara) as *mut u8;
 
     bb_write(0x64, 0);
     bb_write(0x08, 0x0000_F00F);
@@ -1678,6 +1679,7 @@ unsafe fn rx_turnaround_capture_ch37(adv_channel: u8) -> Option<[u8; 50]> {
     bb_write(0x0C, saved_0c & !0x2000);
     core::arch::asm!("fence.i", options(nomem, nostack));
     bb_write(0x08, 0x2000);
+    write_volatile(ip.add(4), 0x80);
     let bb_mode = (bb_read(0x00) >> 12) & 0x3;
     let rx_timer = match bb_mode {
         0 => 406,
@@ -1691,23 +1693,27 @@ unsafe fn rx_turnaround_capture_ch37(adv_channel: u8) -> Option<[u8; 50]> {
     // time 44B*8us = 352us + margin. lib timer 406 ticks has TBD units.
     let deadline = Instant::now() + Duration::from_micros(600);
     loop {
-        // WCH gptrLLEReg+0x08 maps to this example's BB_BASE+0x08 accessor.
-        let lle08 = bb_read(0x08);
-        if lle08 & (1 << 3) != 0 {
+        let ip2 = read_volatile(ip.add(2));
+        let ip3 = read_volatile(ip.add(3));
+        let bb64 = bb_read(0x64);
+        if (ip2 & 1) != 0 || (ip3 & 1) != 0 || bb64 == 0 {
+            // WCH gptrLLEReg+0x08 maps to this example's BB_BASE+0x08 accessor.
+            let lle08 = bb_read(0x08);
             let mut snap = [0u8; 50];
             let src = addr_of!(RX_TURNAROUND_BUF) as *const u8;
             for (i, b) in snap.iter_mut().enumerate() {
                 *b = read_volatile(src.add(i));
             }
-            let bb64 = bb_read(0x64);
             let bb00 = bb_read(0x00);
             let bb38 = bb_read(0x38);
             // W1C after snapshot keeps the completion bit visible for this trace.
             bb_write(0x08, 1 << 3);
             bb_write(0x64, 0);
             hal::println!(
-                "# RX_TURNAROUND_DONE ch={} lle08={:#010x} bb64={:#010x} bb00={:#010x} bb38={:#010x} hdr={:02x} {:02x}",
+                "# RX_TURNAROUND_DONE ch={} ip2={:#04x} ip3={:#04x} lle08={:#010x} bb64={:#010x} bb00={:#010x} bb38={:#010x} hdr={:02x} {:02x}",
                 adv_channel,
+                ip2,
+                ip3,
                 lle08,
                 bb64,
                 bb00,
@@ -2074,11 +2080,7 @@ async fn phase1_adv_loop() -> ! {
                             mode_e_rx_post,
                         );
                     }
-                    let rx_snap = if irq == 1 {
-                        rx_turnaround_capture_ch37(adv_channel)
-                    } else {
-                        None
-                    };
+                    let rx_snap = rx_turnaround_capture_ch37(adv_channel);
                     MODE_E_RX_POST_N = MODE_E_RX_POST_N.wrapping_add(1);
                     if tx_n < 5 || tx_n % 100 == 0 {
                         let mode_e_rx_pre = MODE_E_RX_PRE_N;
