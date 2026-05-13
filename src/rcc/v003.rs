@@ -129,21 +129,9 @@ pub(crate) unsafe fn init(config: Config) {
     // V003 RM section 16.3.1:
     //   00: 0 wait (0  <= SYSCLK <= 24 MHz)
     //   01: 1 wait (24 <  SYSCLK <= 48 MHz)
-    #[cfg(ch32v003)]
     let latency = match sysclk {
         0..=24_000_000 => 0b00,
         _ => 0b01,
-    };
-
-    // V00x RM section 18.3.1:
-    //   00: 0 wait (0  <= SYSCLK <= 15 MHz)
-    //   01: 1 wait (15 <  SYSCLK <= 24 MHz)
-    //   10: 2 wait (24 <  SYSCLK <= 48 MHz)
-    #[cfg(any(ch32v002, ch32v004, ch32v005, ch32v006, ch32v007))]
-    let latency = match sysclk {
-        0..=15_000_000 => 0b00,
-        15_000_001..=24_000_000 => 0b01,
-        _ => 0b10,
     };
 
     FLASH.actlr().modify(|w| w.set_latency(latency));
