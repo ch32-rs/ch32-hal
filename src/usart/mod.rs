@@ -871,7 +871,10 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
         rx_dma: Peri<'d, impl RxDma<T>>,
         mut config: Config,
     ) -> Result<Self, ConfigError> {
+        #[cfg(not(gpio_x0))]
         tx.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
+        #[cfg(gpio_x0)]
+        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         T::set_remap(REMAP);
 
         config.half_duplex = true;
@@ -945,7 +948,10 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
         tx: Peri<'d, impl TxPin<T, REMAP>>,
         mut config: Config,
     ) -> Result<Self, ConfigError> {
+        #[cfg(not(gpio_x0))]
         tx.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
+        #[cfg(gpio_x0)]
+        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
         T::set_remap(REMAP);
 
         config.half_duplex = true;
