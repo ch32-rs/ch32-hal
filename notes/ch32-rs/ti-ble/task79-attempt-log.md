@@ -463,6 +463,36 @@ Preservation:
 
 ---
 
+## §15. Cadence / per-slot delta table before the next patch
+
+Purpose: stop the "hypothesis → patch → FAIL" loop after Path A. Any next code change must first name the exact delta it targets.
+
+### 15.1 Configured event cadence
+
+| Path | Source | Event-level cadence | Intra-event channel cadence | Notes |
+| --- | --- | --- | --- | --- |
+| `df26837` Rust example | `git show df26837:...ble_peripheral_phase1_adv.rs` | `ADV_INTERVAL = 200 ms` + `advDelay = 0..10 ms` | immediate `for &adv_channel in [37,38,39]` | `mcycle()` is broken on QingKe V4F and only affects RNG seed + probe timeout. It does not change the `Timer::at(next_adv)` event cadence. |
+| current Path A (`e56858f`) | current file | same `ADV_INTERVAL = 200 ms` + `advDelay = 0..10 ms` | same immediate 37/38/39 sweep | Path A moved PATHC setup once before the loop. It did not change scheduler cadence. |
+| EVT / libwchble | `evt-broadcaster-ti-flow.md §3.3`, `time-event-model.md §1/§2` | TMOS timer dispatch: initial `mask 0x0001` then re-entry `mask 0x0002` | synchronous channel progression inside `ll_advertise_tx` / `ll_advertise_process` | Timer delay exists between ADV events; channel hops inside one event are synchronous. |
+
+Answer to Lucy Q: `df26837` configures **200 ms interval + 0..10 ms advDelay** in the Rust example, not a TGAP constant. The historical 17.1 Hz pcap rate does not directly map to `3 / 0.205s = 14.6 Hz`; treat that rate as air-observed evidence that needs pcap/parser-context review, not as the configured interval.
+
+### 15.2 Current useful delta target
+
+Cadence is no longer the primary suspect: `df26837` and Path A have the same event loop structure. The next delta table must focus on **per-channel TX register/ISR state**:
+
+| Boundary | df26837 | Path A | EVT/libwchble | Current evidence gap |
+| --- | --- | --- | --- | --- |
+| pre-slot PATHC/W1C | runs once because the task effectively hangs after first GO | moved once-init in Path A | bring-up/init phase, not per-slot | Path A still marginal, so this delta is insufficient. |
+| per-slot PHY config | `ble_set_phy_tx_mode_1mbps(TX_BUF[1])` | same | `BLE_SetPHYTxMode(mode,len)` | Keep per-slot. Lucy/Vega confirmed this boundary. |
+| per-slot kick | `bb_write(0x00, 2)` | same | `LLE[0] = 2` | Kick exists in all paths. |
+| completion / ISR state | broken `mcycle` wait effectively waits until `ip4==1` or hangs | current wait predicates have all failed or timed out | lib completion uses `gBleIPPara[2]/[3] || LLE[100]==0` with library ISR | Rust ISR completion semantics remain the largest unresolved delta. |
+| post-GO status | historical air-visible | Path A R1 shows `BB+0x08` reaches `0x39002caa`; R2 has no target frames | needs EVT/libwchble register comparison | Need direct compare of df26837/Path A/EVT post-GO status around the first channel slot. |
+
+Next action: collect or reuse traces for the first channel slot only and compare the post-GO `BB+0x08`, `LLE+0x64`, `gBleIPPara[4]`, and BB IRQ-entry counters against EVT/libwchble expectations before patching.
+
+---
+
 ## §9. Communication protocol (Andelf `8ab182ec` 2026-05-14)
 
 - 清晰简明有效, 一件事一人讲一次, 不来回补充.
