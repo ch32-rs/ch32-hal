@@ -985,7 +985,7 @@ unsafe fn pathc_lib_irq_arm_once() {
     bb_write(0x08, 0x8000);
     qingke::pfic::unpend_interrupt(63);
     qingke::pfic::unpend_interrupt(64);
-    qingke::pfic::enable_interrupt(63);
+    // T82-step4-P4: keep BB IRQ masked to test whether ISR activity breaks HW-autonomous TX.
     if PATHC_ENABLE_LLE_IRQ {
         qingke::pfic::enable_interrupt(64);
     }
