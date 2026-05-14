@@ -32,31 +32,36 @@ others should work if you are careful as most peripherals are similar enough.
 
 For a full list of chip capabilities and peripherals, check the [ch32-data](https://github.com/ch32-rs/ch32-data) repository.
 
-| Family      | V2/V3  | V1  | V0  | X0  | L1  | CH641  | CH643  |
-|-------------|--------|-----|-----|-----|-----|--------|--------|
-| Embassy     | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅   |
-| RCC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅   |
-| GPIO        | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅    |
-| UART*       | ✅     | ✅  | ✅ | ✅  | ✅   | ❓      |        |
-| SPI*        | ✅     | ✅  | ✅ | ✅  | ✅   | N/A    |        |
-| I2C         | ✅     | ✅  | ✅ | ❓  | ❓   | ❓      |        |
-| ADC         | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅   |
-| Timer(PWM)  | ✅     | ✅  | ✅ | ✅  | ✅   | ✅      |  ✅   |
-| USBD        | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
-| USB/OTG FS  | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
-| USB HS      | ✅*    | N/A  | N/A  | N/A  | N/A   | N/A      |        |
-| USB PD      | N/A    | N/A  | N/A  | ✅*  | ✅*   | ❓        | ❓     |
-| CAN*        | ✅     |     |   |     | ✅ |          |        |
-
+| Family     | V2/V3 | V1  | V003 | V00X | X0   | L1   | CH641 | CH643 |
+| ---------- | ----- | --- | ---- | ---- | ---- | ---- | ----- | ----- |
+| Embassy    | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
+| RCC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
+| GPIO       | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
+| EXTI\*     | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
+| UART\*     | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ❓    | ❓    |
+| SPI\*      | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | N/A   | ❓    |
+| I2C        | ✅    | ✅  | ✅   | ❓   | ❓   | ❓   | ❓    | ❓    |
+| ADC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
+| Timer(PWM) | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ✅    | ✅    |
+| USBD       | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
+| USB/OTG FS | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
+| USB HS     | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
+| USB PD     | N/A   | N/A | N/A  | N/A  | ✅\* | ✅\* | ❓    | ❓    |
+| ETH\*      | ✅†   | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
+| CAN\*      | ✅    | N/A | N/A  | N/A  | N/A  | ✅   | N/A   | N/A   |
 
 - ✅ : Expected to work
 - ❌ : Not implemented
 - ❓ : Not tested
-- `*` marks the async driver
+- `*` marks the async driver (EXTI is also opt-in via the `exti` Cargo feature)
+- `†` ETH: only the CH32V208 10M MAC+PHY. V305/V307 Synopsys DWC MAC is in progress (PR #157)
 - TODO: I haven't got a dev board yet, help-wanted
 - N/A: Not available
 
+**V00X** covers CH32V002 / CH32V004 / CH32V005 / CH32V006 / CH32V007 and CH32M007.
+
 ### Notes
+
 - For USB OTGFS and HS, look at the `mod.rs` respsectively to understand what is / is not tested.
 
 ### Important: ROM/RAM Split Configuration (CH32V2/V3)
@@ -69,6 +74,7 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 > your chip's ROM/RAM configuration likely doesn't match the linker script.
 
 **Symptoms:**
+
 - Program crashes with `mcause=0x7` (Store/AMO access fault)
 - Stack pointer (`sp`) points to invalid memory region
 - No output or immediate crash after reset
@@ -87,7 +93,6 @@ This section lists some key items that are not implemented yet. And should be no
 
 ### Coming New Chips - Help Wanted
 
-- CH32V002 / CH32V004 / CH32V005 / CH32V006 / CH32V007 / CH32M007, Qingke V2C
 - CH645, USB HUB, SerDes (V4C)
 - CH564, USBHS, 100M Ethernet (V4J)
 
