@@ -6,6 +6,26 @@ HEAD: `7f04104` + gate patch (see §3)
 
 ---
 
+## §0. Correction lock: broadcaster evidence vs SCAN_RSP evidence
+
+Rust broadcaster and EVT Broadcaster are cold ADV TX baselines. They prove the device can emit ADV frames and help validate init / channel TX / pcap tooling.
+
+SCAN_RSP requires the EVT Peripheral warm RX->TX path:
+
+```text
+ll_advertise_legacy_rx
+  -> ll_advertise_generated_scan_rsp
+  -> BLE_SetPHYTxMode
+  -> ll_tx_wait_finish(mode=3)
+  -> ble_ll_hw_api_shut
+```
+
+Do not classify broadcaster success as SCAN_RSP progress. In task #79 rows, record cold ADV visibility and warm SCAN_RSP visibility separately.
+
+Reference doc:
+
+- `notes/ch32-rs/ti-ble/evt-broadcaster-ti-flow.md`
+
 ## §1. Baseline selection history
 
 ### Candidate: 7f04104 + ch32-data 1b6b0d4
@@ -359,11 +379,75 @@ Next candidate to prove:
 - PATHC canonical fix likely needs to stop doing per-iteration PATHC W1C/re-arm at all (Path A: move PATHC setup once at init), or directly compare the current per-GO W1C/status-clearing sequence against EVT/libwchble's `ll_tx_wait_finish(mode=0)` cold-TX shape.
 - Do not continue changing wait predicates; all wait variants now show the same completion-signal absence.
 
+**Vega milestone review `bde68b52` (02:52)**: Path B regression explains itself — pre-GO ISR fires `.L6` that configures LLE timer registers required by TX (dependency, not a bug). df26837 works because PATHC W1C runs **once** (task hangs after init). Per-iteration PATHC W1C resets LLE timing every iteration and is incompatible with HW-autonomous TX. **Recommendation: Path A — PATHC once at init**. Hot loop = channel + TX buf + bare GO strobe. Example-only scope (no `src/ble/` changes). Architectural change — Andelf confirmation required before Cindy executes.
+
+**Lucy disasm anchor for Path A (`b17c25cb`, source `ll-tx-completion-disasm.md` §1.3 lines 67-82)** — mode 0 cold-TX entry in libwchble is exactly 3 register touches per ADV slot:
+
+```
+d4: while LLE[100] != 0 {}      ; pre-wait LLE busy (bb_read(0x64))
+e4: call BLE_SetPHYTxMode        ; PHY mode setup
+118: LLE[0] = 2                  ; TX kick (= project bb_write(0x00, 2))
+fallthrough → .L81 wait
+```
+
+No PATHC W1C, no IRQ enable re-order inside the loop. PATHC runs once during `ble_ip_core_init` / PHY bringup, then hot loop re-enters the 3-step kick per ADV slot. This is the literal disasm shape Vega's Path A reconstructs from df26837 behavior.
+
+**Status (02:53)**: Cindy `8fdf4cc8` holds at `c193349`, no further wait/IRQ tweaks. Vega `f0ce7f99` ack. Both wait for Andelf decision.
+
 Preservation:
 
 - Commit/tag this state before the next patch:
   - commit: `bad(ble): archive post-go irq enable failure`
   - tag: `bad/scan-rsp-step2-postgo-irq-no-air-20260514`
+
+---
+
+## §14. Attempt F: Path A once-at-init PATHC block
+
+Goal: execute Andelf-approved Path A after Vega/Lucy convergence:
+
+- Run the PATHC / IRQ setup block once before the ADV hot loop.
+- Keep the per-slot PHY/LLE sequence in the hot loop (`ble_set_phy_tx_mode_1mbps` and surrounding writes), matching libwchble cold-TX shape.
+- Keep hot loop to channel update + TX buffer update + per-slot PHY config + bare `bb_write(0x00, 2)` GO strobe.
+- Remove timing-heavy SDI probes from the judgement run.
+
+Patch details:
+
+- Added `PATHC_ONCE_AT_INIT = true` and `pathc_lib_irq_arm_once()`.
+- Moved these once-init effects out of the hot loop: `gBleIPPara[4]=0x80`, `gBleIPPara[5]=0`, `gBleIPPara[16]=776`, PATHC W1C `bb_write(0x08, 0x0000_FFFF)`, `bb_write(0x38, 0xFF)`, `lle_write(0x38, 0xF0)`, Delta Y `bb_write(0x08, 0x8000)`, `unpend_interrupt(63/64)`, `enable_interrupt(63)`.
+- Disabled `RX_TURNAROUND_PROBE` for cold-ADV control.
+- Disabled `X1_POLLED_W1C` and `BB08_TRACE` for the final judgement run after an initial flash showed `PATHC_ALIVE x1-*` / `BB08_TRACE[*]` SDI noise in the hot path.
+
+Artifacts:
+
+- Build log before SDI cleanup: `/tmp/task80_patha_once_init/build_clean_20260514_0832.log`
+- Flash+watch showing SDI noise: `/tmp/task80_patha_once_init/flash_clean_watch_20260514_0833.log`
+- Final build log: `/tmp/task80_patha_once_init/build_clean2_20260514_0834.log`
+- Final flash log: `/tmp/task80_patha_once_init/flash_clean2_20260514_0835.log`
+- Pcap R1: `/tmp/task80_patha_once_init/patha_clean_sniff60.pcapng`
+- Pcap R1 raw evidence: ambient BLE ADV-AA = 22268, target ADV_IND prefix = 2, target AdvA bytes = 2, `Simple` bytes = 2.
+- Pcap R2: `/tmp/task80_patha_once_init/patha_clean_r2_sniff60.pcapng`
+- Pcap R2 raw evidence: ambient BLE ADV-AA = 19519, target ADV_IND prefix = 0, target AdvA bytes = 0, `Simple` bytes = 0.
+
+Result: FAIL / MARGINAL LEAKAGE — Path A once-init produces at most two target ADV_IND frames in a 60s run and zero in the repeat run. This does not restore the historical stable `df26837` air rate.
+
+Interpretation:
+
+- Per-iteration PATHC W1C/IRQ setup is a real suppressor candidate, but moving it once-at-init is not sufficient to restore stable cold ADV in the current `7f04104`-derived code path.
+- The first pcap's two adjacent target frames show the RF path can still leak valid `ADV_IND` payloads; the repeat run confirms it is not a stable baseline.
+- The remaining suppressor likely sits in the post-init hot-loop delta versus df26837/EVT/libwchble: TX-completion / BB IRQ dependency, RF/LLE timer setup lifetime, or residual diagnostic code still changing timing/state before the GO strobe.
+
+Next candidates to prove:
+
+1. Compare `df26837` hot-loop register writes against this Path A build and isolate the exact additional per-slot writes still present.
+2. Confirm whether `ble_set_phy_tx_mode_1mbps` or surrounding per-slot PHY/LLE writes leave `BB+0x08 = 0x39002caa` stuck after GO in the Path A run.
+3. Use EVT Peripheral/Broadcaster linked disassembly as the next anchor before changing code again, per Andelf's "EVT + TI + libwchble baseline" directive.
+
+Preservation:
+
+- Commit/tag this state before the next patch:
+  - commit: `bad(ble): archive path a once init failure`
+  - tag: `bad/scan-rsp-step2-patha-once-init-no-air-20260514`
 
 ---
 

@@ -440,6 +440,7 @@ const Z37_SNAPSHOT: bool = false;
 const Z37_TARGET_BURST: u32 = 1; // zero-based: capture burst 2.
 const GBLELL_SNAPSHOT: bool = false;
 const PATHC_LIB_IRQ: bool = true;
+const PATHC_ONCE_AT_INIT: bool = true;
 const PATHC_ENABLE_LLE_IRQ: bool = false;
 const PATHC_MANUAL_L6: bool = false;
 // Task #22 V1.1 probe: true = Rust bb_irq_lib_handler (testing), false = FFI BB_IRQLibHandler (V_A3 reference).
@@ -460,7 +461,7 @@ static mut Z37_PRINTED: bool = false;
 static mut Z37_HIT: bool = false;
 static mut Z37_BB08: u32 = 0;
 static mut Z37_TIMEOUT_LEFT: u32 = 0;
-static mut BB08_TRACE_DONE: bool = false;
+static mut BB08_TRACE_DONE: bool = true;
 static mut BB08_TRACE_PRINTED: bool = false;
 static mut BB08_TRACE: [u32; 200] = [0; 200];
 static mut GBLELL_DUMPED: bool = false;
@@ -468,6 +469,7 @@ static mut GBLELL_PRINTED: bool = false;
 static mut GBLELL_SNAPSHOT_WORDS: [u32; 74] = [0; 74];
 static mut ADV_CTX_DUMPED: bool = false;
 static mut ADV_CTX_PRINTED: bool = false;
+static mut PATHC_ONCE_DONE: bool = false;
 static mut TX_PTR_SNAPSHOT: u32 = 0;
 static mut TX_PTR_DUMP: [u8; 64] = [0; 64];
 static mut ADV_CTX_DUMP: [u8; 192] = [0; 192];
@@ -552,7 +554,7 @@ static mut TRACE_ARMED: bool = false;
 
 /// Phase 2 entry probe: after ADV_IND TX completes, switch ch37 into RX and
 /// poll the advertising-channel DMA buffer for a central CONNECT_IND.
-const RX_TURNAROUND_PROBE: bool = true;
+const RX_TURNAROUND_PROBE: bool = false;
 const HARVEST_SINGLE_GO_DIAG: bool = false;
 const SCAN_RSP_REPLY: bool = true;
 const MINIMAL_SDI: bool = true;
@@ -583,7 +585,7 @@ static mut LLE_DMA_BUF_B: [u32; 256] = [0u32; 256];
 // Reads collected into locals first; printed after to avoid SDI perturbing timing.
 // Runs on first burst only (TRIGGER_POST_PRINTED gate).
 static mut TRIGGER_POST_PRINTED: bool = false;
-const X1_POLLED_W1C: bool = true;
+const X1_POLLED_W1C: bool = false;
 
 // ── TX buffer ─────────────────────────────────────────────────────────────────
 
@@ -966,6 +968,30 @@ unsafe fn trace_bb_read(off: usize) -> u32 {
     v
 }
 
+unsafe fn pathc_lib_irq_arm_once() {
+    if PATHC_ONCE_DONE {
+        return;
+    }
+    PATHC_ONCE_DONE = true;
+
+    let ip = core::ptr::addr_of_mut!(gBleIPPara) as *mut u8;
+    write_volatile(ip.add(4), 0x80);
+    write_volatile(ip.add(5), 0);
+    write_volatile(ip.add(16) as *mut u32, 776);
+
+    bb_write(0x08, 0x0000_FFFF);
+    bb_write(0x38, 0xFF);
+    lle_write(0x38, 0x0000_00F0);
+    bb_write(0x08, 0x8000);
+    qingke::pfic::unpend_interrupt(63);
+    qingke::pfic::unpend_interrupt(64);
+    qingke::pfic::enable_interrupt(63);
+    if PATHC_ENABLE_LLE_IRQ {
+        qingke::pfic::enable_interrupt(64);
+    }
+    qingke::riscv::asm::delay(72_000);
+}
+
 // ── ADV TX burst ──────────────────────────────────────────────────────────────
 
 /// Fire one ADV_NONCONN_IND burst on ch37 (2402 MHz).
@@ -1212,7 +1238,7 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
                 }
             }
 
-            if PATHC_LIB_IRQ {
+            if PATHC_LIB_IRQ && !PATHC_ONCE_AT_INIT {
                 // Keep interrupts disabled during SDI dumps. Enable immediately before GO
                 // so the lib handlers only see the TX-trigger IRQ sequence.
                 if !MINIMAL_SDI {
@@ -1270,7 +1296,7 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
                 hal::println!("# RXPROBE_ENTRY pre-go");
             }
             bb_write(0x00, 2); // T=0: GO strobe
-            if PATHC_LIB_IRQ {
+            if PATHC_LIB_IRQ && !PATHC_ONCE_AT_INIT {
                 qingke::pfic::enable_interrupt(63);
                 if !MINIMAL_SDI {
                     hal::println!("# PATHC_IRQ_MARK post-go-enable63");
@@ -1311,8 +1337,10 @@ unsafe fn adv_tx_burst_ch37(burst_idx: u32, adv_channel: u8) -> (u32, u32, u32) 
                 }
                 return (state_pre, bb_read(0x1C), source);
             }
-            hal::println!("# PATHC_IRQ_MARK post-go");
-            if !RX_TURNAROUND_PROBE {
+            if !MINIMAL_SDI {
+                hal::println!("# PATHC_IRQ_MARK post-go");
+            }
+            if !RX_TURNAROUND_PROBE && !MINIMAL_SDI {
                 for alive in 0..3 {
                     // v7-probe.3-fix2 (2026-05-05): 240→72_000 cycles.
                     // Without production markers (ok=1 etc.), the ISR had no time to settle
@@ -2055,6 +2083,11 @@ async fn phase1_adv_loop() -> ! {
     let mut ok_n: u32 = 0;
     let mut connect_n: u32 = 0;
     hal::println!("scheduler: interval=200ms advDelay=0..10ms");
+    unsafe {
+        if PATHC_LIB_IRQ && PATHC_ONCE_AT_INIT {
+            pathc_lib_irq_arm_once();
+        }
+    }
 
     loop {
         Timer::at(next_adv).await;
