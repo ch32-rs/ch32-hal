@@ -437,6 +437,18 @@ Interpretation:
 - The first pcap's two adjacent target frames show the RF path can still leak valid `ADV_IND` payloads; the repeat run confirms it is not a stable baseline.
 - The remaining suppressor likely sits in the post-init hot-loop delta versus df26837/EVT/libwchble: TX-completion / BB IRQ dependency, RF/LLE timer setup lifetime, or residual diagnostic code still changing timing/state before the GO strobe.
 
+Data-integrity check after Lucy `6968ac4b`:
+
+- R1 target frames have raw header bytes `40 16`: PDU type = `0b0000` (`ADV_IND`), TxAdd=1, len=22.
+- This is expected for the current `ble_peripheral_phase1_adv.rs` file: `build_adv_pdu()` now builds `ADV_IND` and the boot log prints `ADV_IND built`. The older "broadcaster-like ADV_NONCONN" wording is stale for this branch.
+- #81 still remains the formal minimal connectable-ADV task; this #80 result can be used only as cold-ADV leakage evidence, not as #81 completion.
+
+Cadence check after Vega `3a776c00`:
+
+- `df26837` and current Path A both use the Embassy scheduler loop with `ADV_INTERVAL = 200ms` and one immediate 37/38/39 channel sweep per scheduled event.
+- The linked EVT reference enters ADV through TMOS timers: `llAdvertiseStart` arms the timer, and later `LL_ProcessEvent mask 0x0002 / bit 1 -> llAdvTraverseallChannel -> ll_advertise_tx`.
+- EVT's hot TX path performs the repeated full per-channel TX register sequence, while event-level cadence is timer-driven. Current Rust already has an event-level `Timer::at(next_adv)` around the channel sweep, so the next delta target should be the per-channel TX register/ISR state, not a generic free-running-loop assumption.
+
 Next candidates to prove:
 
 1. Compare `df26837` hot-loop register writes against this Path A build and isolate the exact additional per-slot writes still present.
