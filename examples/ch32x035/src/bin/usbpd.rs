@@ -91,13 +91,17 @@ impl SinkDriver for UsbpdSinkDriver<'_> {
     }
 
     async fn transmit(&mut self, data: &[u8]) -> Result<(), usbpd_traits::DriverTxError> {
-        self.usbpd.transmit(data).await;
-        Ok(())
+        self.usbpd.transmit(data).await.map_err(|e| match e {
+            UsbpdError::HardReset => usbpd_traits::DriverTxError::HardReset,
+            _ => usbpd_traits::DriverTxError::Discarded,
+        })
     }
 
     async fn transmit_hard_reset(&mut self) -> Result<(), usbpd_traits::DriverTxError> {
-        self.usbpd.transmit_hardreset().await;
-        Ok(())
+        self.usbpd.transmit_hardreset().await.map_err(|e| match e {
+            UsbpdError::HardReset => usbpd_traits::DriverTxError::HardReset,
+            _ => usbpd_traits::DriverTxError::Discarded,
+        })
     }
 }
 

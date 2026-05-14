@@ -10,7 +10,7 @@
 
 use core::future::poll_fn;
 use core::marker::PhantomData;
-use core::sync::atomic::AtomicBool;
+use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::Poll;
 
 use embassy_sync::waitqueue::AtomicWaker;
@@ -28,6 +28,8 @@ pub enum Error {
     CCNotConnected,
     NotSupported,
     HardReset,
+    /// PHY reported a buffer/DMA error; the current transfer must be considered failed.
+    BufferError,
     /// Unexpected message type
     Protocol(u8),
     MaxRetry,
@@ -66,7 +68,14 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
         }
 
         if status.buf_err() {
-            // TODO: surface buf_err to the caller
+            // No dedicated IE bit; gated by PD_DMA_EN. Latch and drop IEs
+            // so the poller observes the error and returns.
+            T::state().buf_err.store(true, Ordering::Release);
+            T::REGS.config().modify(|w| {
+                w.set_ie_rx_act(false);
+                w.set_ie_rx_reset(false);
+                w.set_ie_tx_end(false);
+            });
         }
 
         T::REGS.status().write_value(status);
@@ -121,6 +130,9 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
     }
 
     fn enable_rx_interrupt(&mut self) {
+        // Clear stale BUF_ERR (HW W1C, then latch) before re-arming IEs.
+        T::REGS.status().write(|w| w.set_buf_err(true));
+        T::state().buf_err.store(false, Ordering::Release);
         T::REGS.config().modify(|w| {
             w.set_ie_rx_act(true); // Receive completion interrupt enable
             w.set_ie_rx_reset(true); // Receive reset interrupt enable
@@ -129,6 +141,9 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
     }
 
     fn enable_tx_interrupt(&mut self) {
+        // Clear stale BUF_ERR (HW W1C, then latch) before re-arming IEs.
+        T::REGS.status().write(|w| w.set_buf_err(true));
+        T::state().buf_err.store(false, Ordering::Release);
         T::REGS.config().modify(|w| {
             w.set_ie_rx_act(false); // Receive completion interrupt disable
             w.set_ie_rx_reset(false); // Receive reset interrupt disable
@@ -138,13 +153,17 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
 
     /// Receives a PD message into the provided buffer.
     ///
-    /// Returns the number of received bytes or an error.
+    /// Returns the SOP and number of received bytes, or an error.
     pub async fn receive(&mut self, buf: &mut [u8]) -> Result<(Sop, usize), Error> {
         self.enable_rx_interrupt();
         self.prepare_receive();
 
         poll_fn(|cx| {
             T::state().waker.register(cx.waker());
+
+            if T::state().buf_err.load(Ordering::Acquire) {
+                return Poll::Ready(Err(Error::BufferError));
+            }
 
             if !T::REGS.config().read().ie_rx_reset() {
                 return Poll::Ready(Err(Error::HardReset));
@@ -160,35 +179,43 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Async> {
         self.post_receive(buf)
     }
 
-    pub async fn transmit(&mut self, buf: &[u8]) {
+    pub async fn transmit(&mut self, buf: &[u8]) -> Result<(), Error> {
         self.enable_tx_interrupt();
         self.transmit_inner(Sop::Sop, buf);
-        self.wait_for_tx_complete().await;
+        let result = self.wait_for_tx_complete().await;
 
         T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
         T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
+
+        result
     }
 
     /// Transmit a hard reset.
-    pub async fn transmit_hardreset(&mut self) {
+    pub async fn transmit_hardreset(&mut self) -> Result<(), Error> {
         self.enable_tx_interrupt();
         self.transmit_inner(Sop::HardReset, &[]);
-        self.wait_for_tx_complete().await;
+        let result = self.wait_for_tx_complete().await;
 
         T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
         T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
+
+        result
     }
 
-    async fn wait_for_tx_complete(&mut self) {
+    async fn wait_for_tx_complete(&mut self) -> Result<(), Error> {
         poll_fn(|cx| {
             T::state().waker.register(cx.waker());
-            let config = T::REGS.config().read();
-            if !config.ie_tx_end() {
-                return Poll::Ready(());
+
+            if T::state().buf_err.load(Ordering::Acquire) {
+                return Poll::Ready(Err(Error::BufferError));
+            }
+
+            if !T::REGS.config().read().ie_tx_end() {
+                return Poll::Ready(Ok(()));
             }
             Poll::Pending
         })
-        .await;
+        .await
     }
 }
 
@@ -207,37 +234,45 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
         }
         self.prepare_receive();
 
-        loop {
+        let outcome = loop {
             let status = T::REGS.status().read();
+            if status.buf_err() {
+                break Err(Error::BufferError);
+            }
             if status.if_rx_act() {
-                break;
+                break Ok(());
             }
             if status.if_rx_reset() {
-                unsafe {
-                    qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
-                }
-                return Err(Error::HardReset);
+                break Err(Error::HardReset);
             }
             #[cfg(feature = "embassy")]
             embassy_futures::yield_now();
-        }
+        };
 
         unsafe {
             qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
         }
+        outcome?;
         self.post_receive(buf)
     }
 
-    pub fn transmit(&mut self, buf: &[u8]) {
+    pub fn transmit(&mut self, buf: &[u8]) -> Result<(), Error> {
         unsafe {
             qingke::pfic::disable_interrupt(interrupt::USBPD.number() as _);
         }
         self.transmit_inner(Sop::Sop, buf);
 
-        while !T::REGS.status().read().if_tx_end() {
+        let result = loop {
+            let status = T::REGS.status().read();
+            if status.buf_err() {
+                break Err(Error::BufferError);
+            }
+            if status.if_tx_end() {
+                break Ok(());
+            }
             #[cfg(feature = "embassy")]
             embassy_futures::yield_now();
-        }
+        };
 
         T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
         T::port_cc_reg(vals::CcSel::CC2).modify(|w| w.set_cc_lve(false));
@@ -245,6 +280,8 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
         unsafe {
             qingke::pfic::enable_interrupt(interrupt::USBPD.number() as _);
         }
+
+        result
     }
 }
 
@@ -427,6 +464,8 @@ struct State {
     waker: AtomicWaker,
     // Inverted logic for a default state of 0 so that the data goes into the .bss section.
     drop_not_ready: AtomicBool,
+    // Set by the ISR on BUF_ERR; cleared at the start of each transfer.
+    buf_err: AtomicBool,
 }
 
 impl State {
@@ -434,6 +473,7 @@ impl State {
         Self {
             waker: AtomicWaker::new(),
             drop_not_ready: AtomicBool::new(false),
+            buf_err: AtomicBool::new(false),
         }
     }
 }
