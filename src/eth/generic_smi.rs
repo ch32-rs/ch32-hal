@@ -62,12 +62,6 @@ unsafe impl PHY for GenericSMI {
 
 /// Public functions for the PHY
 impl GenericSMI {
-    /// Set the SMI polling interval.
-    #[cfg(feature = "time")]
-    pub fn set_poll_interval(&mut self, poll_interval: Duration) {
-        self.poll_interval = poll_interval
-    }
-
     // Writes a value to an extended PHY register in MMD address space
     pub fn smi_write_ext<S: StationManagement>(&mut self, sm: &mut S, reg_addr: u16, reg_data: u16) {
         sm.smi_write(self.phy_addr, PHY_REG_CTL, 0x0003); // set address
