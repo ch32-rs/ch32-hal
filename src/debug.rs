@@ -44,7 +44,14 @@ impl core::fmt::Write for SDIPrint {
             let data1 = u32::from_le_bytes(data[4..].try_into().unwrap());
             let data0 = u32::from_le_bytes(data[..4].try_into().unwrap());
 
-            while SDIPrint::is_busy() {}
+            // Bounded SDI host-drain wait: prevents permanent spin when no host SDI
+            // consumer is attached (e.g. baseline probe binaries run standalone on air).
+            // Task #84 v3 (2)+C gate; see notes/ch32-rs/baseline/README.md L7 rule.
+            for _ in 0..1000 {
+                if !SDIPrint::is_busy() {
+                    break;
+                }
+            }
 
             unsafe {
                 core::ptr::write_volatile(regs::DEBUG_DATA1_ADDRESS, data1);
