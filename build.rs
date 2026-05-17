@@ -81,6 +81,17 @@ fn main() {
         }
     }
 
+    // `afio` cfg fires for chips whose peripheral metadata declares a PCFR-style
+    // central remap register (V1/V2/V3/X0/L1 families). H4 has no peripheral.remap
+    // entries — pin AF is per-pin via GPIOx.AFLR/AFHR, so cfg(afio) is disabled
+    // and the HAL dispatches to the per-pin code path. Mirrors embassy-stm32's
+    // F1 vs F4+ split.
+    let has_afio_remap = METADATA.peripherals.iter().any(|p| p.remap.is_some());
+    if has_afio_remap {
+        println!("cargo:rustc-cfg=afio");
+    }
+    println!("cargo:rustc-check-cfg=cfg(afio)");
+
     let mut gpio_lines = 16;
     match &*chip_family {
         "ch32v0" | "ch32m0" => {
