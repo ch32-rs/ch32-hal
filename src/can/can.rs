@@ -11,6 +11,7 @@ use crate::can::registers::Registers;
 use crate::can::util;
 use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode, NonBlocking};
+use crate::gpio::{AfType, OutputType, Pull, Speed};
 use crate::{interrupt, pac, peripherals, Peri, RccPeripheral, Timeout};
 
 /// Receive interrupt handler.
@@ -263,18 +264,11 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
         };
         T::enable_and_reset(); // Enable CAN peripheral
 
-        rx.set_mode_cnf(
-            pac::gpio::vals::Mode::INPUT,
-            pac::gpio::vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
-        );
-
-        tx.set_mode_cnf(
-            pac::gpio::vals::Mode::OUTPUT_50MHZ,
-            pac::gpio::vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
-        );
-
-        // //here should remap functionality be added
-        // T::remap(0b10);
+        // RX is input-with-pull-up; TX is AF push-pull at 50MHz.
+        // `set_as_af!` writes mode/cnf and (under cfg(afio)) the PCFR remap
+        // bit, picking up the group encoded in the pin's marker type.
+        set_as_af!(rx, AfType::input(Pull::Up));
+        set_as_af!(tx, AfType::output(OutputType::PushPull, Speed::High));
 
         unsafe {
             use crate::interrupt::typelevel::Interrupt;

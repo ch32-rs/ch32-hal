@@ -20,7 +20,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use futures::future::{select, Either};
 
 use crate::dma::ChannelAndRequest;
-use crate::gpio::{AFType, AnyPin, Pull, SealedPin, Speed};
+use crate::gpio::{AfType, AnyPin, OutputType, Pull, SealedPin, Speed};
 use crate::internal::drop::OnDrop;
 use crate::interrupt::typelevel::Interrupt;
 use crate::mode::{Async, Blocking, Mode};
@@ -245,11 +245,7 @@ impl<'d, T: Instance> UartTx<'d, T, Async> {
         tx_dma: Peri<'d, impl TxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
-
-        Self::new_inner(peri, Some(tx.into()), None, new_dma!(tx_dma), config)
+        Self::new_inner(peri, new_pin!(tx, AfType::output(OutputType::PushPull, Speed::High)), None, new_dma!(tx_dma), config)
     }
 
     /// Create a new tx-only UART with a clear-to-send pin
@@ -260,17 +256,10 @@ impl<'d, T: Instance> UartTx<'d, T, Async> {
         tx_dma: Peri<'d, impl TxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
-        cts.set_as_input(Pull::None);
-        #[cfg(afio)]
-        cts.afio_remap();
-
         Self::new_inner(
             peri,
-            Some(tx.into()),
-            Some(cts.into()),
+            new_pin!(tx, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(cts, AfType::input(Pull::None)),
             new_dma!(tx_dma),
             config,
         )
@@ -330,11 +319,7 @@ impl<'d, T: Instance> UartTx<'d, T, Blocking> {
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
-
-        Self::new_inner(peri, Some(tx.into()), None, None, config)
+        Self::new_inner(peri, new_pin!(tx, AfType::output(OutputType::PushPull, Speed::High)), None, None, config)
     }
 
     /// Create a new blocking tx-only UART with a clear-to-send pin
@@ -344,14 +329,7 @@ impl<'d, T: Instance> UartTx<'d, T, Blocking> {
         cts: Peri<'d, if_afio!(impl CtsPin<T, A>)>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
-        cts.set_as_input(Pull::None);
-        #[cfg(afio)]
-        cts.afio_remap();
-
-        Self::new_inner(peri, Some(tx.into()), Some(cts.into()), None, config)
+        Self::new_inner(peri, new_pin!(tx, AfType::output(OutputType::PushPull, Speed::High)), new_pin!(cts, AfType::input(Pull::None)), None, config)
     }
 }
 
@@ -472,11 +450,7 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
         rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        rx.set_as_input(Pull::None);
-        #[cfg(afio)]
-        rx.afio_remap();
-
-        Self::new_inner(peri, Some(rx.into()), None, new_dma!(rx_dma), config)
+        Self::new_inner(peri, new_pin!(rx, AfType::input(Pull::None)), None, new_dma!(rx_dma), config)
     }
 
     /// Create a new rx-only UART with a request-to-send pin
@@ -488,17 +462,10 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
         rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        rx.set_as_input(Pull::None);
-        #[cfg(afio)]
-        rx.afio_remap();
-        rts.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        rts.afio_remap();
-
         Self::new_inner(
             peri,
-            Some(rx.into()),
-            Some(rts.into()),
+            new_pin!(rx, AfType::input(Pull::None)),
+            new_pin!(rts, AfType::output(OutputType::PushPull, Speed::High)),
             new_dma!(rx_dma),
             config,
         )
@@ -722,11 +689,7 @@ impl<'d, T: Instance> UartRx<'d, T, Blocking> {
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        rx.set_as_input(Pull::None);
-        #[cfg(afio)]
-        rx.afio_remap();
-
-        Self::new_inner(peri, Some(rx.into()), None, None, config)
+        Self::new_inner(peri, new_pin!(rx, AfType::input(Pull::None)), None, None, config)
     }
 
     /// Create a new rx-only UART with a request-to-send pin
@@ -736,14 +699,7 @@ impl<'d, T: Instance> UartRx<'d, T, Blocking> {
         rts: Peri<'d, if_afio!(impl RtsPin<T, A>)>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        rx.set_as_input(Pull::None);
-        #[cfg(afio)]
-        rx.afio_remap();
-        rts.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        rts.afio_remap();
-
-        Self::new_inner(peri, Some(rx.into()), Some(rts.into()), None, config)
+        Self::new_inner(peri, new_pin!(rx, AfType::input(Pull::None)), new_pin!(rts, AfType::output(OutputType::PushPull, Speed::High)), None, config)
     }
 }
 
@@ -873,17 +829,10 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
         rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        rx.set_as_input(Pull::None);
-        #[cfg(afio)]
-        rx.afio_remap();
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
-
         Self::new_inner(
             peri,
-            Some(rx.into()),
-            Some(tx.into()),
+            new_pin!(rx, AfType::input(Pull::None)),
+            new_pin!(tx, AfType::output(OutputType::PushPull, Speed::High)),
             None,
             None,
             new_dma!(tx_dma),
@@ -904,25 +853,12 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
         rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        rx.set_as_input(Pull::None);
-        #[cfg(afio)]
-        rx.afio_remap();
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
-        rts.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        rts.afio_remap();
-        cts.set_as_input(Pull::None);
-        #[cfg(afio)]
-        cts.afio_remap();
-
         Self::new_inner(
             peri,
-            Some(rx.into()),
-            Some(tx.into()),
-            Some(rts.into()),
-            Some(cts.into()),
+            new_pin!(rx, AfType::input(Pull::None)),
+            new_pin!(tx, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(rts, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(cts, AfType::input(Pull::None)),
             new_dma!(tx_dma),
             new_dma!(rx_dma),
             config,
@@ -939,21 +875,18 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
         rx_dma: Peri<'d, impl RxDma<T>>,
         mut config: Config,
     ) -> Result<Self, ConfigError> {
+        // gpio_x0 doesn't expose an open-drain AF variant; fall back to push-pull
+        // and rely on the user to provide an external pull-up.
         #[cfg(not(gpio_x0))]
-        tx.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
+        let tx_af = AfType::output(OutputType::OpenDrain, Speed::High);
         #[cfg(gpio_x0)]
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
-
+        let tx_af = AfType::output(OutputType::PushPull, Speed::High);
         config.half_duplex = true;
 
         Self::new_inner(
             _peri,
             None,
-            Some(tx.into()),
+            new_pin!(tx, tx_af),
             None,
             None,
             new_dma!(tx_dma),
@@ -971,17 +904,10 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        rx.set_as_input(Pull::None);
-        #[cfg(afio)]
-        rx.afio_remap();
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
-
         Self::new_inner(
             peri,
-            Some(rx.into()),
-            Some(tx.into()),
+            new_pin!(rx, AfType::input(Pull::None)),
+            new_pin!(tx, AfType::output(OutputType::PushPull, Speed::High)),
             None,
             None,
             None,
@@ -999,25 +925,12 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
         cts: Peri<'d, if_afio!(impl CtsPin<T, A>)>,
         config: Config,
     ) -> Result<Self, ConfigError> {
-        rx.set_as_input(Pull::None);
-        #[cfg(afio)]
-        rx.afio_remap();
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
-        rts.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        rts.afio_remap();
-        cts.set_as_input(Pull::None);
-        #[cfg(afio)]
-        cts.afio_remap();
-
         Self::new_inner(
             peri,
-            Some(rx.into()),
-            Some(tx.into()),
-            Some(rts.into()),
-            Some(cts.into()),
+            new_pin!(rx, AfType::input(Pull::None)),
+            new_pin!(tx, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(rts, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(cts, AfType::input(Pull::None)),
             None,
             None,
             config,
@@ -1030,17 +943,12 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
         mut config: Config,
     ) -> Result<Self, ConfigError> {
         #[cfg(not(gpio_x0))]
-        tx.set_as_af_output(AFType::OutputOpenDrain, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
+        let tx_af = AfType::output(OutputType::OpenDrain, Speed::High);
         #[cfg(gpio_x0)]
-        tx.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        tx.afio_remap();
-
+        let tx_af = AfType::output(OutputType::PushPull, Speed::High);
         config.half_duplex = true;
 
-        Self::new_inner(peri, None, Some(tx.into()), None, None, None, None, config)
+        Self::new_inner(peri, None, new_pin!(tx, tx_af), None, None, None, None, config)
     }
 }
 
