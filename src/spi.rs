@@ -22,7 +22,7 @@ use pac::spi::vals::BaudRate;
 use pac::spi::Spi as Regs;
 
 use crate::dma::{slice_ptr_parts, word, ChannelAndRequest};
-use crate::gpio::{AFType, AnyPin, Pull, Speed};
+use crate::gpio::{AfType, AnyPin, OutputType, Pull, SealedPin, Speed};
 use crate::mode::{Async, Blocking, Mode as PeriMode};
 use crate::time::Hertz;
 use crate::{pac, peripherals, Peri};
@@ -303,21 +303,11 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         config: Config,
     ) -> Self {
 
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        sck.afio_remap();
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        mosi.afio_remap();
-        miso.set_as_input(Pull::None);
-        #[cfg(afio)]
-        miso.afio_remap();
-
         Self::new_inner(
             peri,
-            Some(sck.into()),
-            Some(mosi.into()),
-            Some(miso.into()),
+            new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(miso, AfType::input(Pull::None)),
             None,
             None,
             config,
@@ -332,14 +322,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         config: Config,
     ) -> Self {
 
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        sck.afio_remap();
-        miso.set_as_input(Pull::None);
-        #[cfg(afio)]
-        miso.afio_remap();
-
-        Self::new_inner(peri, Some(sck.into()), None, Some(miso.into()), None, None, config)
+        Self::new_inner(peri, new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)), None, new_pin!(miso, AfType::input(Pull::None)), None, None, config)
     }
 
     /// Create a new SPI driver, in TX-only mode (only MOSI pin, no MISO).
@@ -350,14 +333,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         config: Config,
     ) -> Self {
 
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        sck.afio_remap();
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        mosi.afio_remap();
-
-        Self::new_inner(peri, Some(sck.into()), Some(mosi.into()), None, None, None, config)
+        Self::new_inner(peri, new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)), new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)), None, None, None, config)
     }
 
     /// Create a new SPI driver, in TX-only mode, without SCK pin.
@@ -369,11 +345,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         config: Config,
     ) -> Self {
 
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        mosi.afio_remap();
-
-        Self::new_inner(peri, None, Some(mosi.into()), None, None, None, config)
+        Self::new_inner(peri, None, new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)), None, None, None, config)
     }
 }
 
@@ -389,21 +361,11 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         config: Config,
     ) -> Self {
 
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        sck.afio_remap();
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        mosi.afio_remap();
-        miso.set_as_input(Pull::None);
-        #[cfg(afio)]
-        miso.afio_remap();
-
         Self::new_inner(
             peri,
-            Some(sck.into()),
-            Some(mosi.into()),
-            Some(miso.into()),
+            new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(miso, AfType::input(Pull::None)),
             new_dma!(tx_dma),
             new_dma!(rx_dma),
             config,
@@ -419,18 +381,11 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         config: Config,
     ) -> Self {
 
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        sck.afio_remap();
-        miso.set_as_input(Pull::None);
-        #[cfg(afio)]
-        miso.afio_remap();
-
         Self::new_inner(
             peri,
-            Some(sck.into()),
+            new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)),
             None,
-            Some(miso.into()),
+            new_pin!(miso, AfType::input(Pull::None)),
             None,
             new_dma!(rx_dma),
             config,
@@ -446,17 +401,10 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         config: Config,
     ) -> Self {
 
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        sck.afio_remap();
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        mosi.afio_remap();
-
         Self::new_inner(
             peri,
-            Some(sck.into()),
-            Some(mosi.into()),
+            new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)),
             None,
             new_dma!(tx_dma),
             None,
@@ -474,11 +422,7 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         config: Config,
     ) -> Self {
 
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        #[cfg(afio)]
-        mosi.afio_remap();
-
-        Self::new_inner(peri, None, Some(mosi.into()), None, new_dma!(tx_dma), None, config)
+        Self::new_inner(peri, None, new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)), None, new_dma!(tx_dma), None, config)
     }
 
     /// SPI write, using DMA.

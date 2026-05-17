@@ -9,7 +9,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::i2c::Operation;
 
 use crate::dma::ChannelAndRequest;
-use crate::gpio::{AFType, Speed};
+use crate::gpio::{AfType, OutputType, Speed};
 use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode};
 // use crate::interrupt::Interrupt;
@@ -154,17 +154,15 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         T::enable_and_reset();
 
 
+        // gpio_x0 doesn't expose an open-drain AF variant; SCL/SDA fall back
+        // to push-pull and rely on external pull-ups (already required for I2C).
         #[cfg(not(gpio_x0))]
-        let af_type = AFType::OutputOpenDrain;
+        let af = AfType::output(OutputType::OpenDrain, Speed::High);
         #[cfg(gpio_x0)]
-        let af_type = AFType::OutputPushPull;
+        let af = AfType::output(OutputType::PushPull, Speed::High);
 
-        scl.set_as_af_output(af_type, Speed::High);
-        #[cfg(afio)]
-        scl.afio_remap();
-        sda.set_as_af_output(af_type, Speed::High);
-        #[cfg(afio)]
-        sda.afio_remap();
+        set_as_af!(scl, af);
+        set_as_af!(sda, af);
 
         unsafe { T::EventInterrupt::enable() };
         unsafe { T::ErrorInterrupt::enable() };
