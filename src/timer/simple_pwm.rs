@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 
 use super::low_level::{CountingMode, OutputCompareMode, OutputPolarity, Timer};
 use super::{Channel, Channel1Pin, Channel2Pin, Channel3Pin, Channel4Pin, GeneralInstance16bit};
-use crate::gpio::{AFType, AnyPin};
+use crate::gpio::{AfType, AnyPin, OutputType, Speed};
 use crate::time::Hertz;
 use crate::Peri;
 
@@ -33,9 +33,7 @@ macro_rules! channel_impl {
                 pin: Peri<'d, if_afio!(impl $pin_trait<T, A>)>,
             ) -> Self {
                 critical_section::with(|_| {
-                    pin.set_as_af_output(AFType::OutputPushPull, Default::default());
-                    #[cfg(afio)]
-                    pin.afio_remap();
+                    set_as_af!(pin, AfType::output(OutputType::PushPull, Speed::High));
                 });
                 PwmPin {
                     _pin: pin.into(),

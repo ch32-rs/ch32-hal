@@ -106,6 +106,44 @@ macro_rules! if_afio {
     };
 }
 
+/// Configure a pin for AF use and consume it into the `Option<Peri<'d, AnyPin>>`
+/// shape drivers store internally. Hides the cfg(afio)/cfg(not(afio)) split:
+/// - cfg(afio): writes AFIO PCFR via `pin.afio_remap()` then mode/cnf via `set_as_af`
+/// - cfg(not(afio)) (future H4): reads `pin.af_num()` and writes the AF mux registers
+///
+/// Mirrors embassy-stm32's `new_pin!` (returns `Some(...)` so the driver can
+/// drop it into an `Option<Peri<'d, AnyPin>>` field directly).
+macro_rules! new_pin {
+    ($name:ident, $af_type:expr) => {{
+        use crate::gpio::SealedPin as _;
+        let pin = $name;
+        #[cfg(afio)]
+        pin.afio_remap();
+        pin.set_as_af(
+            #[cfg(not(afio))]
+            pin.af_num(),
+            $af_type,
+        );
+        Some(pin.into())
+    }};
+}
+
+/// Like `new_pin!` but doesn't consume the pin — for the rare driver site
+/// that needs to keep its own typed `Peri<'d, PinX>` handle (e.g. for
+/// later reconfiguration). Mirrors embassy-stm32's `set_as_af!`.
+macro_rules! set_as_af {
+    ($pin:expr, $af_type:expr) => {{
+        use crate::gpio::SealedPin as _;
+        #[cfg(afio)]
+        $pin.afio_remap();
+        $pin.set_as_af(
+            #[cfg(not(afio))]
+            $pin.af_num(),
+            $af_type,
+        );
+    }};
+}
+
 #[allow(unused)]
 macro_rules! dma_trait_impl {
     // DMA/GPDMA, without DMAMUX
