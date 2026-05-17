@@ -109,10 +109,10 @@ pub struct I2c<'d, T: Instance, M: Mode> {
 
 impl<'d, T: Instance> I2c<'d, T, Async> {
     /// Create a new I2C driver.
-    pub fn new<const REMAP: u8>(
+    pub fn new<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        scl: Peri<'d, impl SclPin<T, REMAP>>,
-        sda: Peri<'d, impl SdaPin<T, REMAP>>,
+        scl: Peri<'d, if_afio!(impl SclPin<T, A>)>,
+        sda: Peri<'d, if_afio!(impl SdaPin<T, A>)>,
         _irq: impl interrupt::typelevel::Binding<T::EventInterrupt, EventInterruptHandler<T>>
             + interrupt::typelevel::Binding<T::ErrorInterrupt, ErrorInterruptHandler<T>>
             + 'd,
@@ -127,10 +127,10 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
 
 impl<'d, T: Instance> I2c<'d, T, Blocking> {
     /// Create a new blocking I2C driver.
-    pub fn new_blocking<const REMAP: u8>(
+    pub fn new_blocking<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        scl: Peri<'d, impl SclPin<T, REMAP>>,
-        sda: Peri<'d, impl SdaPin<T, REMAP>>,
+        scl: Peri<'d, if_afio!(impl SclPin<T, A>)>,
+        sda: Peri<'d, if_afio!(impl SdaPin<T, A>)>,
         freq: Hertz,
         config: Config,
     ) -> Self {
@@ -140,10 +140,10 @@ impl<'d, T: Instance> I2c<'d, T, Blocking> {
 
 impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     /// Create a new I2C driver.
-    fn new_inner<const REMAP: u8>(
+    fn new_inner<#[cfg(afio)] A>(
         _peri: Peri<'d, T>,
-        scl: Peri<'d, impl SclPin<T, REMAP>>,
-        sda: Peri<'d, impl SdaPin<T, REMAP>>,
+        scl: Peri<'d, if_afio!(impl SclPin<T, A>)>,
+        sda: Peri<'d, if_afio!(impl SdaPin<T, A>)>,
         tx_dma: Option<ChannelAndRequest<'d>>,
         rx_dma: Option<ChannelAndRequest<'d>>,
         freq: Hertz,
@@ -153,7 +153,6 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
         T::enable_and_reset();
 
-        T::set_remap(REMAP);
 
         #[cfg(not(gpio_x0))]
         let af_type = AFType::OutputOpenDrain;
@@ -161,7 +160,11 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         let af_type = AFType::OutputPushPull;
 
         scl.set_as_af_output(af_type, Speed::High);
+        #[cfg(afio)]
+        scl.afio_remap();
         sda.set_as_af_output(af_type, Speed::High);
+        #[cfg(afio)]
+        sda.afio_remap();
 
         unsafe { T::EventInterrupt::enable() };
         unsafe { T::ErrorInterrupt::enable() };
@@ -856,7 +859,7 @@ impl State {
     }
 }
 
-trait SealedInstance: crate::peripheral::RccPeripheral + crate::peripheral::RemapPeripheral {
+trait SealedInstance: crate::peripheral::RccPeripheral {
     fn regs() -> crate::pac::i2c::I2c;
     fn state() -> &'static State;
 }
@@ -890,9 +893,9 @@ foreach_peripheral!(
     };
 );
 
-pin_trait!(SclPin, Instance);
-pin_trait!(SdaPin, Instance);
-// pin_trait!(SmbaPin, Instance);
+pin_trait!(SclPin, Instance, @A);
+pin_trait!(SdaPin, Instance, @A);
+// pin_trait!(SmbaPin, Instance, @A);
 dma_trait!(RxDma, Instance);
 dma_trait!(TxDma, Instance);
 

@@ -85,7 +85,7 @@ pub mod debug;
 pub mod prelude;
 
 mod peripheral;
-pub use peripheral::{RccPeripheral, RemapPeripheral};
+pub use peripheral::RccPeripheral;
 
 // #[cfg(not(ch32v0))]
 mod interrupt_ext;
@@ -151,7 +151,6 @@ pub(crate) mod _generated {
     include!(concat!(env!("OUT_DIR"), "/_generated.rs"));
 }
 
-mod patches;
 pub use crate::_generated::interrupt;
 
 pub struct Config {

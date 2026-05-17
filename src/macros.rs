@@ -13,14 +13,96 @@ macro_rules! dma_trait {
     };
 }
 
+// pin_trait!/pin_trait_impl!/pin_trait_afio_impl!/if_afio!
+//
+// Mirrors embassy-stm32's macros.rs. Two pin-trait shapes coexist:
+//
+// - cfg(afio): the trait carries a third generic `A` whose only inhabitants
+//   are `gpio::Remap<V>` / `gpio::RemapBool<V>` / `gpio::RemapNotApplicable`
+//   marker structs. Drivers call `pin.afio_remap()` to write AFIO PCFR for
+//   the chosen group; the marker's nominal identity forces every pin of a
+//   single peripheral instance to agree on the same group at compile time.
+//
+// - cfg(not(afio)): the trait has no extra generic and pins expose
+//   `pin.af_num()`. Drivers call it together with `set_as_af`.
+//
+// `if_afio!(...)` lets driver `fn new(...)` signatures keep the `, A>`
+// suffix unconditionally — it's stripped out by the macro when
+// not(afio).
 macro_rules! pin_trait {
-    ($signal:ident, $instance:path) => {
-        pub trait $signal<T: $instance, const REMAP: u8 = 0>: crate::gpio::Pin {}
+    ($signal:ident, $instance:path $(, $mode:path)? $(, @$afio:ident)?) => {
+        #[doc = concat!(stringify!($signal), " pin trait")]
+        pub trait $signal<T: $instance $(, M: $mode)? $(, #[cfg(afio)] $afio)?>: crate::gpio::Pin {
+            #[cfg(not(afio))]
+            #[doc = concat!("Get the AF number needed to use this pin as `", stringify!($signal),"`.")]
+            fn af_num(&self) -> u8;
+
+            #[cfg(afio)]
+            #[doc = concat!("Configure the AFIO PCFR register to route `", stringify!($signal),"` to this pin.")]
+            fn afio_remap(&self);
+        }
     };
 }
+
 macro_rules! pin_trait_impl {
-    (crate::$mod:ident::$trait:ident, $instance:ident, $pin:ident, $remap:expr) => {
-        impl crate::$mod::$trait<crate::peripherals::$instance, $remap> for crate::peripherals::$pin {}
+    (crate::$mod:ident::$trait:ident$(<$mode:ident>)?, $instance:ident, $pin:ident, $af:expr $(, $afio:path)?) => {
+        #[cfg(afio)]
+        impl crate::$mod::$trait<crate::peripherals::$instance $(, crate::$mod::$mode)? $(, $afio)?> for crate::peripherals::$pin {
+            fn afio_remap(&self) {
+                // this pin is fixed-function on this AFIO chip — nothing to write
+            }
+        }
+
+        #[cfg(not(afio))]
+        impl crate::$mod::$trait<crate::peripherals::$instance $(, crate::$mod::$mode)?> for crate::peripherals::$pin {
+            fn af_num(&self) -> u8 {
+                $af
+            }
+        }
+    };
+}
+
+#[cfg(afio)]
+macro_rules! pin_trait_afio_impl {
+    (@set $reg:ident, $setter:ident, $val:expr) => {
+        crate::pac::AFIO.$reg().modify(|w| {
+            w.$setter($val);
+        });
+    };
+    (crate::$mod:ident::$trait:ident<$mode:ident>, $instance:ident, $pin:ident, {$reg:ident, $setter:ident, $type:ident, [$($val:expr),+]}) => {
+        $(
+            impl crate::$mod::$trait<crate::peripherals::$instance, crate::$mod::$mode, crate::gpio::$type<$val>> for crate::peripherals::$pin {
+                fn afio_remap(&self) {
+                    pin_trait_afio_impl!(@set $reg, $setter, $val);
+                }
+            }
+        )+
+    };
+    (crate::$mod:ident::$trait:ident, $instance:ident, $pin:ident, {$reg:ident, $setter:ident, $type:ident, [$($val:expr),+]}) => {
+        $(
+            impl crate::$mod::$trait<crate::peripherals::$instance, crate::gpio::$type<$val>> for crate::peripherals::$pin {
+                fn afio_remap(&self) {
+                    pin_trait_afio_impl!(@set $reg, $setter, $val);
+                }
+            }
+        )+
+    };
+}
+
+#[cfg(afio)]
+macro_rules! if_afio {
+    ($($t:tt)*) => {
+        $($t)*
+    };
+}
+
+#[cfg(not(afio))]
+macro_rules! if_afio {
+    (impl $trait:ident<$a:ty, A>) => {
+        impl $trait<$a>
+    };
+    (impl $trait:ident<$a:ty, $b:ty, A>) => {
+        impl $trait<$a, $b>
     };
 }
 

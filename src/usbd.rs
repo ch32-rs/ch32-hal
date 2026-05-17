@@ -221,8 +221,8 @@ impl<'d, T: Instance> Driver<'d, T> {
     pub fn new(
         _usb: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        dp: Peri<'d, impl DpPin<T, 0>>,
-        dm: Peri<'d, impl DmPin<T, 0>>,
+        dp: Peri<'d, impl DpPin<T>>,
+        dm: Peri<'d, impl DmPin<T>>,
     ) -> Self {
         {
             //dp.set_as_af_output(crate::gpio::AFType::OutputPushPull, Speed::High);

@@ -11,7 +11,7 @@ use crate::can::registers::Registers;
 use crate::can::util;
 use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode, NonBlocking};
-use crate::{interrupt, pac, peripherals, Peri, RccPeripheral, RemapPeripheral, Timeout};
+use crate::{interrupt, pac, peripherals, Peri, RccPeripheral, Timeout};
 
 /// Receive interrupt handler.
 pub struct ReceiveInterruptHandler<T: Instance> {
@@ -78,10 +78,10 @@ pub enum CanInitError {
 }
 
 impl<'d, T: Instance> Can<'d, T, Async> {
-    pub fn new_async<const REMAP: u8>(
+    pub fn new_async<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        rx: Peri<'d, impl RxPin<T, REMAP>>,
-        tx: Peri<'d, impl TxPin<T, REMAP>>,
+        rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
+        tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         _irq: impl interrupt::typelevel::Binding<T::ReceiveInterrupt, ReceiveInterruptHandler<T>>
             + interrupt::typelevel::Binding<T::TransmitInterrupt, TransmitInterruptHandler<T>>
             + 'd,
@@ -150,10 +150,10 @@ impl<'d, T: Instance> Can<'d, T, Async> {
 }
 
 impl<'d, T: Instance> Can<'d, T, Blocking> {
-    pub fn new_blocking<const REMAP: u8>(
+    pub fn new_blocking<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        rx: Peri<'d, impl RxPin<T, REMAP>>,
-        tx: Peri<'d, impl TxPin<T, REMAP>>,
+        rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
+        tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
@@ -194,10 +194,10 @@ impl<'d, T: Instance> Can<'d, T, Blocking> {
 }
 
 impl<'d, T: Instance> Can<'d, T, NonBlocking> {
-    pub fn new_nb<const REMAP: u8>(
+    pub fn new_nb<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        rx: Peri<'d, impl RxPin<T, REMAP>>,
-        tx: Peri<'d, impl TxPin<T, REMAP>>,
+        rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
+        tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
@@ -244,10 +244,10 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
     /// Assumes AFIO & PORTB clocks have been enabled by HAL.
     ///
     /// CAN_RX is mapped to PB8, and CAN_TX is mapped to PB9.
-    fn new_inner<const REMAP: u8>(
+    fn new_inner<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        rx: Peri<'d, impl RxPin<T, REMAP>>,
-        tx: Peri<'d, impl TxPin<T, REMAP>>,
+        rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
+        tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
@@ -272,7 +272,6 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
             pac::gpio::vals::Mode::OUTPUT_50MHZ,
             pac::gpio::vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
         );
-        T::set_remap(REMAP);
 
         // //here should remap functionality be added
         // T::remap(0b10);
@@ -431,7 +430,7 @@ impl State {
     }
 }
 
-pub trait SealedInstance: RccPeripheral + RemapPeripheral {
+pub trait SealedInstance: RccPeripheral {
     fn regs() -> pac::can::Can;
     // Either `0b00`, `0b10` or `b11` on CAN1. `0` or `1` on CAN2.
     // fn remap(rm: u8) -> ();
@@ -444,8 +443,8 @@ pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + 'sta
     type TransmitInterrupt: crate::interrupt::typelevel::Interrupt;
 }
 
-pin_trait!(RxPin, Instance);
-pin_trait!(TxPin, Instance);
+pin_trait!(RxPin, Instance, @A);
+pin_trait!(TxPin, Instance, @A);
 
 foreach_peripheral!(
     (can, $inst:ident) => {
