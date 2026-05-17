@@ -12,7 +12,7 @@
 //! - 2CH GPTM instances are also have helper functions defined
 
 use crate::peripheral::RccPeripheral;
-use crate::{interrupt, RemapPeripheral};
+use crate::interrupt;
 
 pub mod complementary_pwm;
 pub mod low_level;
@@ -55,7 +55,7 @@ pub enum TimerBits {
 }
 
 /// Core timer instance.
-pub trait CoreInstance: RccPeripheral + RemapPeripheral + embassy_hal_internal::PeripheralType + 'static {
+pub trait CoreInstance: RccPeripheral + embassy_hal_internal::PeripheralType + 'static {
     /// Update Interrupt for this timer.
     type UpdateInterrupt: interrupt::typelevel::Interrupt;
 
@@ -101,19 +101,19 @@ pub trait AdvancedInstance: GeneralInstance16bit {
     type BreakInputInterrupt: interrupt::typelevel::Interrupt;
 }
 
-pin_trait!(Channel1Pin, GeneralInstance16bit);
-pin_trait!(Channel2Pin, GeneralInstance16bit);
-pin_trait!(Channel3Pin, GeneralInstance16bit);
-pin_trait!(Channel4Pin, GeneralInstance16bit);
-pin_trait!(ExternalTriggerPin, GeneralInstance16bit);
+pin_trait!(Channel1Pin, GeneralInstance16bit, @A);
+pin_trait!(Channel2Pin, GeneralInstance16bit, @A);
+pin_trait!(Channel3Pin, GeneralInstance16bit, @A);
+pin_trait!(Channel4Pin, GeneralInstance16bit, @A);
+pin_trait!(ExternalTriggerPin, GeneralInstance16bit, @A);
 
-pin_trait!(Channel1ComplementaryPin, AdvancedInstance);
-pin_trait!(Channel2ComplementaryPin, AdvancedInstance);
-pin_trait!(Channel3ComplementaryPin, AdvancedInstance);
+pin_trait!(Channel1ComplementaryPin, AdvancedInstance, @A);
+pin_trait!(Channel2ComplementaryPin, AdvancedInstance, @A);
+pin_trait!(Channel3ComplementaryPin, AdvancedInstance, @A);
 // No Channel4ComplementaryPin for ADTM
-// pin_trait!(Channel4ComplementaryPin, AdvancedInstance);
+// pin_trait!(Channel4ComplementaryPin, AdvancedInstance, @A);
 
-pin_trait!(BreakInputPin, AdvancedInstance);
+pin_trait!(BreakInputPin, AdvancedInstance, @A);
 
 // Update Event trigger DMA for every timer
 dma_trait!(UpDma, BasicInstance);

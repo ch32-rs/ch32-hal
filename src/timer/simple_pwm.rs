@@ -29,10 +29,13 @@ macro_rules! channel_impl {
     ($new_chx:ident, $channel:ident, $pin_trait:ident) => {
         impl<'d, T: GeneralInstance16bit> PwmPin<'d, T, $channel> {
             #[doc = concat!("Create a new ", stringify!($channel), " PWM pin instance.")]
-            pub fn $new_chx<const REMAP: u8>(pin: Peri<'d, impl $pin_trait<T, REMAP>>) -> Self {
+            pub fn $new_chx<#[cfg(afio)] A>(
+                pin: Peri<'d, if_afio!(impl $pin_trait<T, A>)>,
+            ) -> Self {
                 critical_section::with(|_| {
                     pin.set_as_af_output(AFType::OutputPushPull, Default::default());
-                    T::set_remap(REMAP);
+                    #[cfg(afio)]
+                    pin.afio_remap();
                 });
                 PwmPin {
                     _pin: pin.into(),
