@@ -81,15 +81,6 @@ fn main() {
         }
     }
 
-    // `afio` cfg fires for chips whose peripheral metadata declares a PCFR-style
-    // central remap register (V1/V2/V3/X0/L1 families). H4 has no peripheral.remap
-    // entries — pin AF is per-pin via GPIOx.AFLR/AFHR, so cfg(afio) is disabled
-    // and the HAL dispatches to the per-pin code path. Mirrors embassy-stm32's
-    // F1 vs F4+ split.
-    let has_afio_remap = METADATA.peripherals.iter().any(|p| p.remap.is_some());
-    if has_afio_remap {
-        println!("cargo:rustc-cfg=afio");
-    }
     println!("cargo:rustc-check-cfg=cfg(afio)");
 
     let mut gpio_lines = 16;
@@ -401,12 +392,14 @@ fn main() {
     ]
     .into();
 
-    // Peripherals kinds that participate in AFIO PCFR-style remap. When the
-    // chip's metadata says `p.remap = None` for one of these (e.g. V3 USART1,
-    // whose 2-bit remap split across PCFR1.bit2 + PCFR1.bit26 can't be
-    // expressed as a single field), drivers still expect a third generic on
-    // the pin trait — fill it with `RemapNotApplicable`. Mirrors
-    // embassy-stm32's `peripherals_with_afio` list.
+    // Peripheral kinds that take a marker generic on their pin traits. When
+    // the chip's metadata says `p.remap = None` for one of these (e.g. V3
+    // USART1, whose 2-bit remap is split across PCFR1.USART1_RM[2] +
+    // PCFR2.USART1_RM2[26] and can't be expressed as a single field with
+    // the current ch32-data schema), we still need to emit a pin_trait_impl
+    // so drivers can name `TxPin<USART1, _>` — fill it with
+    // `RemapNotApplicable`. Mirrors embassy-stm32's `peripherals_with_afio`
+    // list.
     let peripherals_with_afio = ["USART", "UART", "SPI", "I2C", "CAN", "TIM"];
 
     // Tracks (signal_trait, peripheral, pin) triples already emitted under
