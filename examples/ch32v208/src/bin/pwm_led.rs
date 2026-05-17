@@ -40,7 +40,7 @@ async fn main(_spawner: Spawner) -> ! {
 
     // Setup PWM on TIM2 CH1 (PA15)
     // TIM2 is a general-purpose 16-bit timer
-    let ch1_pin = PwmPin::new_ch1::<hal::gpio::Remap<1>>(p.PA15); // remap=1: PA15 is TIM2_CH1
+    let ch1_pin = PwmPin::new_ch1::<hal::gpio::AfioRemap<1>>(p.PA15); // remap=1: PA15 is TIM2_CH1
 
     let mut pwm = SimplePwm::new(
         p.TIM2,

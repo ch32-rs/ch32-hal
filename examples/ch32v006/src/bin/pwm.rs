@@ -13,7 +13,7 @@ fn main() -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
 
-    let pin = PwmPin::new_ch4::<hal::gpio::Remap<0>>(p.PC4);
+    let pin = PwmPin::new_ch4::<hal::gpio::AfioRemap<0>>(p.PC4);
     let mut pwm = SimplePwm::new(
         p.TIM1,
         None,

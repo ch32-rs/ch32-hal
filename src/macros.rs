@@ -18,7 +18,7 @@ macro_rules! dma_trait {
 // Mirrors embassy-stm32's macros.rs. Two pin-trait shapes coexist:
 //
 // - cfg(afio): the trait carries a third generic `A` whose only inhabitants
-//   are `gpio::Remap<V>` / `gpio::RemapBool<V>` / `gpio::RemapNotApplicable`
+//   are `gpio::AfioRemap<V>` / `gpio::AfioRemapBool<V>` / `gpio::AfioRemapNotApplicable`
 //   marker structs. Drivers call `pin.afio_remap()` to write AFIO PCFR for
 //   the chosen group; the marker's nominal identity forces every pin of a
 //   single peripheral instance to agree on the same group at compile time.
