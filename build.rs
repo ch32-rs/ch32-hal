@@ -398,12 +398,12 @@ fn main() {
     // PCFR2.USART1_RM2[26] and can't be expressed as a single field with
     // the current ch32-data schema), we still need to emit a pin_trait_impl
     // so drivers can name `TxPin<USART1, _>` — fill it with
-    // `RemapNotApplicable`. Mirrors embassy-stm32's `peripherals_with_afio`
+    // `AfioRemapNotApplicable`. Mirrors embassy-stm32's `peripherals_with_afio`
     // list.
     let peripherals_with_afio = ["USART", "UART", "SPI", "I2C", "CAN", "TIM"];
 
     // Tracks (signal_trait, peripheral, pin) triples already emitted under
-    // the `RemapNotApplicable` branch — the same pin may appear in
+    // the `AfioRemapNotApplicable` branch — the same pin may appear in
     // multiple `pin.remap` groups when the peripheral has no expressible
     // central remap, and we only want one impl per pin to avoid E0119.
     let mut emitted_not_applicable: HashSet<(String, String, String)> = HashSet::new();
@@ -428,9 +428,9 @@ fn main() {
                             let setter = format_ident!("set_{}", remap.field.to_ascii_lowercase());
                             let (type_ident, val_tokens) = if is_bool_field("AFIO", remap.register, remap.field) {
                                 let b = val != 0;
-                                (format_ident!("RemapBool"), quote!(#b))
+                                (format_ident!("AfioRemapBool"), quote!(#b))
                             } else {
-                                (format_ident!("Remap"), quote!(#val))
+                                (format_ident!("AfioRemap"), quote!(#val))
                             };
                             quote! {
                                 pin_trait_afio_impl!(#tr, #peri, #pin_name, {#reg, #setter, #type_ident, [#val_tokens]});
@@ -440,13 +440,13 @@ fn main() {
                         // Peripheral kind expects the third generic but this
                         // chip has no central remap entry for it — emit one
                         // impl per (signal, peripheral, pin) tagged with
-                        // `RemapNotApplicable`. The pin may show up in
+                        // `AfioRemapNotApplicable`. The pin may show up in
                         // multiple remap groups, but we collapse them all to
                         // a single impl so non-default groups remain usable
                         // (the user must configure PCFR manually for them).
                         let key = (tr.to_string(), p.name.to_string(), pin.pin.to_string());
                         if emitted_not_applicable.insert(key) {
-                            let not_applicable = quote!(, crate::gpio::RemapNotApplicable);
+                            let not_applicable = quote!(, crate::gpio::AfioRemapNotApplicable);
                             Some(quote! {
                                 pin_trait_impl!(#tr, #peri, #pin_name, #af #not_applicable);
                             })
@@ -768,7 +768,7 @@ macro_rules! {} {{
 
 /// Returns true if the AFIO peripheral's `register.field` is a 1-bit field
 /// (chiptool emits `bool` setter) versus a multi-bit field (`u8` setter).
-/// Used to pick `RemapBool<V>` vs `Remap<V>` markers for pin trait impls.
+/// Used to pick `AfioRemapBool<V>` vs `AfioRemap<V>` markers for pin trait impls.
 fn is_bool_field(peripheral: &str, register: &str, field: &str) -> bool {
     let field_metadata = METADATA
         .peripherals

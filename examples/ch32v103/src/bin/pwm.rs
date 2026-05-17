@@ -16,7 +16,7 @@ fn main() -> ! {
     let p = hal::init(Default::default());
 
     // PA8 is TIM1_CH1 in multiple remap groups — pick group 0 (default).
-    let ch1 = PwmPin::new_ch1::<hal::gpio::Remap<0>>(p.PA8);
+    let ch1 = PwmPin::new_ch1::<hal::gpio::AfioRemap<0>>(p.PA8);
     let mut pwm = SimplePwm::new(
         p.TIM1,
         Some(ch1),
