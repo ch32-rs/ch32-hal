@@ -799,3 +799,27 @@ impl<'d> embedded_hal::digital::StatefulOutputPin for Flex<'d> {
         Ok((*self).is_set_low())
     }
 }
+
+// === AFIO remap markers (cfg(afio) only) ===========================
+//
+// On chips with central PCFR-style remap registers (V1/V2/V3/X0/L1 families),
+// each peripheral pin trait carries an additional const generic `A` whose only
+// inhabitants are these marker structs. Because they're nominal types,
+// rustc forces all pins of a single peripheral instance (e.g. tx + rx of one
+// USART) to agree on the same A — a mismatched remap-group fails to compile,
+// rather than silently misconfiguring the AFIO MAPR at runtime.
+//
+// Mirrors embassy-stm32's gpio.rs AfioRemap / AfioRemapBool / AfioRemapNotApplicable.
+
+#[cfg(afio)]
+/// Holds the AFIO remap value for a peripheral's pin (multi-bit RM field).
+pub struct Remap<const V: u8>;
+
+#[cfg(afio)]
+/// Holds the AFIO remap value for a peripheral's pin (single-bit RM field).
+pub struct RemapBool<const V: bool>;
+
+#[cfg(afio)]
+/// Placeholder for a peripheral's pin which cannot be remapped via AFIO
+/// (e.g. fixed-pin peripherals on an otherwise-remappable chip).
+pub struct RemapNotApplicable;
