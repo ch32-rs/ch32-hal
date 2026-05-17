@@ -260,9 +260,9 @@ impl<'d, T: Instance, Dma: SdioDma<T>> Sdmmc<'d, T, Dma> {
         sdmmc: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         dma: Peri<'d, Dma>,
-        clk: Peri<'d, impl CkPin<T, 0>>,
-        cmd: Peri<'d, impl CmdPin<T, 0>>,
-        d0: Peri<'d, impl D0Pin<T, 0>>,
+        clk: Peri<'d, impl CkPin<T>>,
+        cmd: Peri<'d, impl CmdPin<T>>,
+        d0: Peri<'d, impl D0Pin<T>>,
         config: Config,
     ) -> Self {
         critical_section::with(|_| {
@@ -289,12 +289,12 @@ impl<'d, T: Instance, Dma: SdioDma<T>> Sdmmc<'d, T, Dma> {
         sdmmc: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         dma: Peri<'d, Dma>,
-        clk: Peri<'d, impl CkPin<T, 0>>,
-        cmd: Peri<'d, impl CmdPin<T, 0>>,
-        d0: Peri<'d, impl D0Pin<T, 0>>,
-        d1: Peri<'d, impl D1Pin<T, 0>>,
-        d2: Peri<'d, impl D2Pin<T, 0>>,
-        d3: Peri<'d, impl D3Pin<T, 0>>,
+        clk: Peri<'d, impl CkPin<T>>,
+        cmd: Peri<'d, impl CmdPin<T>>,
+        d0: Peri<'d, impl D0Pin<T>>,
+        d1: Peri<'d, impl D1Pin<T>>,
+        d2: Peri<'d, impl D2Pin<T>>,
+        d3: Peri<'d, impl D3Pin<T>>,
         config: Config,
     ) -> Self {
         critical_section::with(|_| {

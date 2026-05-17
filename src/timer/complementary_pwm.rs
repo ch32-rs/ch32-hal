@@ -23,11 +23,14 @@ macro_rules! complementary_channel_impl {
     ($new_chx:ident, $channel:ident, $pin_trait:ident) => {
         impl<'d, T: AdvancedInstance> ComplementaryPwmPin<'d, T, $channel> {
             #[doc = concat!("Create a new ", stringify!($channel), " complementary PWM pin instance.")]
-            pub fn $new_chx<const REMAP: u8>(pin: Peri<'d, impl $pin_trait<T, REMAP>>) -> Self {
-                T::set_remap(REMAP);
+            pub fn $new_chx<#[cfg(afio)] A>(
+                pin: Peri<'d, if_afio!(impl $pin_trait<T, A>)>,
+            ) -> Self {
                 critical_section::with(|_| {
                     pin.set_low();
                     pin.set_as_af_output(AFType::OutputPushPull, Default::default());
+                    #[cfg(afio)]
+                    pin.afio_remap();
                 });
                 ComplementaryPwmPin {
                     _pin: pin.into(),
