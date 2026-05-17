@@ -14,7 +14,7 @@ fn main() -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
 
-    let pin = PwmPin::new_ch1::<0>(p.PB9);
+    let pin = PwmPin::new_ch1::<hal::gpio::Remap<0>>(p.PB9);
     let ch = hal::timer::Channel::Ch1;
     let mut pwm = SimplePwm::new(
         p.TIM1,
