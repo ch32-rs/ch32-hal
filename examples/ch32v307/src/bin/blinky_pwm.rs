@@ -19,7 +19,7 @@ async fn main(_spawner: Spawner) -> ! {
     let p = hal::init(Default::default());
 
     // PA15 is TIM2_CH1 in remap groups 1 *and* 3 — pick one explicitly.
-    let pin = PwmPin::new_ch1::<hal::gpio::Remap<1>>(p.PA15);
+    let pin = PwmPin::new_ch1::<hal::gpio::AfioRemap<1>>(p.PA15);
     let mut pwm = SimplePwm::new(
         p.TIM2,
         Some(pin),

@@ -813,13 +813,13 @@ impl<'d> embedded_hal::digital::StatefulOutputPin for Flex<'d> {
 
 #[cfg(afio)]
 /// Holds the AFIO remap value for a peripheral's pin (multi-bit RM field).
-pub struct Remap<const V: u8>;
+pub struct AfioRemap<const V: u8>;
 
 #[cfg(afio)]
 /// Holds the AFIO remap value for a peripheral's pin (single-bit RM field).
-pub struct RemapBool<const V: bool>;
+pub struct AfioRemapBool<const V: bool>;
 
 #[cfg(afio)]
 /// Placeholder for a peripheral's pin which cannot be remapped via AFIO
 /// (e.g. fixed-pin peripherals on an otherwise-remappable chip).
-pub struct RemapNotApplicable;
+pub struct AfioRemapNotApplicable;
