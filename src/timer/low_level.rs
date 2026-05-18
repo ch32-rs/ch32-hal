@@ -186,7 +186,7 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
         Self { tim }
     }
 
-    #[cfg(any(ch32l1, ch32v208))]
+    #[cfg(any(ch32l1, ch32v208, ch32h4))]
     fn regs_gp32_unchecked(&self) -> crate::pac::timer::Gptm32 {
         unsafe { crate::pac::timer::Gptm32::from_ptr(T::regs()) }
     }
@@ -246,7 +246,7 @@ impl<'d, T: BasicInstance> Timer<'d, T> {
                 regs.swevgr().write(|r| r.set_ug(true));
                 regs.ctlr1().modify(|r| r.set_urs(vals::Urs::ANYEVENT));
             }
-            #[cfg(any(ch32l1, ch32v208))]
+            #[cfg(any(ch32l1, ch32v208, ch32h4))]
             TimerBits::Bits32 => {
                 let pclk_ticks_per_timer_period = (timer_f / f) as u64;
                 let psc: u16 = (((pclk_ticks_per_timer_period - 1) / (1 << 32)).try_into()).unwrap();
@@ -301,7 +301,7 @@ impl<'d, T: BasicInstance> Timer<'d, T> {
 
                 timer_f / arr / (psc + 1)
             }
-            #[cfg(any(ch32l1, ch32v208))]
+            #[cfg(any(ch32l1, ch32v208, ch32h4))]
             TimerBits::Bits32 => {
                 let regs = self.regs_gp32_unchecked();
                 let arr = regs.atrlr().read();
@@ -345,7 +345,7 @@ impl<'d, T: GeneralInstance16bit> Timer<'d, T> {
     pub fn get_max_compare_value(&self) -> u32 {
         match T::BITS {
             TimerBits::Bits16 => self.regs_gp16().atrlr().read() as u32,
-            #[cfg(any(ch32l1, ch32v208))]
+            #[cfg(any(ch32l1, ch32v208, ch32h4))]
             TimerBits::Bits32 => self.regs_gp32_unchecked().atrlr().read(),
         }
     }
@@ -464,7 +464,7 @@ impl<'d, T: GeneralInstance16bit> Timer<'d, T> {
                 let value = (u16::try_from(value)).unwrap();
                 self.regs_gp16().chcvr(channel.index()).write_value(value);
             }
-            #[cfg(any(ch32l1, ch32v208))]
+            #[cfg(any(ch32l1, ch32v208, ch32h4))]
             TimerBits::Bits32 => {
                 self.regs_gp32_unchecked().chcvr(channel.index()).write_value(value);
             }
@@ -475,7 +475,7 @@ impl<'d, T: GeneralInstance16bit> Timer<'d, T> {
     pub fn get_compare_value(&self, channel: Channel) -> u32 {
         match T::BITS {
             TimerBits::Bits16 => self.regs_gp16().chcvr(channel.index()).read() as u32,
-            #[cfg(any(ch32l1, ch32v208))]
+            #[cfg(any(ch32l1, ch32v208, ch32h4))]
             TimerBits::Bits32 => self.regs_gp32_unchecked().chcvr(channel.index()).read(),
         }
     }
