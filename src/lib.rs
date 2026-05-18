@@ -108,8 +108,11 @@ pub mod adc;
 pub mod dac;
 pub mod exti;
 pub mod gpio;
-// i2c/spi/can/flash drivers are V3-shaped; their H4 ports are followups.
-#[cfg(all(i2c, not(ch32h4)))]
+// spi/can/flash drivers reach into V3-specific register fields that
+// don't exist on `*_h4`-versioned peripherals. I2C is the exception:
+// H4 chip metadata flags I2C as `version: v3` (same register layout
+// as the V2/V3 families), so the existing V3 driver applies directly.
+#[cfg(i2c)]
 pub mod i2c;
 #[cfg(all(rng, not(ch32h4)))]
 pub mod rng;

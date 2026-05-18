@@ -371,18 +371,21 @@ fn main() {
     signals.insert(("timer", "CH4N"), quote!(crate::timer::Channel4ComplementaryPin));
     signals.insert(("timer", "ETR"), quote!(crate::timer::ExternalTriggerPin));
     signals.insert(("timer", "BKIN"), quote!(crate::timer::BreakInputPin));
+    // I2C on CH32H4 is `version: v3` (same register layout as V2/V3), so
+    // the V3 driver applies as-is — keep its pin trait impls.
+    signals.insert(("i2c", "SDA"), quote!(crate::i2c::SdaPin));
+    signals.insert(("i2c", "SCL"), quote!(crate::i2c::SclPin));
 
     if !h4 {
-        // SPI / I2C / CAN drivers reach into V3-specific register fields
-        // (CAN.fr(), I2C.fscfgr() etc.) that don't exist on H4. Their
-        // pin trait surface is the same shape, but emitting impls here
-        // would force the gated-out driver modules back into scope.
+        // SPI / CAN drivers reach into V3-specific register fields
+        // (CAN.fr(), SPI's V3-style hscr/rxen2 etc.) that don't exist on
+        // `*_h4`-versioned peripherals. Their pin trait surface is the
+        // same shape, but emitting impls here would force the gated-out
+        // driver modules back into scope.
         signals.insert(("spi", "MISO"), quote!(crate::spi::MisoPin));
         signals.insert(("spi", "SCK"), quote!(crate::spi::SckPin));
         signals.insert(("spi", "MOSI"), quote!(crate::spi::MosiPin));
         signals.insert(("spi", "NSS"), quote!(crate::spi::CsPin));
-        signals.insert(("i2c", "SDA"), quote!(crate::i2c::SdaPin));
-        signals.insert(("i2c", "SCL"), quote!(crate::i2c::SclPin));
         signals.insert(("can", "TX"), quote!(crate::can::TxPin));
         signals.insert(("can", "RX"), quote!(crate::can::RxPin));
 
