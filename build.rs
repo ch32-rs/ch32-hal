@@ -353,14 +353,24 @@ fn main() {
     let mut signals: HashMap<(&str, &str), TokenStream> = HashMap::new();
     let h4 = chip_family == "ch32h4";
 
-    // USART is the only "general-purpose" V3-style driver that we've
-    // already verified works against H4's USART register layout (its
-    // peripheral version is `usart_common`, byte-identical to V3).
+    // Drivers that have been verified to compile against H4's register
+    // layout (USART_common is byte-identical to V3; the timer driver
+    // works after a small TRG_COM interrupt fix-up).
     signals.insert(("usart", "TX"), quote!(crate::usart::TxPin));
     signals.insert(("usart", "RX"), quote!(crate::usart::RxPin));
     signals.insert(("usart", "CTS"), quote!(crate::usart::CtsPin));
     signals.insert(("usart", "RTS"), quote!(crate::usart::RtsPin));
     signals.insert(("usart", "CK"), quote!(crate::usart::CkPin));
+    signals.insert(("timer", "CH1"), quote!(crate::timer::Channel1Pin));
+    signals.insert(("timer", "CH1N"), quote!(crate::timer::Channel1ComplementaryPin));
+    signals.insert(("timer", "CH2"), quote!(crate::timer::Channel2Pin));
+    signals.insert(("timer", "CH2N"), quote!(crate::timer::Channel2ComplementaryPin));
+    signals.insert(("timer", "CH3"), quote!(crate::timer::Channel3Pin));
+    signals.insert(("timer", "CH3N"), quote!(crate::timer::Channel3ComplementaryPin));
+    signals.insert(("timer", "CH4"), quote!(crate::timer::Channel4Pin));
+    signals.insert(("timer", "CH4N"), quote!(crate::timer::Channel4ComplementaryPin));
+    signals.insert(("timer", "ETR"), quote!(crate::timer::ExternalTriggerPin));
+    signals.insert(("timer", "BKIN"), quote!(crate::timer::BreakInputPin));
 
     if !h4 {
         // SPI / I2C / CAN drivers reach into V3-specific register fields
@@ -376,20 +386,9 @@ fn main() {
         signals.insert(("can", "TX"), quote!(crate::can::TxPin));
         signals.insert(("can", "RX"), quote!(crate::can::RxPin));
 
-        // timer / usbhs / sdio / usbd / otg drivers are V3-shaped and don't
+        // sdio / usbhs / usbd / otg drivers are V3-shaped and don't
         // build for H4 today; their `mod` declarations in lib.rs are gated
         // out, so skip emitting pin_trait_impls referencing them.
-        signals.insert(("timer", "CH1"), quote!(crate::timer::Channel1Pin));
-        signals.insert(("timer", "CH1N"), quote!(crate::timer::Channel1ComplementaryPin));
-        signals.insert(("timer", "CH2"), quote!(crate::timer::Channel2Pin));
-        signals.insert(("timer", "CH2N"), quote!(crate::timer::Channel2ComplementaryPin));
-        signals.insert(("timer", "CH3"), quote!(crate::timer::Channel3Pin));
-        signals.insert(("timer", "CH3N"), quote!(crate::timer::Channel3ComplementaryPin));
-        signals.insert(("timer", "CH4"), quote!(crate::timer::Channel4Pin));
-        signals.insert(("timer", "CH4N"), quote!(crate::timer::Channel4ComplementaryPin));
-        signals.insert(("timer", "ETR"), quote!(crate::timer::ExternalTriggerPin));
-        signals.insert(("timer", "BKIN"), quote!(crate::timer::BreakInputPin));
-        // sdio == sdmmc(v1) on stm32 nomenclature
         signals.insert(("sdio", "CK"), quote!(crate::sdio::CkPin));
         signals.insert(("sdio", "CMD"), quote!(crate::sdio::CmdPin));
         signals.insert(("sdio", "D0"), quote!(crate::sdio::D0Pin));
