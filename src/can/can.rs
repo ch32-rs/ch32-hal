@@ -79,7 +79,7 @@ pub enum CanInitError {
 }
 
 impl<'d, T: Instance> Can<'d, T, Async> {
-    pub fn new_async<#[cfg(afio)] A>(
+    pub fn new_async<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
@@ -151,7 +151,7 @@ impl<'d, T: Instance> Can<'d, T, Async> {
 }
 
 impl<'d, T: Instance> Can<'d, T, Blocking> {
-    pub fn new_blocking<#[cfg(afio)] A>(
+    pub fn new_blocking<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
@@ -195,7 +195,7 @@ impl<'d, T: Instance> Can<'d, T, Blocking> {
 }
 
 impl<'d, T: Instance> Can<'d, T, NonBlocking> {
-    pub fn new_nb<#[cfg(afio)] A>(
+    pub fn new_nb<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
@@ -245,7 +245,7 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
     /// Assumes AFIO & PORTB clocks have been enabled by HAL.
     ///
     /// CAN_RX is mapped to PB8, and CAN_TX is mapped to PB9.
-    fn new_inner<#[cfg(afio)] A>(
+    fn new_inner<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
@@ -265,7 +265,7 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
         T::enable_and_reset(); // Enable CAN peripheral
 
         // RX is input-with-pull-up; TX is AF push-pull at 50MHz.
-        // `set_as_af!` writes mode/cnf and (under cfg(afio)) the PCFR remap
+        // `set_as_af!` writes mode/cnf and (under cfg(not(afio_h4))) the PCFR remap
         // bit, picking up the group encoded in the pin's marker type.
         set_as_af!(rx, AfType::input(Pull::Up));
         set_as_af!(tx, AfType::output(OutputType::PushPull, Speed::High));
