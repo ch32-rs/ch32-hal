@@ -15,10 +15,11 @@ fn main() -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
 
-    let pin = PwmPin::new_ch2::<0>(p.PB3);
-    // let pin = PwmPin::new_ch3::<0>(p.PB4);
-    // let pin = PwmPin::new_ch3::<1>(p.PA2);
-    // let pin = PwmPin::new_ch2::<1>(p.PA4);
+    // TIM1_RM is a 1-bit field on ch641, so the marker is `AfioRemapBool`.
+    let pin = PwmPin::new_ch2::<hal::gpio::AfioRemapBool<false>>(p.PB3);
+    // let pin = PwmPin::new_ch3::<hal::gpio::AfioRemapBool<false>>(p.PB4);
+    // let pin = PwmPin::new_ch3::<hal::gpio::AfioRemapBool<true>>(p.PA2);
+    // let pin = PwmPin::new_ch2::<hal::gpio::AfioRemapBool<true>>(p.PA4);
     let ch = hal::timer::Channel::Ch2;
     let mut pwm = SimplePwm::new(
         p.TIM1,

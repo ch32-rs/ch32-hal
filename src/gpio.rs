@@ -33,23 +33,29 @@ pub enum Speed {
     High = 0b11,
 }
 
-#[cfg(any(gpio_v3, gpio_v0))]
-impl From<Speed> for vals::Mode {
-    fn from(value: Speed) -> Self {
-        use Speed::*;
-
-        match value {
-            Medium => vals::Mode::OUTPUT_10MHZ,
-            Low => vals::Mode::OUTPUT_2MHZ,
-            High => vals::Mode::OUTPUT_50MHZ,
+impl Speed {
+    /// Compile-time conversion to the `MODEy` field value, family-aware.
+    /// gpio_x0 collapses every speed to OUTPUT_50MHZ — its GPIO doesn't
+    /// expose the slower modes.
+    #[cfg(any(gpio_v3, gpio_v0))]
+    pub const fn to_mode(self) -> vals::Mode {
+        match self {
+            Speed::Medium => vals::Mode::OUTPUT_10MHZ,
+            Speed::Low => vals::Mode::OUTPUT_2MHZ,
+            Speed::High => vals::Mode::OUTPUT_50MHZ,
         }
+    }
+
+    #[cfg(gpio_x0)]
+    pub const fn to_mode(self) -> vals::Mode {
+        vals::Mode::OUTPUT_50MHZ
     }
 }
 
-#[cfg(gpio_x0)]
 impl From<Speed> for vals::Mode {
-    fn from(_value: Speed) -> Self {
-        vals::Mode::OUTPUT_50MHZ
+    #[inline]
+    fn from(value: Speed) -> Self {
+        value.to_mode()
     }
 }
 
@@ -459,6 +465,45 @@ impl From<AFType> for vals::Cnf {
     }
 }
 
+/// Bundle of mode/cnf/pull settings for an alternate-function pin.
+///
+/// Mirrors embassy-stm32's `gpio_v1::AfType`. Drivers pass a single
+/// `AfType` per pin to `Pin::set_as_af()` (via the `new_pin!` /
+/// `set_as_af!` macros) instead of juggling separate `set_as_af_output` /
+/// `set_as_input` calls. On qingke V0/V3 GPIO the AF concept is the same
+/// regardless of direction: input pins set MODE=Input + CNF=Floating/Pull,
+/// output pins set MODE=2/10/50MHz + CNF=AF_PushPull/AF_OpenDrain.
+#[derive(Copy, Clone)]
+pub struct AfType {
+    mode: vals::Mode,
+    cnf: vals::Cnf,
+    pull: Pull,
+}
+
+impl AfType {
+    /// Input AF pin (e.g. UART RX, SPI MISO).
+    pub const fn input(pull: Pull) -> Self {
+        let cnf = match pull {
+            Pull::None => vals::Cnf::FLOATING_IN__OPEN_DRAIN_OUT,
+            // PULL_IN and AF_PUSH_PULL_OUT share the same CNF encoding (0b10);
+            // for input mode this means "input with pull-up/down" and pull
+            // direction comes from ODR via `set_pull` below.
+            _ => vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
+        };
+        Self { mode: vals::Mode::INPUT, cnf, pull }
+    }
+
+    /// Output AF pin (e.g. UART TX, SPI MOSI/SCK, I2C SCL/SDA).
+    pub const fn output(output_type: OutputType, speed: Speed) -> Self {
+        let cnf = match output_type {
+            OutputType::PushPull => vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
+            #[cfg(not(gpio_x0))]
+            OutputType::OpenDrain => vals::Cnf::AF_OPEN_DRAIN_OUT,
+        };
+        Self { mode: speed.to_mode(), cnf, pull: Pull::None }
+    }
+}
+
 /// Alternate function type settings, CNF, when MODE>0b00
 
 pub(crate) trait SealedPin {
@@ -567,6 +612,15 @@ pub(crate) trait SealedPin {
     #[inline]
     fn set_as_af_output(&self, af_type: AFType, speed: Speed) {
         self.set_mode_cnf(speed.into(), af_type.into());
+    }
+
+    /// Unified AF configuration — preferred by `new_pin!` / `set_as_af!`.
+    /// Mirrors embassy-stm32's `Pin::set_as_af` (gpio_v1 signature).
+    /// `cfg(not(afio))` chips (future H4) will take an extra `af_num: u8`.
+    #[inline]
+    fn set_as_af(&self, af_type: AfType) {
+        self.set_mode_cnf(af_type.mode, af_type.cnf);
+        self.set_pull(af_type.pull);
     }
 
     /// Analog mode, both input and output
@@ -799,3 +853,27 @@ impl<'d> embedded_hal::digital::StatefulOutputPin for Flex<'d> {
         Ok((*self).is_set_low())
     }
 }
+
+// === AFIO remap markers (cfg(afio) only) ===========================
+//
+// On chips with central PCFR-style remap registers (V1/V2/V3/X0/L1 families),
+// each peripheral pin trait carries an additional const generic `A` whose only
+// inhabitants are these marker structs. Because they're nominal types,
+// rustc forces all pins of a single peripheral instance (e.g. tx + rx of one
+// USART) to agree on the same A — a mismatched remap-group fails to compile,
+// rather than silently misconfiguring the AFIO MAPR at runtime.
+//
+// Mirrors embassy-stm32's gpio.rs AfioRemap / AfioRemapBool / AfioRemapNotApplicable.
+
+#[cfg(afio)]
+/// Holds the AFIO remap value for a peripheral's pin (multi-bit RM field).
+pub struct AfioRemap<const V: u8>;
+
+#[cfg(afio)]
+/// Holds the AFIO remap value for a peripheral's pin (single-bit RM field).
+pub struct AfioRemapBool<const V: bool>;
+
+#[cfg(afio)]
+/// Placeholder for a peripheral's pin which cannot be remapped via AFIO
+/// (e.g. fixed-pin peripherals on an otherwise-remappable chip).
+pub struct AfioRemapNotApplicable;
