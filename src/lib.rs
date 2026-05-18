@@ -92,24 +92,31 @@ mod interrupt_ext;
 
 pub use crate::_generated::{peripherals, Peripherals};
 
-#[cfg(not(time_driver_systick))]
+#[cfg(all(not(time_driver_systick), not(ch32h4)))]
 pub mod delay;
 pub mod dma;
 
-#[cfg(adc)]
+// ADC / DAC drivers are written against the V3-family register layout
+// (`pac::adc::vals::SampleTime`, `pac::dac::vals::TrigSel`, ...). On H4
+// these `vals` submodules don't exist because chiptool only emits them
+// for fields that carry enum types — H4's HSADC + ADC2 + DAC use a
+// different register convention. Gate the V3 driver out until a dedicated
+// H4 driver is ported.
+#[cfg(all(adc, not(ch32h4)))]
 pub mod adc;
-#[cfg(dac)]
+#[cfg(all(dac, not(ch32h4)))]
 pub mod dac;
 pub mod exti;
 pub mod gpio;
-#[cfg(i2c)]
+// i2c/spi/can/flash drivers are V3-shaped; their H4 ports are followups.
+#[cfg(all(i2c, not(ch32h4)))]
 pub mod i2c;
-#[cfg(rng)]
+#[cfg(all(rng, not(ch32h4)))]
 pub mod rng;
 #[cfg(sdio_v3)]
 pub mod sdio;
 pub mod signature;
-#[cfg(spi)]
+#[cfg(all(spi, not(ch32h4)))]
 pub mod spi;
 #[cfg(any(timer_x0, timer_v3))]
 pub mod timer;
@@ -127,15 +134,16 @@ pub mod usbd;
 #[cfg(usbhs_v3)]
 pub mod usbhs;
 
-#[cfg(usbpd)]
+// H4's USBPD register layout differs from V3 — gate out for now.
+#[cfg(all(usbpd, not(ch32h4)))]
 pub mod usbpd;
 
 #[cfg(eth)]
 pub mod eth;
-#[cfg(can)]
+#[cfg(all(can, not(ch32h4)))]
 pub mod can;
 
-#[cfg(flash)]
+#[cfg(all(flash, not(ch32h4)))]
 pub mod flash;
 
 #[cfg(feature = "embassy")]
@@ -179,6 +187,8 @@ pub fn init(config: Config) -> Peripherals {
 
     unsafe {
         rcc::init(config.rcc);
+        // Built-in systick-based delay isn't ported to H4's V5 systick layout yet.
+        #[cfg(not(ch32h4))]
         delay::init();
 
         #[cfg(feature = "embassy")]

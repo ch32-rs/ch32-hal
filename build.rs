@@ -346,59 +346,67 @@ fn main() {
 
     // ========
     // Generate pin_trait_impl!
-    let signals: HashMap<_, _> = [
-        // (kind, signal) => trait
-        (("usart", "TX"), quote!(crate::usart::TxPin)),
-        (("usart", "RX"), quote!(crate::usart::RxPin)),
-        (("usart", "CTS"), quote!(crate::usart::CtsPin)),
-        (("usart", "RTS"), quote!(crate::usart::RtsPin)),
-        (("usart", "CK"), quote!(crate::usart::CkPin)),
-        (("spi", "MISO"), quote!(crate::spi::MisoPin)),
-        (("spi", "SCK"), quote!(crate::spi::SckPin)),
-        (("spi", "MOSI"), quote!(crate::spi::MosiPin)),
-        (("spi", "NSS"), quote!(crate::spi::CsPin)),
-        /*(("spi", "I2S_MCK"), quote!(crate::spi::MckPin)),
-        (("spi", "I2S_CK"), quote!(crate::spi::CkPin)),
-        (("spi", "I2S_WS"), quote!(crate::spi::WsPin)), */
-        (("i2c", "SDA"), quote!(crate::i2c::SdaPin)),
-        (("i2c", "SCL"), quote!(crate::i2c::SclPin)),
-        (("timer", "CH1"), quote!(crate::timer::Channel1Pin)),
-        (("timer", "CH1N"), quote!(crate::timer::Channel1ComplementaryPin)),
-        (("timer", "CH2"), quote!(crate::timer::Channel2Pin)),
-        (("timer", "CH2N"), quote!(crate::timer::Channel2ComplementaryPin)),
-        (("timer", "CH3"), quote!(crate::timer::Channel3Pin)),
-        (("timer", "CH3N"), quote!(crate::timer::Channel3ComplementaryPin)),
-        (("timer", "CH4"), quote!(crate::timer::Channel4Pin)),
-        (("timer", "CH4N"), quote!(crate::timer::Channel4ComplementaryPin)),
-        (("timer", "ETR"), quote!(crate::timer::ExternalTriggerPin)),
-        (("timer", "BKIN"), quote!(crate::timer::BreakInputPin)),
-        // sdio is the sdmmc(v1) in stm32
-        (("sdio", "CK"), quote!(crate::sdio::CkPin)),
-        (("sdio", "CMD"), quote!(crate::sdio::CmdPin)),
-        (("sdio", "D0"), quote!(crate::sdio::D0Pin)),
-        (("sdio", "D1"), quote!(crate::sdio::D1Pin)),
-        (("sdio", "D2"), quote!(crate::sdio::D2Pin)),
-        (("sdio", "D3"), quote!(crate::sdio::D3Pin)),
-        (("sdio", "D4"), quote!(crate::sdio::D4Pin)),
-        (("sdio", "D5"), quote!(crate::sdio::D5Pin)),
-        (("sdio", "D6"), quote!(crate::sdio::D6Pin)),
-        (("sdio", "D6"), quote!(crate::sdio::D7Pin)),
-        (("sdio", "D8"), quote!(crate::sdio::D8Pin)),
-        // otg_fs
-        (("otg", "DP"), quote!(crate::otg_fs::DpPin)),
-        (("otg", "DM"), quote!(crate::otg_fs::DmPin)),
-        // USB is splitted into multiple impls
-        (("usbd", "DP"), quote!(crate::usbd::DpPin)),
-        (("usbd", "DM"), quote!(crate::usbd::DmPin)),
-        (("usbhs", "DP"), quote!(crate::usbhs::DpPin)),
-        (("usbhs", "DM"), quote!(crate::usbhs::DmPin)),
-        // USBPD, handled by usbpd/mod.rs
-        //(("usbpd", "CC1"), quote!(crate::usbpd::Cc1Pin)),
-        //(("usbpd", "CC2"), quote!(crate::usbpd::Cc2Pin)),
-        (("can", "TX"), quote!(crate::can::TxPin)),
-        (("can", "RX"), quote!(crate::can::RxPin)),
-    ]
-    .into();
+    // (kind, signal) → trait. Entries are skipped on H4 when the
+    // corresponding driver hasn't been ported yet — otherwise build.rs
+    // would emit `pin_trait_impl!(crate::timer::Channel1Pin, ...)` etc.
+    // referencing modules that are cfg-gated out of the H4 build.
+    let mut signals: HashMap<(&str, &str), TokenStream> = HashMap::new();
+    let h4 = chip_family == "ch32h4";
+
+    // USART is the only "general-purpose" V3-style driver that we've
+    // already verified works against H4's USART register layout (its
+    // peripheral version is `usart_common`, byte-identical to V3).
+    signals.insert(("usart", "TX"), quote!(crate::usart::TxPin));
+    signals.insert(("usart", "RX"), quote!(crate::usart::RxPin));
+    signals.insert(("usart", "CTS"), quote!(crate::usart::CtsPin));
+    signals.insert(("usart", "RTS"), quote!(crate::usart::RtsPin));
+    signals.insert(("usart", "CK"), quote!(crate::usart::CkPin));
+
+    if !h4 {
+        // SPI / I2C / CAN drivers reach into V3-specific register fields
+        // (CAN.fr(), I2C.fscfgr() etc.) that don't exist on H4. Their
+        // pin trait surface is the same shape, but emitting impls here
+        // would force the gated-out driver modules back into scope.
+        signals.insert(("spi", "MISO"), quote!(crate::spi::MisoPin));
+        signals.insert(("spi", "SCK"), quote!(crate::spi::SckPin));
+        signals.insert(("spi", "MOSI"), quote!(crate::spi::MosiPin));
+        signals.insert(("spi", "NSS"), quote!(crate::spi::CsPin));
+        signals.insert(("i2c", "SDA"), quote!(crate::i2c::SdaPin));
+        signals.insert(("i2c", "SCL"), quote!(crate::i2c::SclPin));
+        signals.insert(("can", "TX"), quote!(crate::can::TxPin));
+        signals.insert(("can", "RX"), quote!(crate::can::RxPin));
+
+        // timer / usbhs / sdio / usbd / otg drivers are V3-shaped and don't
+        // build for H4 today; their `mod` declarations in lib.rs are gated
+        // out, so skip emitting pin_trait_impls referencing them.
+        signals.insert(("timer", "CH1"), quote!(crate::timer::Channel1Pin));
+        signals.insert(("timer", "CH1N"), quote!(crate::timer::Channel1ComplementaryPin));
+        signals.insert(("timer", "CH2"), quote!(crate::timer::Channel2Pin));
+        signals.insert(("timer", "CH2N"), quote!(crate::timer::Channel2ComplementaryPin));
+        signals.insert(("timer", "CH3"), quote!(crate::timer::Channel3Pin));
+        signals.insert(("timer", "CH3N"), quote!(crate::timer::Channel3ComplementaryPin));
+        signals.insert(("timer", "CH4"), quote!(crate::timer::Channel4Pin));
+        signals.insert(("timer", "CH4N"), quote!(crate::timer::Channel4ComplementaryPin));
+        signals.insert(("timer", "ETR"), quote!(crate::timer::ExternalTriggerPin));
+        signals.insert(("timer", "BKIN"), quote!(crate::timer::BreakInputPin));
+        // sdio == sdmmc(v1) on stm32 nomenclature
+        signals.insert(("sdio", "CK"), quote!(crate::sdio::CkPin));
+        signals.insert(("sdio", "CMD"), quote!(crate::sdio::CmdPin));
+        signals.insert(("sdio", "D0"), quote!(crate::sdio::D0Pin));
+        signals.insert(("sdio", "D1"), quote!(crate::sdio::D1Pin));
+        signals.insert(("sdio", "D2"), quote!(crate::sdio::D2Pin));
+        signals.insert(("sdio", "D3"), quote!(crate::sdio::D3Pin));
+        signals.insert(("sdio", "D4"), quote!(crate::sdio::D4Pin));
+        signals.insert(("sdio", "D5"), quote!(crate::sdio::D5Pin));
+        signals.insert(("sdio", "D6"), quote!(crate::sdio::D6Pin));
+        signals.insert(("sdio", "D8"), quote!(crate::sdio::D8Pin));
+        signals.insert(("otg", "DP"), quote!(crate::otg_fs::DpPin));
+        signals.insert(("otg", "DM"), quote!(crate::otg_fs::DmPin));
+        signals.insert(("usbd", "DP"), quote!(crate::usbd::DpPin));
+        signals.insert(("usbd", "DM"), quote!(crate::usbd::DmPin));
+        signals.insert(("usbhs", "DP"), quote!(crate::usbhs::DpPin));
+        signals.insert(("usbhs", "DM"), quote!(crate::usbhs::DmPin));
+    }
 
     let peripherals_with_afio = ["USART", "UART", "SPI", "I2C", "CAN", "TIM"];
 
@@ -445,8 +453,14 @@ fn main() {
                     g.extend(pin_trait_impl);
                 }
 
-                // ADC pin is special
-                if regs.kind == "adc" {
+                // ADC / DAC pin impls reference the `impl_adc_pin!` /
+                // `impl_dac_pin!` macros defined inside src/adc.rs and
+                // src/dac.rs. Those modules are gated out on CH32H4
+                // (their V3-style register layout doesn't match H4) so
+                // the macros aren't in scope — skip the emission too.
+                let skip_adc_dac = chip_family == "ch32h4";
+
+                if regs.kind == "adc" && !skip_adc_dac {
                     if p.rcc.is_none() {
                         continue;
                     }
@@ -466,8 +480,7 @@ fn main() {
                     }
                 }
 
-                // DAC is special
-                if regs.kind == "dac" {
+                if regs.kind == "dac" && !skip_adc_dac {
                     let peri = format_ident!("{}", p.name);
                     let pin_name = format_ident!("{}", pin.pin);
                     let ch: u8 = pin.signal.strip_prefix("OUT").unwrap().parse().unwrap();
@@ -595,80 +608,74 @@ fn main() {
         }
     }
 
-    // DMA
-    let mut dmas = TokenStream::new();
+    // DMA — gated out on CH32H4 because `src/dma/dma_bdma.rs` (which
+    // defines `ChannelInfo`, `DmaInfo`, `ChannelInterrupt`) is itself
+    // cfg-gated out: its V3-style register layout doesn't match `dma_h4`.
+    // The H4 DMA driver port is a separate followup.
+    if !h4 {
+        let mut dmas = TokenStream::new();
+        for (ch_idx, ch) in METADATA.dma_channels.iter().enumerate() {
+            let name = format_ident!("{}", ch.name);
+            let idx = ch_idx as u8;
+            g.extend(quote!(dma_channel_impl!(#name, #idx);));
 
-    for (ch_idx, ch) in METADATA.dma_channels.iter().enumerate() {
-        let name = format_ident!("{}", ch.name);
-        let idx = ch_idx as u8;
-        g.extend(quote!(dma_channel_impl!(#name, #idx);));
+            let dma = format_ident!("{}", ch.dma);
+            let ch_num = ch.channel as usize;
 
-        let dma = format_ident!("{}", ch.dma);
-        let ch_num = ch.channel as usize;
+            let dma_peri = METADATA.peripherals.iter().find(|p| p.name == ch.dma).unwrap();
+            let bi = dma_peri.registers.as_ref().unwrap();
 
-        let dma_peri = METADATA.peripherals.iter().find(|p| p.name == ch.dma).unwrap();
-        let bi = dma_peri.registers.as_ref().unwrap();
+            let dma_info = match bi.kind {
+                "dma" => quote!(crate::dma::DmaInfo::Dma(crate::pac::#dma)),
+                "bdma" => quote!(crate::dma::DmaInfo::Bdma(crate::pac::#dma)),
+                "gpdma" => quote!(crate::pac::#dma),
+                _ => panic!("bad dma channel kind {}", bi.kind),
+            };
 
-        let dma_info = match bi.kind {
-            "dma" => quote!(crate::dma::DmaInfo::Dma(crate::pac::#dma)),
-            "bdma" => quote!(crate::dma::DmaInfo::Bdma(crate::pac::#dma)),
-            "gpdma" => quote!(crate::pac::#dma),
-            _ => panic!("bad dma channel kind {}", bi.kind),
-        };
+            let dmamux = quote!();
 
-        let dmamux = quote!();
+            dmas.extend(quote! {
+                crate::dma::ChannelInfo {
+                    dma: #dma_info,
+                    num: #ch_num,
+                    #dmamux
+                },
+            });
+        }
 
-        dmas.extend(quote! {
-            crate::dma::ChannelInfo {
-                dma: #dma_info,
-                num: #ch_num,
-                #dmamux
-            },
-        });
-    }
-
-    // ========
-    // Generate DMA IRQs.
-
-    let mut dma_irqs: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-
-    for p in METADATA.peripherals {
-        if let Some(r) = &p.registers {
-            if r.kind == "dma" {
-                for irq in p.interrupts {
-                    let ch_name = format!("{}_{}", p.name, irq.signal);
-                    // let ch = METADATA.dma_channels.iter().find(|c| c.name == ch_name).unwrap();
-
-                    dma_irqs.entry(irq.interrupt).or_default().push(ch_name);
+        let mut dma_irqs: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        for p in METADATA.peripherals {
+            if let Some(r) = &p.registers {
+                if r.kind == "dma" {
+                    for irq in p.interrupts {
+                        let ch_name = format!("{}_{}", p.name, irq.signal);
+                        dma_irqs.entry(irq.interrupt).or_default().push(ch_name);
+                    }
                 }
             }
         }
-    }
-
-    let dma_irqs: TokenStream = dma_irqs
-        .iter()
-        .map(|(irq, channels)| {
-            let irq = format_ident!("{}", irq);
-
-            let channels = channels.iter().map(|c| format_ident!("{}", c));
-
-            quote! {
-                #[cfg(feature = "rt")]
-                #[qingke_rt::interrupt]
-                unsafe fn #irq () {
-                    #(
-                        <crate::peripherals::#channels as crate::dma::ChannelInterrupt>::on_irq();
-                    )*
+        let dma_irqs: TokenStream = dma_irqs
+            .iter()
+            .map(|(irq, channels)| {
+                let irq = format_ident!("{}", irq);
+                let channels = channels.iter().map(|c| format_ident!("{}", c));
+                quote! {
+                    #[cfg(feature = "rt")]
+                    #[qingke_rt::interrupt]
+                    unsafe fn #irq () {
+                        #(
+                            <crate::peripherals::#channels as crate::dma::ChannelInterrupt>::on_irq();
+                        )*
+                    }
                 }
-            }
-        })
-        .collect();
+            })
+            .collect();
+        g.extend(dma_irqs);
 
-    g.extend(dma_irqs);
-
-    g.extend(quote! {
-        pub(crate) const DMA_CHANNELS: &[crate::dma::ChannelInfo] = &[#dmas];
-    });
+        g.extend(quote! {
+            pub(crate) const DMA_CHANNELS: &[crate::dma::ChannelInfo] = &[#dmas];
+        });
+    }
 
     // ...
 
