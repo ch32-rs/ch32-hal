@@ -92,7 +92,7 @@ mod interrupt_ext;
 
 pub use crate::_generated::{peripherals, Peripherals};
 
-#[cfg(all(not(time_driver_systick), not(ch32h4)))]
+#[cfg(not(time_driver_systick))]
 pub mod delay;
 pub mod dma;
 
@@ -118,7 +118,7 @@ pub mod sdio;
 pub mod signature;
 #[cfg(all(spi, not(ch32h4)))]
 pub mod spi;
-#[cfg(any(timer_x0, timer_v3))]
+#[cfg(any(timer_x0, timer_v3, timer_h4))]
 pub mod timer;
 pub mod usart;
 
@@ -187,8 +187,6 @@ pub fn init(config: Config) -> Peripherals {
 
     unsafe {
         rcc::init(config.rcc);
-        // Built-in systick-based delay isn't ported to H4's V5 systick layout yet.
-        #[cfg(not(ch32h4))]
         delay::init();
 
         #[cfg(feature = "embassy")]
