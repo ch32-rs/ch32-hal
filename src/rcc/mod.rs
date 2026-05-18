@@ -56,6 +56,10 @@ mod rcc_impl;
 #[path = "ch641.rs"]
 mod rcc_impl;
 
+#[cfg(rcc_h4)]
+#[path = "h4.rs"]
+mod rcc_impl;
+
 pub use rcc_impl::*;
 
 #[cfg(not(ch32v208))]
