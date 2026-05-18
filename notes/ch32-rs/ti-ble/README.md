@@ -69,20 +69,20 @@ This directory is the working knowledge base for the CH32V208 BLE Rust Link Laye
 | `scan-rsp-implementation-spec.md` §0 | Guardrail for cold ADV vs warm SCAN_RSP wording. |
 | `evt-broadcaster-ti-flow.md` §7 | Correction record for Broadcaster vs Peripheral evidence. |
 
-## External Research Inputs
+## LL Disassembly Notes (in-tree)
 
-Some focused reverse-engineering docs currently live in Lucy's agent workspace. Treat them as source inputs until they are migrated into this repo:
+Focused LL reverse-engineering notes are now tracked in this directory. They originated in Lucy's agent workspace and were migrated under task #90 (`#ch32-rs:decce4f6`, branch `lucy/disasm-migration`); each file carries a provenance footer recording origin path, migration date, responsible agent, and the behavioral-reference-only boundary. Treat them as observed-behavior source inputs — implementation work may cite them but must not link `libwchble` symbols or call ROM helpers as a production fallback (see `embedded-c-ble-stack-architecture.md` §2.5):
 
-| External Doc | Role |
+| In-tree Doc | Role |
 | --- | --- |
-| `/Users/mono/.slock/agents/997bdbdb-791a-40d4-a4f5-25dc90f2ed08/notes/ch32-rs/ti-ble/ll-advertise-tx-disasm.md` | Cold ADV TX MMIO and PDU assembly. |
-| `/Users/mono/.slock/agents/997bdbdb-791a-40d4-a4f5-25dc90f2ed08/notes/ch32-rs/ti-ble/ll-tx-completion-disasm.md` | TX/RX wait boundaries and event close. |
-| `/Users/mono/.slock/agents/997bdbdb-791a-40d4-a4f5-25dc90f2ed08/notes/ch32-rs/ti-ble/ll-adv-scheduler-disasm.md` | ADV scheduler, channel hop, interval/random delay. |
-| `/Users/mono/.slock/agents/997bdbdb-791a-40d4-a4f5-25dc90f2ed08/notes/ch32-rs/ti-ble/ll-process-event-minipass.md` | `LL_ProcessEvent` mask dispatch. |
-| `/Users/mono/.slock/agents/997bdbdb-791a-40d4-a4f5-25dc90f2ed08/notes/ch32-rs/ti-ble/ll-rx-ingress-disasm.md` | SCAN_REQ / CONNECT_IND split and SCAN_RSP prep. |
-| `/Users/mono/.slock/agents/997bdbdb-791a-40d4-a4f5-25dc90f2ed08/notes/ch32-rs/ti-ble/ll-phy-preflight-disasm.md` | PHY setup, dual TX kick, RF constants. |
-| `/Users/mono/.slock/agents/997bdbdb-791a-40d4-a4f5-25dc90f2ed08/notes/ch32-rs/ti-ble/ll-slave-init-disasm.md` | CONNECT_IND first hop and slave init. |
-| `/Users/mono/.slock/agents/997bdbdb-791a-40d4-a4f5-25dc90f2ed08/notes/ch32-rs/ti-ble/ll-advertise-filter-disasm.md` | Filter policy and resolving-list mutation. |
+| [`ll-advertise-tx-disasm.md`](./ll-advertise-tx-disasm.md) | Cold ADV TX MMIO and PDU assembly. |
+| [`ll-tx-completion-disasm.md`](./ll-tx-completion-disasm.md) | TX/RX wait boundaries and event close. |
+| [`ll-adv-scheduler-disasm.md`](./ll-adv-scheduler-disasm.md) | ADV scheduler, channel hop, interval/random delay. |
+| [`ll-process-event-minipass.md`](./ll-process-event-minipass.md) | `LL_ProcessEvent` mask dispatch. |
+| [`ll-rx-ingress-disasm.md`](./ll-rx-ingress-disasm.md) | SCAN_REQ / CONNECT_IND split and SCAN_RSP prep. |
+| [`ll-phy-preflight-disasm.md`](./ll-phy-preflight-disasm.md) | PHY setup, dual TX kick, RF constants. |
+| [`ll-slave-init-disasm.md`](./ll-slave-init-disasm.md) | CONNECT_IND first hop and slave init. |
+| [`ll-advertise-filter-disasm.md`](./ll-advertise-filter-disasm.md) | Filter policy and resolving-list mutation. |
 
 ## Lookup Guide
 
@@ -95,10 +95,10 @@ Some focused reverse-engineering docs currently live in Lucy's agent workspace. 
 | Which branch should I use? | `branch-status.md`. |
 | How should a full Embassy-owned BLE stack be structured? | `embedded-c-ble-stack-architecture.md`. |
 | Which time source should probes use? | `time-event-model.md` §8. |
-| Which WCH function owns SCAN_RSP warm kick? | `ll-phy-preflight-disasm.md` and `ll-rx-ingress-disasm.md` in the external research table. |
+| Which WCH function owns SCAN_RSP warm kick? | [`ll-phy-preflight-disasm.md`](./ll-phy-preflight-disasm.md) and [`ll-rx-ingress-disasm.md`](./ll-rx-ingress-disasm.md). |
 
 ## Housekeeping Backlog
 
-1. Migrate Lucy's focused disassembly docs from the agent workspace into this repo after Step 2 stabilizes.
+1. ~~Migrate Lucy's focused disassembly docs from the agent workspace into this repo after Step 2 stabilizes.~~ Done under task #90, 2026-05-18 (commit on `lucy/disasm-migration`).
 2. Later split the directory into `plan/`, `research/`, `decision/`, and `pitfall/` if the note count keeps growing.
 3. Keep `README.md` as the single entry point after any future move.

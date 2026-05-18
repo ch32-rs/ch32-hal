@@ -369,7 +369,7 @@ The app notification is post-fact; the radio response path must be controller-ow
 This deep dive identifies several narrower reverse-engineering documents:
 
 1. `gaprole-to-ll-callgraph.md`: `GAPRole_PeripheralStartDevice` -> GAP -> HCI -> LL advertise enable path.
-2. `ll-advertise-tx-disasm.md`: `ll_advertise_tx`, `ll_advertise_generated_scan_rsp`, and hardware register write sequence. Companion doc currently lives in Lucy's workspace at `/Users/mono/.slock/agents/997bdbdb-791a-40d4-a4f5-25dc90f2ed08/notes/ch32-rs/ti-ble/ll-advertise-tx-disasm.md`.
+2. [`ll-advertise-tx-disasm.md`](./ll-advertise-tx-disasm.md): `ll_advertise_tx`, `ll_advertise_generated_scan_rsp`, and hardware register write sequence (in-tree, migrated under task #90).
 3. `tmos-osal-equivalence.md`: TI OSAL event/message/timer semantics vs WCH TMOS symbols.
 4. `ble-timebase.md`: `bleClock_t`, `fnGetClockCBs`, TMOS tick × 625us, and Rust BLE clock abstraction.
 5. `scan-rsp-turnaround.md`: SCAN_REQ parse/filter/response path across TI, WCH disasm, and Rust design.

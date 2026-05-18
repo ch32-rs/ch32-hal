@@ -50,24 +50,27 @@ milestones.
 | `../tmos-embassy-task-migration.md` | TMOS task/event/message model and Rust/Embassy mapping. |
 | `../lib-dependency-removal.md` | Prior lib removal decisions and ROM/lib boundary findings. |
 
-### 1.3 External disassembly inputs to migrate
+### 1.3 LL disassembly notes (in-tree, behavioral reference only)
 
-These focused notes currently live in Lucy's workspace. They should be migrated
-into this repo before implementation branches cite them directly:
+These focused notes were originally produced in Lucy's agent workspace and
+migrated into this directory under task #90 (`#ch32-rs:decce4f6`,
+branch `lucy/disasm-migration`). Each note carries a provenance footer
+(origin path, migration date, responsible agent, and the
+behavioral-reference-only boundary). Treat them as observed-behavior
+references — implementation branches may cite them for control-flow
+provenance but must not link `libwchble` symbols or call ROM helpers as
+a production fallback (see §2.5 anti-import boundary):
 
-| External doc | Required facts |
+| In-tree doc | Required facts |
 | --- | --- |
-| `ll-advertise-tx-disasm.md` | Cold ADV TX sequence, PDU stamping, channel writes. |
-| `ll-tx-completion-disasm.md` | TX done, RX wait boundaries, event close. |
-| `ll-adv-scheduler-disasm.md` | ADV scheduler, channel hop, interval/random delay. |
-| `ll-process-event-minipass.md` | `LL_ProcessEvent` event-mask dispatch table. |
-| `ll-rx-ingress-disasm.md` | SCAN_REQ and CONNECT_IND split. |
-| `ll-phy-preflight-disasm.md` | PHY setup, warm SCAN_RSP kick, RF constants. |
-| `ll-slave-init-disasm.md` | CONNECT_IND first hop and slave init. |
-| `ll-advertise-filter-disasm.md` | Filter policy, resolving-list mutation, connect/scan provenance. |
-
-These docs supply behavioral specs and provenance. The new modules must not link
-libwchble symbols or call ROM helpers as a production fallback.
+| [`ll-advertise-tx-disasm.md`](./ll-advertise-tx-disasm.md) | Cold ADV TX sequence, PDU stamping, channel writes. |
+| [`ll-tx-completion-disasm.md`](./ll-tx-completion-disasm.md) | TX done, RX wait boundaries, event close. |
+| [`ll-adv-scheduler-disasm.md`](./ll-adv-scheduler-disasm.md) | ADV scheduler, channel hop, interval/random delay. |
+| [`ll-process-event-minipass.md`](./ll-process-event-minipass.md) | `LL_ProcessEvent` event-mask dispatch table. |
+| [`ll-rx-ingress-disasm.md`](./ll-rx-ingress-disasm.md) | SCAN_REQ and CONNECT_IND split. |
+| [`ll-phy-preflight-disasm.md`](./ll-phy-preflight-disasm.md) | PHY setup, warm SCAN_RSP kick, RF constants. |
+| [`ll-slave-init-disasm.md`](./ll-slave-init-disasm.md) | CONNECT_IND first hop and slave init. |
+| [`ll-advertise-filter-disasm.md`](./ll-advertise-filter-disasm.md) | Filter policy, resolving-list mutation, connect/scan provenance. |
 
 ## 2. Design Goals and Boundaries
 
