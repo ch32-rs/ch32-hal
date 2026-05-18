@@ -230,7 +230,7 @@ impl<'d, T: Instance, M: Mode> UartTx<'d, T, M> {
 
 impl<'d, T: Instance> UartTx<'d, T, Async> {
     /// Useful if you only want Uart Tx. It saves 1 pin and consumes a little less power.
-    pub fn new<#[cfg(afio)] A>(
+    pub fn new<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         tx_dma: Peri<'d, impl TxDma<T>>,
@@ -240,7 +240,7 @@ impl<'d, T: Instance> UartTx<'d, T, Async> {
     }
 
     /// Create a new tx-only UART with a clear-to-send pin
-    pub fn new_with_cts<#[cfg(afio)] A>(
+    pub fn new_with_cts<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         cts: Peri<'d, if_afio!(impl CtsPin<T, A>)>,
@@ -274,7 +274,7 @@ impl<'d, T: Instance> UartTx<'d, T, Blocking> {
     /// Create a new blocking tx-only UART with no hardware flow control.
     ///
     /// Useful if you only want Uart Tx. It saves 1 pin and consumes a little less power.
-    pub fn new_blocking<#[cfg(afio)] A>(
+    pub fn new_blocking<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         config: Config,
@@ -283,7 +283,7 @@ impl<'d, T: Instance> UartTx<'d, T, Blocking> {
     }
 
     /// Create a new blocking tx-only UART with a clear-to-send pin
-    pub fn new_blocking_with_cts<#[cfg(afio)] A>(
+    pub fn new_blocking_with_cts<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         cts: Peri<'d, if_afio!(impl CtsPin<T, A>)>,
@@ -403,7 +403,7 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
     /// Create a new rx-only UART with no hardware flow control.
     ///
     /// Useful if you only want Uart Rx. It saves 1 pin and consumes a little less power.
-    pub fn new<#[cfg(afio)] A>(
+    pub fn new<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
@@ -414,7 +414,7 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
     }
 
     /// Create a new rx-only UART with a request-to-send pin
-    pub fn new_with_rts<#[cfg(afio)] A>(
+    pub fn new_with_rts<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
@@ -644,7 +644,7 @@ impl<'d, T: Instance> UartRx<'d, T, Blocking> {
     /// Create a new rx-only UART with no hardware flow control.
     ///
     /// Useful if you only want Uart Rx. It saves 1 pin and consumes a little less power.
-    pub fn new_blocking<#[cfg(afio)] A>(
+    pub fn new_blocking<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
         config: Config,
@@ -653,7 +653,7 @@ impl<'d, T: Instance> UartRx<'d, T, Blocking> {
     }
 
     /// Create a new rx-only UART with a request-to-send pin
-    pub fn new_blocking_with_rts<#[cfg(afio)] A>(
+    pub fn new_blocking_with_rts<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
         rts: Peri<'d, if_afio!(impl RtsPin<T, A>)>,
@@ -780,7 +780,7 @@ impl<'d, T: Instance, M: Mode> Uart<'d, T, M> {
 
 impl<'d, T: Instance> Uart<'d, T, Async> {
     /// Create a new bidirectional UARTUart
-    pub fn new<#[cfg(afio)] A>(
+    pub fn new<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
@@ -802,7 +802,7 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
     }
 
     /// Create a new bidirectional UART with request-to-send and clear-to-send pins
-    pub fn new_with_rtscts<#[cfg(afio)] A>(
+    pub fn new_with_rtscts<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
@@ -828,7 +828,7 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
     /// Half-duplex
     ///
     /// Note: Half duplex requires TX pin to have a pull-up resistor
-    pub fn new_half_duplex<#[cfg(afio)] A>(
+    pub fn new_half_duplex<#[cfg(not(afio_h4))] A>(
         _peri: Peri<'d, T>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         tx_dma: Peri<'d, impl TxDma<T>>,
@@ -858,7 +858,7 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
 
 impl<'d, T: Instance> Uart<'d, T, Blocking> {
     /// Create a new blocking bidirectional UART.
-    pub fn new_blocking<#[cfg(afio)] A>(
+    pub fn new_blocking<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
@@ -877,7 +877,7 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
     }
 
     /// Create a new bidirectional UART with request-to-send and clear-to-send pins
-    pub fn new_blocking_with_rtscts<#[cfg(afio)] A>(
+    pub fn new_blocking_with_rtscts<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         rx: Peri<'d, if_afio!(impl RxPin<T, A>)>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
@@ -897,7 +897,7 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
         )
     }
 
-    pub fn new_blocking_half_duplex<#[cfg(afio)] A>(
+    pub fn new_blocking_half_duplex<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         tx: Peri<'d, if_afio!(impl TxPin<T, A>)>,
         mut config: Config,
