@@ -109,7 +109,7 @@ pub struct I2c<'d, T: Instance, M: Mode> {
 
 impl<'d, T: Instance> I2c<'d, T, Async> {
     /// Create a new I2C driver.
-    pub fn new<#[cfg(afio)] A>(
+    pub fn new<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         scl: Peri<'d, if_afio!(impl SclPin<T, A>)>,
         sda: Peri<'d, if_afio!(impl SdaPin<T, A>)>,
@@ -127,7 +127,7 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
 
 impl<'d, T: Instance> I2c<'d, T, Blocking> {
     /// Create a new blocking I2C driver.
-    pub fn new_blocking<#[cfg(afio)] A>(
+    pub fn new_blocking<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         scl: Peri<'d, if_afio!(impl SclPin<T, A>)>,
         sda: Peri<'d, if_afio!(impl SdaPin<T, A>)>,
@@ -140,7 +140,7 @@ impl<'d, T: Instance> I2c<'d, T, Blocking> {
 
 impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     /// Create a new I2C driver.
-    fn new_inner<#[cfg(afio)] A>(
+    fn new_inner<#[cfg(not(afio_h4))] A>(
         _peri: Peri<'d, T>,
         scl: Peri<'d, if_afio!(impl SclPin<T, A>)>,
         sda: Peri<'d, if_afio!(impl SdaPin<T, A>)>,

@@ -81,7 +81,15 @@ fn main() {
         }
     }
 
+    // `afio` (any chip with an AFIO peripheral) is already emitted by the
+    // `r.kind` loop above. `afio_h4` is emitted by the `{kind}_{version}`
+    // line whenever the chip's AFIO is `version: h4` — that's the gate that
+    // selects the AFR-style per-pin mux path (vs the central PCFR remap path
+    // used by every other ch32 AFIO version). Declare both so rustc doesn't
+    // warn `unexpected-cfg` on V0/V1/V2/V3/X0/L1/641/643 builds where
+    // `afio_h4` is intentionally unset.
     println!("cargo:rustc-check-cfg=cfg(afio)");
+    println!("cargo:rustc-check-cfg=cfg(afio_h4)");
 
     let mut gpio_lines = 16;
     match &*chip_family {
@@ -408,7 +416,10 @@ fn main() {
                 if let Some(tr) = signals.get(&key) {
                     let peri = format_ident!("{}", p.name);
                     let pin_name = format_ident!("{}", pin.pin);
-                    let af = pin.remap.unwrap_or(0);
+                    // H4 metadata fills `pin.af` (AF number 0..15 for the AFR
+                    // mux); V3 etc. fill `pin.remap` (PCFR group 0..3). Pick
+                    // whichever is set; falls back to 0 when neither is.
+                    let af = pin.af.or(pin.remap).unwrap_or(0);
                     let in_afio_list = peripherals_with_afio.iter().any(|&x| p.name.starts_with(x));
 
                     let pin_trait_impl = match (&p.remap, in_afio_list) {
