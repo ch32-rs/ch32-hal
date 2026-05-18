@@ -615,12 +615,29 @@ pub(crate) trait SealedPin {
     }
 
     /// Unified AF configuration — preferred by `new_pin!` / `set_as_af!`.
-    /// Mirrors embassy-stm32's `Pin::set_as_af` (gpio_v1 signature).
-    /// `cfg(not(afio))` chips (future H4) will take an extra `af_num: u8`.
+    ///
+    /// On every ch32 family the basic GPIO mode/cnf is still V3-style
+    /// (the legacy AF push-pull / open-drain CNF values), so the function
+    /// signature stays the same. On CH32H4 an additional 4-bit AF number
+    /// has to be written to `AFIO.GPIO_AFR[n]` to pick which peripheral
+    /// signal connects to the pin — that's the `#[cfg(afio_h4)]` arm. On
+    /// every other chip the function selection is done indirectly via the
+    /// `AFIO.PCFR{1,2}` central remap registers (handled separately by
+    /// `pin.afio_remap()`).
     #[inline]
-    fn set_as_af(&self, af_type: AfType) {
+    fn set_as_af(&self, #[cfg(afio_h4)] af_num: u8, af_type: AfType) {
         self.set_mode_cnf(af_type.mode, af_type.cnf);
         self.set_pull(af_type.pull);
+        #[cfg(afio_h4)]
+        {
+            // AFIO.gpio_afr is a 12-element array: index = port_idx * 2 +
+            // (pin / 8), inner AFR field = pin % 8. port_idx maps A=0..F=5.
+            let port = self._port() as usize;
+            let pin = self._pin() as usize;
+            crate::pac::AFIO
+                .gpio_afr(port * 2 + (pin / 8))
+                .modify(|w| w.set_afr(pin % 8, af_num));
+        }
     }
 
     /// Analog mode, both input and output
@@ -719,7 +736,7 @@ foreach_pin!(
 /// Enable the GPIO peripheral clock.
 
 pub(crate) unsafe fn init(_cs: CriticalSection) {
-    #[cfg(afio)]
+    #[cfg(not(afio_h4))]
     <crate::peripherals::AFIO as crate::peripheral::SealedRccPeripheral>::enable_and_reset_with_cs(_cs);
 
     crate::_generated::init_gpio();
@@ -854,7 +871,7 @@ impl<'d> embedded_hal::digital::StatefulOutputPin for Flex<'d> {
     }
 }
 
-// === AFIO remap markers (cfg(afio) only) ===========================
+// === AFIO remap markers (cfg(not(afio_h4)) only) ===========================
 //
 // On chips with central PCFR-style remap registers (V1/V2/V3/X0/L1 families),
 // each peripheral pin trait carries an additional const generic `A` whose only
@@ -865,15 +882,15 @@ impl<'d> embedded_hal::digital::StatefulOutputPin for Flex<'d> {
 //
 // Mirrors embassy-stm32's gpio.rs AfioRemap / AfioRemapBool / AfioRemapNotApplicable.
 
-#[cfg(afio)]
+#[cfg(not(afio_h4))]
 /// Holds the AFIO remap value for a peripheral's pin (multi-bit RM field).
 pub struct AfioRemap<const V: u8>;
 
-#[cfg(afio)]
+#[cfg(not(afio_h4))]
 /// Holds the AFIO remap value for a peripheral's pin (single-bit RM field).
 pub struct AfioRemapBool<const V: bool>;
 
-#[cfg(afio)]
+#[cfg(not(afio_h4))]
 /// Placeholder for a peripheral's pin which cannot be remapped via AFIO
 /// (e.g. fixed-pin peripherals on an otherwise-remappable chip).
 pub struct AfioRemapNotApplicable;

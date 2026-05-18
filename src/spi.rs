@@ -295,7 +295,7 @@ impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
 
 impl<'d, T: Instance> Spi<'d, T, Blocking> {
     /// Create a new SPI driver.
-    pub fn new_blocking<#[cfg(afio)] A>(
+    pub fn new_blocking<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
         mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
@@ -315,7 +315,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
     }
 
     /// Create a new SPI driver, in RX-only mode (only MISO pin, no MOSI).
-    pub fn new_blocking_rxonly<#[cfg(afio)] A>(
+    pub fn new_blocking_rxonly<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
         miso: Peri<'d, if_afio!(impl MisoPin<T, A>)>,
@@ -326,7 +326,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
     }
 
     /// Create a new SPI driver, in TX-only mode (only MOSI pin, no MISO).
-    pub fn new_blocking_txonly<#[cfg(afio)] A>(
+    pub fn new_blocking_txonly<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
         mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
@@ -339,7 +339,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
     /// Create a new SPI driver, in TX-only mode, without SCK pin.
     ///
     /// This can be useful for bit-banging non-SPI protocols.
-    pub fn new_blocking_txonly_nosck<#[cfg(afio)] A>(
+    pub fn new_blocking_txonly_nosck<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
         config: Config,
@@ -351,7 +351,7 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
 
 impl<'d, T: Instance> Spi<'d, T, Async> {
     /// Create a new SPI driver.
-    pub fn new<#[cfg(afio)] A>(
+    pub fn new<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
         mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
@@ -373,7 +373,7 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
     }
 
     /// Create a new SPI driver, in RX-only mode (only MISO pin, no MOSI).
-    pub fn new_rxonly<#[cfg(afio)] A>(
+    pub fn new_rxonly<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
         miso: Peri<'d, if_afio!(impl MisoPin<T, A>)>,
@@ -393,7 +393,7 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
     }
 
     /// Create a new SPI driver, in TX-only mode (only MOSI pin, no MISO).
-    pub fn new_txonly<#[cfg(afio)] A>(
+    pub fn new_txonly<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
         mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
@@ -415,7 +415,7 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
     /// Create a new SPI driver, in TX-only mode, without SCK pin.
     ///
     /// This can be useful for bit-banging non-SPI protocols.
-    pub fn new_txonly_nosck<#[cfg(afio)] A>(
+    pub fn new_txonly_nosck<#[cfg(not(afio_h4))] A>(
         peri: Peri<'d, T>,
         mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
         tx_dma: Peri<'d, impl TxDma<T>>,
