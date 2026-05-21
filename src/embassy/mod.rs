@@ -2,7 +2,12 @@
 ///
 /// This module provides the time driver for the Embassy framework.
 
-#[cfg(all(qingke_v4, not(time_driver_timer)))]
+// `time_driver_systick.rs` reaches for V3-style `SYSTICK.{ctlr,cmpl,
+// cmph,cnt,sr}()` — those names don't exist on CH32H4's dual-core
+// `systick_v3f_v5f` peripheral (which uses `CTLR_0`/`CMP_0`/`CNT_0`/
+// `ISR`). Until a dedicated H4 systick time driver lands, H4 users
+// must opt into a TIM-based time driver via `time-driver-timN`.
+#[cfg(all(qingke_v4, not(time_driver_timer), not(ch32h4)))]
 #[path = "time_driver_systick.rs"]
 pub mod time_driver_impl;
 
@@ -27,6 +32,6 @@ pub unsafe fn init() {
     #[cfg(feature = "rt-wfi")]
     crate::pac::PFIC.sctlr().modify(|w| w.set_sevonpend(true));
 
-    #[cfg(any(qingke_v4, time_driver_timer))]
+    #[cfg(any(all(qingke_v4, not(ch32h4)), time_driver_timer))]
     critical_section::with(|cs| time_driver_impl::init(cs));
 }
