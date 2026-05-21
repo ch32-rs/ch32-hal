@@ -349,7 +349,7 @@ mod exti_inner {
         }
     }
 
-    #[cfg(all(gpio_v3, not(ch641)))]
+    #[cfg(all(gpio_v3, not(ch641), not(ch32h4)))]
     mod irq_impl {
         use super::*;
 
@@ -411,7 +411,9 @@ mod exti_inner {
         }
     }
 
-    #[cfg(all(gpio_v3, ch641))]
+    // CH641 and CH32H4 both expose just two combined EXTI vectors
+    // (`EXTI7_0` covers lines 0..7, `EXTI15_8` covers lines 8..15).
+    #[cfg(all(gpio_v3, any(ch641, ch32h4)))]
     mod irq_impl {
         use super::*;
 
