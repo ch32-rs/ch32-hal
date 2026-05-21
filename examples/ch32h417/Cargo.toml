@@ -1,0 +1,31 @@
+[package]
+name = "ch32h417-examples"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Default to the V3F hart (boot core). For V5F examples, switch the
+# feature to `ch32h417qeu6-v5f` and update the target JSON to use the
+# riscv32imafbc-style profile (V5F adds the B extension and ICache).
+ch32-hal = { path = "../../", features = [
+    "ch32h417qeu6-v3f",
+    "memory-x",
+    "rt",
+] }
+
+qingke = "0.7"
+qingke-rt = "0.7"
+
+panic-halt = "1.0"
+embedded-hal = "1.0.0"
+
+[profile.release]
+strip = false
+lto = true
+opt-level = "z"
+
+# Pin qingke at the V3F/V5F PR (ch32-rs/qingke#23). Once that PR lands
+# and qingke is republished, drop this patch.
+[patch.crates-io]
+qingke = { git = "https://github.com/ch32-rs/qingke", rev = "5973481b9ccebd163d881dfff9fef921d9082d8e" }
+qingke-rt = { git = "https://github.com/ch32-rs/qingke", rev = "5973481b9ccebd163d881dfff9fef921d9082d8e" }
