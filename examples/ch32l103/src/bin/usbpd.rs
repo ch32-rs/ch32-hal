@@ -8,7 +8,7 @@ use ch32_hal::{bind_interrupts, peripherals};
 use embassy_executor::Spawner;
 use embassy_time::Timer;
 use panic_halt as _;
-use usbpd::protocol_layer::message::data::request::{self, CurrentRequest, VoltageRequest};
+use usbpd::protocol_layer::message::data::request::{self};
 use usbpd::protocol_layer::message::data::source_capabilities::SourceCapabilities;
 use usbpd::sink::device_policy_manager::{DevicePolicyManager, Event};
 use usbpd::sink::policy_engine::Sink;
@@ -136,7 +136,7 @@ async fn main(_spawner: Spawner) {
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_96MHZ_HSE;
     let p = hal::init(config);
 
-    let mut phy = UsbPdPhy::new_async(p.USBPD, p.PB6, p.PB7, Irq);
+    let phy = UsbPdPhy::new_async(p.USBPD, p.PB6, p.PB7, Irq);
     phy.detect_cc().unwrap();
 
     let device = Device {};

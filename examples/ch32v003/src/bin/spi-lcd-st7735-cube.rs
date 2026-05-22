@@ -12,10 +12,10 @@ use embedded_graphics::pixelcolor::raw::ToBytes;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle};
-use hal::gpio::{Level, Output, Pin};
+use hal::gpio::{Level, Output};
 use hal::prelude::*;
 use hal::spi::Spi;
-use hal::{peripherals, println};
+use hal::peripherals;
 use micromath::F32Ext;
 use qingke::riscv;
 
@@ -436,7 +436,7 @@ fn main() -> ! {
 }
 
 #[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
+fn panic(_info: &core::panic::PanicInfo) -> ! {
     // CH32V003 is so resource constrained, adding strings is a bad idea.
     // let _ = println!("\n\n\n{}", info);
 

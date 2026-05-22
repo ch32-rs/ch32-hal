@@ -8,7 +8,7 @@ use hal::Peri;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use hal::exti::ExtiInput;
-use hal::gpio::{AnyPin, Level, Output, Pin, Pull, Speed};
+use hal::gpio::{AnyPin, Level, Output, Pull, Speed};
 use hal::println;
 
 #[embassy_executor::task]

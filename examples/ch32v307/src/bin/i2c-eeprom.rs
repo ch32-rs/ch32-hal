@@ -7,7 +7,7 @@ use ch32_hal as hal;
 use hal::Peri;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use hal::gpio::{AnyPin, Level, Output, Pin, Speed};
+use hal::gpio::{AnyPin, Level, Output, Speed};
 use hal::i2c::I2c;
 use hal::mode::Blocking;
 use hal::time::Hertz;
@@ -53,13 +53,11 @@ async fn main(spawner: Spawner) -> ! {
 
     println!("init ok");
 
-    let mut i2c = I2c::new_blocking(p.I2C2, i2c_scl, i2c_sda, Hertz::khz(100), Default::default());
+    let i2c = I2c::new_blocking(p.I2C2, i2c_scl, i2c_sda, Hertz::khz(100), Default::default());
 
     // 7-bit address
     const FT24C32A_ADDR: u8 = 0b1010_000;
     // 32Kbit -> 4KByte
-
-    let mut buf = [0u8; 2];
 
     let mut eeprom = EEPROM::new(i2c, FT24C32A_ADDR);
 

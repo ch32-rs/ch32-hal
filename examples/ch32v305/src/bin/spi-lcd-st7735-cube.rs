@@ -15,11 +15,11 @@ use embedded_graphics::framebuffer::Framebuffer;
 use embedded_graphics::mono_font::ascii::FONT_9X18;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::raw::{LittleEndian, ToBytes};
-use embedded_graphics::pixelcolor::{BinaryColor, Rgb565};
+use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle};
 use embedded_hal::delay::DelayNs;
-use hal::gpio::{AnyPin, Level, Output, Pin};
+use hal::gpio::{AnyPin, Level, Output};
 use hal::prelude::*;
 use hal::spi::Spi;
 use hal::{peripherals, println};
@@ -380,7 +380,7 @@ async fn main(_spawner: Spawner) -> ! {
 
     let mut inc = true;
 
-    let mut text_style = MonoTextStyle::new(&FONT_9X18, Rgb565::CSS_TOMATO);
+    let _text_style = MonoTextStyle::new(&FONT_9X18, Rgb565::CSS_TOMATO);
 
     loop {
         for (i, [x, y, z]) in orig_points.iter().copied().enumerate() {

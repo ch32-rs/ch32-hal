@@ -6,7 +6,7 @@
 use ch32_hal::usart;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use hal::gpio::{AnyPin, Level, Output, Pin};
+use hal::gpio::{AnyPin, Level, Output};
 use hal::usart::UartTx;
 use hal::Peri;
 use {ch32_hal as hal, panic_halt as _};
@@ -36,6 +36,6 @@ async fn main(spawner: Spawner) -> ! {
     loop {
         Timer::after_millis(2000).await;
 
-        uart.blocking_write(b"hello world from embassy main\r\n").unwrap();
+        let _ = uart.blocking_write(b"hello world from embassy main\r\n").unwrap();
     }
 }

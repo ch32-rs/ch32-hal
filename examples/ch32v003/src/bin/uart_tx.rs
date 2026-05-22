@@ -20,7 +20,7 @@ fn main() -> ! {
 
     println!("dev init ok");
 
-    uart.blocking_write(b"Hello, world!\r\n").unwrap();
+    let _ = uart.blocking_write(b"Hello, world!\r\n").unwrap();
 
     let mut delay = Delay;
 
@@ -28,7 +28,7 @@ fn main() -> ! {
     loop {
         led.toggle();
 
-        uart.blocking_write(b"Hello, world!\r\n").unwrap();
+        let _ = uart.blocking_write(b"Hello, world!\r\n").unwrap();
 
         delay.delay_ms(1000);
     }

@@ -5,19 +5,17 @@
 
 use ch32_hal as hal;
 use embassy_executor::Spawner;
-use embassy_time::{Delay, Duration, Timer};
+use embassy_time::{Duration, Timer};
 use hal::adc::{SampleTime, Pga};
 use hal::gpio::{Level, Output};
 use hal::println;
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
-async fn main(spawner: Spawner) -> ! {
+async fn main(_spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_96MHZ_HSI;
     let p = hal::init(config);
-
-    let mut delay = Delay;
 
     let mut adc = hal::adc::Adc::new(p.ADC1, Default::default());
 

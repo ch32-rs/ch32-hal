@@ -166,7 +166,7 @@ pub(super) unsafe fn erase_sector_with_critical_section(sector: &FlashSector) ->
 }
 
 pub(super) fn get_sector(address: u32) -> FlashSector {
-    let mut bank_offset = 0;
+    let _bank_offset = 0;
     let index_in_region = (address - FLASH_BASE as u32) / WRITE_SIZE as u32;
     if (address as usize) < (FLASH_BASE + FLASH_SIZE) {
         return FlashSector {

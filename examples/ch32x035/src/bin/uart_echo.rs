@@ -28,7 +28,7 @@ async fn main(spawner: Spawner) -> ! {
     // GPIO
     let mut led = Output::new(p.PB12, Level::High, Default::default());
 
-    uart.blocking_write(b"ready!\r\n").unwrap();
+    let _ = uart.blocking_write(b"ready!\r\n").unwrap();
 
     // FIXME: no time slice for embassy executor
     let mut buf = [0u8; 1];
@@ -40,10 +40,10 @@ async fn main(spawner: Spawner) -> ! {
         }
 
         if buf[0] == b'\r' {
-            uart.blocking_write(b"\r\n").unwrap();
+            let _ = uart.blocking_write(b"\r\n").unwrap();
             led.toggle();
         } else {
-            uart.blocking_write(&buf).unwrap();
+            let _ = uart.blocking_write(&buf).unwrap();
         }
     }
 }

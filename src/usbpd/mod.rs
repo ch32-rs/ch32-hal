@@ -330,7 +330,7 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
         T::port_cc_reg(cc1.port_sel()).write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
         T::port_cc_reg(cc2.port_sel()).write(|w| w.set_cc_ce(vals::PortCcCe::V0_66));
 
-        let mut this = Self {
+        let this = Self {
             _marker: PhantomData,
             cc1: cc1.port_sel(),
             cc2: cc2.port_sel(),

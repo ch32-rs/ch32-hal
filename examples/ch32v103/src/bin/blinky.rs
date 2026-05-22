@@ -5,7 +5,6 @@
 
 use ch32_hal as hal;
 use hal::gpio::{Level, Output};
-use hal::println;
 use qingke::riscv;
 
 #[qingke_rt::entry]
@@ -23,7 +22,7 @@ fn main() -> ! {
 }
 
 #[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
+fn panic(_info: &core::panic::PanicInfo) -> ! {
     // let _ = println!("\n\n\n{}", info);
 
     loop {}

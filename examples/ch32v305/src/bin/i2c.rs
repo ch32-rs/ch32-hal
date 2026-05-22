@@ -8,7 +8,6 @@ use embassy_executor::Spawner;
 use embassy_time::Timer;
 use hal::gpio::{Level, Output};
 use hal::i2c::I2c;
-use hal::mode::Blocking;
 use hal::println;
 use hal::time::Hertz;
 
@@ -111,7 +110,7 @@ async fn main(spawner: Spawner) -> ! {
     let sda = p.PB11;
 
     // on APB1
-    let mut i2c_config = hal::i2c::Config::default();
+    let _i2c_config = hal::i2c::Config::default();
     //  i2c_config.scl_pullup = true;
     //i2c_config.sda_pullup = true;
     let mut i2c = I2c::new_blocking(p.I2C2, scl, sda, Hertz::hz(400_000), Default::default());

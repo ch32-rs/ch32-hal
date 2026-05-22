@@ -20,7 +20,7 @@ const BLOCK_SIZE: usize = 64;
 struct DfuDemoDevice;
 
 impl DfuHandler for DfuDemoDevice {
-    fn write_data(&mut self, offset: usize, data: &[u8]) {
+    fn write_data(&mut self, _offset: usize, _data: &[u8]) {
         // Nothing
     }
 
@@ -28,7 +28,7 @@ impl DfuHandler for DfuDemoDevice {
         // TODO: nothing
     }
 
-    fn upload(&self, buffer: &mut [u8], offset: usize) -> usize {
+    fn upload(&self, _buffer: &mut [u8], _offset: usize) -> usize {
         todo!()
     }
 
@@ -38,7 +38,7 @@ impl DfuHandler for DfuDemoDevice {
 }
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
-async fn main(spawner: Spawner) -> ! {
+async fn main(_spawner: Spawner) -> ! {
     // setup clocks
     let cfg = Config {
         rcc: ch32_hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSI,

@@ -22,7 +22,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle};
 use embedded_graphics::text::{Alignment, Text};
 use embedded_hal::delay::DelayNs;
-use hal::gpio::{AnyPin, Level, Output, Pin};
+use hal::gpio::{AnyPin, Level, Output};
 use hal::prelude::*;
 use hal::spi::Spi;
 use hal::{peripherals, println, Peri};

@@ -6,7 +6,7 @@
 use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use hal::gpio::{AnyPin, Level, Output, Pin};
+use hal::gpio::{AnyPin, Level, Output};
 use hal::println;
 use hal::Peri;
 

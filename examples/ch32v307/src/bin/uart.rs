@@ -6,7 +6,7 @@
 use ch32_hal::usart;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use hal::gpio::{AnyPin, Level, Output, Pin};
+use hal::gpio::{AnyPin, Level, Output};
 use hal::usart::UartTx;
 use hal::Peri;
 use {ch32_hal as hal, panic_halt as _};
@@ -30,12 +30,12 @@ async fn main(spawner: Spawner) -> ! {
     // GPIO
     spawner.spawn(blink(p.PA0.into()).unwrap());
 
-    let mut cfg = usart::Config::default();
+    let cfg = usart::Config::default();
     let mut uart = UartTx::new_blocking(p.USART1, p.PA9, cfg).unwrap();
 
     loop {
         Timer::after_millis(2000).await;
 
-        uart.blocking_write(b"hello world from embassy main\r\n");
+        let _ = uart.blocking_write(b"hello world from embassy main\r\n");
     }
 }
