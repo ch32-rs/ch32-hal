@@ -54,9 +54,9 @@ async fn main(spawner: Spawner) -> ! {
     println!("PCLK2: {}Hz", hal::rcc::clocks().pclk2.0);
 
     // GPIO
-    spawner.spawn(blink(p.PC9.into(), 1000)).unwrap();
-    spawner.spawn(blink(p.PB4.into(), 100)).unwrap();
-    spawner.spawn(blink(p.PB8.into(), 100)).unwrap();
+    spawner.spawn(blink(p.PC9.into(), 1000).unwrap());
+    spawner.spawn(blink(p.PB4.into(), 100).unwrap());
+    spawner.spawn(blink(p.PB8.into(), 100).unwrap());
     let mut tick = 0;
     loop {
         Timer::after_millis(1000).await;

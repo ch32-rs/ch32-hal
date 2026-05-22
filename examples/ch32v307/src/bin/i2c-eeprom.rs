@@ -66,7 +66,7 @@ async fn main(spawner: Spawner) -> ! {
     println!("init i2c ok");
 
     // GPIO
-    spawner.spawn(blink(p.PA15.into())).unwrap();
+    spawner.spawn(blink(p.PA15.into()).unwrap());
 
     for addr in 0..16 {
         eeprom.write_byte(addr, b'x').unwrap();

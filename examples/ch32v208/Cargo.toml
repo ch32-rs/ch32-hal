@@ -10,11 +10,11 @@ ch32-hal = { path = "../../", features = [
     "embassy",
     "rt",
 ], default-features = false }
-embassy-executor = { version = "0.9.1", features = [
-    "arch-spin",
+embassy-executor = { version = "0.10.0", features = [
+    "platform-spin",
     "executor-thread",
 ] }
-embassy-time = "0.5.0"
+embassy-time = "0.5.1"
 
 # This is okay because we should automatically use whatever ch32-hal uses
 qingke-rt = "0.7"
@@ -29,7 +29,7 @@ static_cell = "2.1"
 embedded-io-async = "0.7"
 portable-atomic = { version = "1", features = ["critical-section"] }
 
-embassy-futures = "0.1.1"
+embassy-futures = "0.1.2"
 heapless = "0.8.0"
 
 [profile.release]

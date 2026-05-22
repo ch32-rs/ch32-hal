@@ -31,11 +31,11 @@ embedded-can = "0.4.1"
 critical-section = { version = "1.2.0" }
 defmt = { version = "0.3.8", optional = true }
 
-embassy-sync = { version = "0.7.2" }
-embassy-futures = { version = "0.1.1" }
+embassy-sync = { version = "0.8.0" }
+embassy-futures = { version = "0.1.2" }
 embassy-time-queue-utils = { version = "0.3.0", optional = true }
 embassy-time-driver = { version = "0.2.0", optional = true }
-embassy-time = { version = "0.5.0", optional = true }
+embassy-time = { version = "0.5.1", optional = true }
 embassy-usb-driver = "0.2.0"
 embassy-net-driver = "0.2.0"
 embassy-net-driver-channel = "0.4.0"

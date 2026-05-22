@@ -34,7 +34,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // let mut led = Output::new(p.PB1, Level::Low, Default::default());
 
-    spawner.spawn(blink(p.PB1.into(), 110)).unwrap();
+    spawner.spawn(blink(p.PB1.into(), 110).unwrap());
 
     loop {
         Timer::after_millis(1000).await;

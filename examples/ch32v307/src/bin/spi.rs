@@ -30,7 +30,7 @@ async fn main(spawner: Spawner) -> ! {
     let p = hal::init(Default::default());
 
     // GPIO
-    spawner.spawn(blink(p.PA0.into())).unwrap();
+    spawner.spawn(blink(p.PA0.into()).unwrap());
     let (sck, miso, mosi) = (p.PA5, p.PA6, p.PA7);
 
     let mut spi_config = spi::Config::default();

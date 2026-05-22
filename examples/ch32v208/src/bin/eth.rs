@@ -71,8 +71,8 @@ async fn main(spawner: Spawner) -> ! {
     let config = embassy_net::Config::dhcpv4(Default::default());
     let (stack, net_runner) = embassy_net::new(device, config, RESOURCES.init(StackResources::new()), seed);
 
-    spawner.spawn(ethernet_task(runner)).unwrap();
-    spawner.spawn(net_task(net_runner)).unwrap();
+    spawner.spawn(ethernet_task(runner).unwrap());
+    spawner.spawn(net_task(net_runner).unwrap());
 
     println!("Waiting for DHCP...");
     stack.wait_config_up().await;

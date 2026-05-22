@@ -28,7 +28,7 @@ async fn main(spawner: Spawner) -> ! {
     let p = hal::init(Default::default());
 
     // GPIO
-    spawner.spawn(blink(p.PA0.into())).unwrap();
+    spawner.spawn(blink(p.PA0.into()).unwrap());
 
     let mut cfg = usart::Config::default();
     let mut uart = UartTx::new_blocking(p.USART1, p.PA9, cfg).unwrap();

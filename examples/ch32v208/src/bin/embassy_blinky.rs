@@ -32,8 +32,8 @@ async fn main(spawner: Spawner) -> ! {
     println!("Clocks: {:?}", hal::rcc::clocks());
 
     // Spawn blink tasks with different intervals
-    spawner.spawn(blink(p.PB8.into(), 500)).unwrap();
-    spawner.spawn(blink(p.PB9.into(), 200)).unwrap();
+    spawner.spawn(blink(p.PB8.into(), 500).unwrap());
+    spawner.spawn(blink(p.PB9.into(), 200).unwrap());
 
     let mut tick = 0u32;
     loop {

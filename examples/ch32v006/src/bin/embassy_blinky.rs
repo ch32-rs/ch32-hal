@@ -30,8 +30,8 @@ async fn main(spawner: Spawner) -> ! {
     println!("CHIP signature => {}", hal::signature::chip_id().name());
     println!("Clocks {:?}", hal::rcc::clocks());
 
-    spawner.spawn(blink(p.PD6.into(), 110)).unwrap();
-    spawner.spawn(blink(p.PA4.into(), 270)).unwrap();
+    spawner.spawn(blink(p.PD6.into(), 110).unwrap());
+    spawner.spawn(blink(p.PA4.into(), 270).unwrap());
 
     loop {
         Timer::after_millis(1000).await;

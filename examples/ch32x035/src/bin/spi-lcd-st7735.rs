@@ -301,7 +301,7 @@ async fn main(spawner: Spawner) -> ! {
     println!("display init ok");
 
     // GPIO, // T1C4
-    spawner.spawn(blink(led.into())).unwrap();
+    spawner.spawn(blink(led.into()).unwrap());
 
     display.clear(Rgb565::BLACK).unwrap();
 

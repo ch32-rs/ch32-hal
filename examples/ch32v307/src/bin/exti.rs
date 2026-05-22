@@ -34,7 +34,7 @@ async fn main(spawner: Spawner) -> ! {
     ei.wait_for_falling_edge().await;
 
     // GPIO
-    spawner.spawn(blink(p.PA15.into())).unwrap();
+    spawner.spawn(blink(p.PA15.into()).unwrap());
 
     loop {
         Timer::after(Duration::from_millis(1000)).await;

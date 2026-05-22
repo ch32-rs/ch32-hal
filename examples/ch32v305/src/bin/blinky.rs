@@ -26,8 +26,8 @@ async fn main(spawner: Spawner) -> ! {
     let p = hal::init(Default::default());
 
     // GPIO
-    spawner.spawn(blink(p.PC9.into(), 400)).unwrap();
-    // spawner.spawn(blink(p.PB8.into(), 100)).unwrap();
+    spawner.spawn(blink(p.PC9.into(), 400).unwrap());
+    // spawner.spawn(blink(p.PB8.into(), 100).unwrap());
     loop {
         Timer::after_millis(2000).await;
     }

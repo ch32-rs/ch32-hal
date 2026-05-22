@@ -29,7 +29,7 @@ async fn main(spawner: Spawner) -> ! {
 
 
     // GPIO
-    spawner.spawn(blink(p.PB12.into(), 1000)).unwrap();
+    spawner.spawn(blink(p.PB12.into(), 1000).unwrap());
 
     loop {
         Timer::after_millis(2000).await;

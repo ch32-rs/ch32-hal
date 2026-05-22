@@ -56,7 +56,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // GPIO
     // let mut led = Output::new(p.PB12, Level::High, Default::default());
-    spawner.spawn(blink(p.PB12.into(), 1000)).unwrap();
+    spawner.spawn(blink(p.PB12.into(), 1000).unwrap());
 
     let buf = b"Hello World\r\n";
     loop {

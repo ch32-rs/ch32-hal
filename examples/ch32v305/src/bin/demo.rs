@@ -35,7 +35,7 @@ async fn main(spawner: Spawner) -> ! {
     let p = hal::init(config);
 
     // GPIO
-    spawner.spawn(blink(p.PA15.into(), 500)).unwrap();
+    spawner.spawn(blink(p.PA15.into(), 500).unwrap());
     let mut last = pac::SYSTICK.cnt().read();
     loop {
         Timer::after_millis(1000).await;

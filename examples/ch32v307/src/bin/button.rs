@@ -33,7 +33,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let led = Output::new(p.PA15, Level::Low, Speed::default());
 
-    spawner.spawn(blink(led)).unwrap();
+    spawner.spawn(blink(led).unwrap());
 
     loop {
         if button.is_low() {
