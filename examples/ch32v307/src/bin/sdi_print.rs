@@ -24,9 +24,6 @@ fn main() -> ! {
     loop {
         println!("hello world!");
 
-        unsafe {
-            // qingke::riscv::asm::delay(10_000_000);
-            hal::delay::Delay.delay_ms(1000);
-        }
+        hal::delay::Delay.delay_ms(1000);
     }
 }

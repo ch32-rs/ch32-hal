@@ -119,6 +119,7 @@ pub(super) unsafe fn write_chunk_unlocked(address: u32, chunk: &[u8]) -> Result<
     family::blocking_write(address, unwrap!(chunk.try_into()))
 }
 
+#[allow(unused)]
 pub(super) unsafe fn write_chunk_with_critical_section(address: u32, chunk: &[u8]) -> Result<(), Error> {
     critical_section::with(|_| write_chunk_unlocked(address, chunk))
 }
@@ -161,6 +162,7 @@ pub(super) unsafe fn erase_sector_unlocked(sector: &FlashSector) -> Result<(), E
     family::blocking_erase_sector(sector)
 }
 
+#[allow(unused)]
 pub(super) unsafe fn erase_sector_with_critical_section(sector: &FlashSector) -> Result<(), Error> {
     critical_section::with(|_| erase_sector_unlocked(sector))
 }

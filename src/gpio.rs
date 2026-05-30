@@ -73,6 +73,7 @@ impl From<Pull> for vals::Cnf {
 
 impl Pull {
     #[inline]
+    #[allow(unused)]
     fn to_cnf(&self) -> u8 {
         match self {
             Pull::None => 0b01,
