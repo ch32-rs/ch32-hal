@@ -66,7 +66,7 @@ async fn main(spawner: Spawner) -> ! {
     static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
     let (stack, runner) = embassy_net::new(device, net_config, RESOURCES.init(StackResources::new()), seed);
 
-    spawner.spawn(net_task(runner)).unwrap();
+    spawner.spawn(net_task(runner).unwrap());
 
     println!("Waiting for link...");
     loop {
