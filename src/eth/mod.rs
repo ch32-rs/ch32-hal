@@ -2,13 +2,15 @@
 #![macro_use]
 
 #[cfg_attr(eth_10m, path = "v10m/mod.rs")]
-#[cfg_attr(eth_v1, path = "v1/mod.rs")]
+#[cfg_attr(any(eth_v1, emac_v1), path = "v1/mod.rs")]
 mod _version;
 
+#[cfg(eth)]
 pub mod generic_smi;
 
 pub use self::_version::*;
 
+#[cfg(eth)]
 #[allow(unused)]
 const MTU: usize = 1514;
 
@@ -17,6 +19,7 @@ const MTU: usize = 1514;
 /// # Safety
 ///
 /// The methods cannot move out of self
+#[cfg(eth)]
 pub unsafe trait StationManagement {
     /// Read a register over SMI.
     fn smi_read(&mut self, phy_addr: u8, reg: u8) -> u16;
@@ -29,6 +32,7 @@ pub unsafe trait StationManagement {
 /// # Safety
 ///
 /// The methods cannot move S
+#[cfg(eth)]
 pub unsafe trait PHY {
     /// Reset PHY and wait for it to come out of reset.
     fn phy_reset<S: StationManagement>(&mut self, sm: &mut S);
@@ -36,17 +40,21 @@ pub unsafe trait PHY {
     fn link_up<S: StationManagement>(&mut self, sm: &mut S) -> bool;
 }
 
+#[cfg(eth)]
 trait SealedInstance {
     fn regs() -> crate::pac::eth::Eth;
 }
 
 /// Ethernet instance.
 #[allow(private_bounds)]
+#[cfg(eth)]
 pub trait Instance: SealedInstance + Send + 'static {}
 
+#[cfg(eth)]
 impl SealedInstance for crate::peripherals::ETH {
     fn regs() -> crate::pac::eth::Eth {
         crate::pac::ETH
     }
 }
+#[cfg(eth)]
 impl Instance for crate::peripherals::ETH {}
