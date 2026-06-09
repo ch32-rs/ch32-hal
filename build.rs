@@ -81,6 +81,8 @@ fn main() {
         }
     }
 
+    println!("cargo:rustc-check-cfg=cfg(afio)");
+
     let mut gpio_lines = 16;
     match &*chip_family {
         "ch32v0" | "ch32m0" => {
@@ -291,20 +293,9 @@ fn main() {
             });
         }
 
-        if let Some(remap) = &p.remap {
-            let remap_reg = format_ident!("{}", remap.register.to_ascii_lowercase());
-            let set_remap_field = format_ident!("set_{}", remap.field.to_ascii_lowercase());
-
-            g.extend(quote! {
-                impl crate::peripheral::SealedRemapPeripheral for peripherals::#pname {
-                    fn set_remap(remap: u8) {
-                        crate::pac::AFIO.#remap_reg().modify(|w| w.#set_remap_field(unsafe { core::mem::transmute(remap) }));
-                    }
-                }
-
-                impl crate::peripheral::RemapPeripheral for peripherals::#pname {}
-            });
-        }
+        // peripheral.remap is now consumed by pin_trait_afio_impl! emission
+        // below — pins carry the remap value via marker types, so no
+        // peripheral-level set_remap shim is generated.
 
         // TODO
         if let Some(regs) = &p.registers {
@@ -401,23 +392,46 @@ fn main() {
     ]
     .into();
 
+    let peripherals_with_afio = ["USART", "UART", "SPI", "I2C", "CAN", "TIM"];
+
+    // ch32-data lists a pin once per remap group it belongs to. With no
+    // central remap available (RemapNotApplicable branch), all those entries
+    // would collapse onto the same `impl Trait<Peri, RemapNotApplicable>`
+    // and trip E0119. Dedup by (peripheral, kind, pin).
+    let mut emitted_na: HashSet<(&'static str, &'static str, &'static str)> = HashSet::new();
+
     for p in METADATA.peripherals {
         if let Some(regs) = &p.registers {
             for pin in p.pins {
                 let key = (regs.kind, pin.signal);
 
-                // singnals and pins
                 if let Some(tr) = signals.get(&key) {
                     let peri = format_ident!("{}", p.name);
                     let pin_name = format_ident!("{}", pin.pin);
+                    let af = pin.remap.unwrap_or(0);
+                    let in_afio_list = peripherals_with_afio.iter().any(|&x| p.name.starts_with(x));
 
-                    let remap = pin.remap.unwrap_or(0);
+                    let pin_trait_impl = match (&p.remap, in_afio_list) {
+                        (Some(remap), _) => pin.remap.map(|val| {
+                            let reg = format_ident!("{}", remap.register.to_ascii_lowercase());
+                            let setter = format_ident!("set_{}", remap.field.to_ascii_lowercase());
+                            let type_and_values = if is_bool_field("AFIO", remap.register, remap.field) {
+                                let b = val != 0;
+                                quote!(AfioRemapBool, [#b])
+                            } else {
+                                quote!(AfioRemap, [#val])
+                            };
+                            quote!(pin_trait_afio_impl!(#tr, #peri, #pin_name, {#reg, #setter, #type_and_values});)
+                        }),
+                        (None, true) if emitted_na.insert((p.name, regs.kind, pin.pin)) => {
+                            let na = quote!(, crate::gpio::AfioRemapNotApplicable);
+                            Some(quote!(pin_trait_impl!(#tr, #peri, #pin_name, #af #na);))
+                        }
+                        (None, false) => Some(quote!(pin_trait_impl!(#tr, #peri, #pin_name, #af);)),
+                        _ => None,
+                    };
 
-                    g.extend(quote! {
-                        pin_trait_impl!(#tr, #peri, #pin_name, #remap);
-                    });
-
-                    // panic!("{} {}", peri, pin_name);
+                    g.extend(pin_trait_impl);
                 }
 
                 // ADC pin is special
@@ -722,4 +736,20 @@ macro_rules! {} {{
 }}"
     )
     .unwrap();
+}
+
+/// Returns true if the AFIO peripheral's `register.field` is a 1-bit field
+/// (chiptool emits `bool` setter) versus a multi-bit field (`u8` setter).
+/// Used to pick `AfioRemapBool<V>` vs `AfioRemap<V>` markers for pin trait impls.
+fn is_bool_field(peripheral: &str, register: &str, field: &str) -> bool {
+    let field_metadata = METADATA
+        .peripherals
+        .iter()
+        .filter(|p| p.name == peripheral)
+        .flat_map(|p| p.registers.as_ref().unwrap().ir.fieldsets.iter())
+        .filter(|f| f.name.eq_ignore_ascii_case(register))
+        .flat_map(|f| f.fields.iter())
+        .find(|f| f.name.eq_ignore_ascii_case(field))
+        .expect("AFIO remap field not found in peripheral metadata");
+    field_metadata.bit_size == 1
 }
