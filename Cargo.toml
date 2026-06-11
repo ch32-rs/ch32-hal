@@ -15,7 +15,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 ch32-metapac = { features = [
     "rt",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "23d667214e30fae690c739d27efca4cfe0e042d0" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "689428dcfe8071f3f2c0a84db2a90d8562836a28" }
 
 qingke = { version = "0.7", features = ["critical-section-impl"] }
 qingke-rt = { version = "0.7", optional = true }
@@ -56,7 +56,7 @@ embedded-storage = "0.3.1"
 [build-dependencies]
 ch32-metapac = { features = [
     "metadata",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "23d667214e30fae690c739d27efca4cfe0e042d0" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "689428dcfe8071f3f2c0a84db2a90d8562836a28" }
 
 proc-macro2 = "1.0"
 quote = "1.0"
@@ -173,3 +173,11 @@ ch32x035g8u6 = ["ch32-metapac/ch32x035g8u6", "qingke-rt/v4"]
 ch32x035r8t6 = ["ch32-metapac/ch32x035r8t6", "qingke-rt/v4"]
 ch641 = ["ch32-metapac/ch641", "qingke-rt/v2"]
 ch643 = ["ch32-metapac/ch643", "qingke-rt/v4"]
+
+# H4 chip features — paired with ch32-data's CH32H4 family definitions.
+# Cores: V3F (qingke-v3f, hart 0, control core) and V5F (qingke-v5f, hart
+# 1, compute core with FP + ICache). Only the AFIO + GPIO + USART
+# scaffolding is wired up via this PR; ADC/DAC/DMA/USBPD/RCC drivers still
+# need H4-specific porting (separate follow-up PRs).
+ch32h417qeu6-v3f = ["ch32-metapac/ch32h417qeu6-qingke-v3f", "qingke-rt/v3f"]
+ch32h417qeu6-v5f = ["ch32-metapac/ch32h417qeu6-qingke-v5f", "qingke-rt/v5f"]

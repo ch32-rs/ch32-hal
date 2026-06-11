@@ -13,11 +13,5 @@ pub(crate) trait SealedRccPeripheral {
     }
 }
 
-pub(crate) trait SealedRemapPeripheral {
-    fn set_remap(remap: u8);
-}
-
 #[allow(private_bounds)]
 pub trait RccPeripheral: SealedRccPeripheral + 'static {}
-#[allow(private_bounds)]
-pub trait RemapPeripheral: SealedRemapPeripheral + 'static {}
