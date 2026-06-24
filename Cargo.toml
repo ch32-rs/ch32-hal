@@ -62,7 +62,7 @@ proc-macro2 = "1.0"
 quote = "1.0"
 
 [features]
-default = ["embassy", "rt", "exti"]
+default = ["embassy", "rt", "exti", "dma-isrs"]
 rt = ["dep:qingke-rt", "rt-wfi"]
 highcode = ["qingke-rt/highcode"]
 embassy = [
@@ -74,6 +74,8 @@ defmt = ["dep:defmt"]
 memory-x = ["ch32-metapac/memory-x"]
 ## Built-in EXTI driver and interrupt handlers. Disable to provide your own.
 exti = []
+## Built-in DMA channel ISRs. Disable to provide your own handlers; the async DMA APIs will then have no way to wake their wakers.
+dma-isrs = []
 
 
 # Features starting with `_` are for internal use only. They're not intended

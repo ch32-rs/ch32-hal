@@ -9,6 +9,7 @@ ch32-hal = { path = "../../", features = [
     "memory-x",
     "embassy",
     "rt",
+    "dma-isrs",
 ], default-features = false }
 embassy-executor = { version = "0.10.0", features = [
     "platform-spin",

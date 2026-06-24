@@ -628,7 +628,7 @@ fn main() {
             let channels = channels.iter().map(|c| format_ident!("{}", c));
 
             quote! {
-                #[cfg(feature = "rt")]
+                #[cfg(all(feature = "rt", feature = "dma-isrs"))]
                 #[qingke_rt::interrupt]
                 unsafe fn #irq () {
                     #(
