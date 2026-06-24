@@ -397,7 +397,16 @@ impl<'d, T: Instance> embassy_usb_driver::Bus for Bus<'d, T> {
                 T::dregs().ep_config().modify(|v| v.set_r_en(index - 1, enabled));
                 T::dregs().ep_rx_ctrl(index).write(|v| {
                     v.set_mask_uep_r_tog(EpTog::DATA0);
-                    v.set_mask_uep_r_res(EpRxResponse::NAK);
+                    // Make OUT endpoints ready as soon as the selected
+                    // configuration enables them. Embassy drivers such as RP2040
+                    // mark OUT buffers available in endpoint_set_enabled(), and
+                    // hosts may send the first OUT packet immediately after the
+                    // SET_CONFIGURATION status stage.
+                    v.set_mask_uep_r_res(if enabled {
+                        EpRxResponse::ACK
+                    } else {
+                        EpRxResponse::NAK
+                    });
                     v.set_r_tog_auto(false);
                 });
             }
