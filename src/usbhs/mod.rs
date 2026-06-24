@@ -342,6 +342,10 @@ impl<'d, T: Instance> Bus<'d, T> {
         d.ep_config().write_value(EpConfig::default());
         d.ep_type().write_value(EpType::default());
         d.ep_buf_mod().write_value(EpBufMod::default());
+
+        for waker in EP_WAKERS.iter() {
+            waker.wake();
+        }
     }
 }
 
