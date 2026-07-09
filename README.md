@@ -41,7 +41,7 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 | UART\*     | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ❓    | ❓    |
 | SPI\*      | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | N/A   | ❓    |
 | SDIO\*     | ✅    | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
-| I2C        | ✅    | ✅  | ✅   | ❓   | ❓   | ❓   | ❓    | ❓    |
+| I2C\*      | ✅    | ✅  | ✅   | ❓   | ❓   | ❓   | ❓    | ❓    |
 | ADC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
 | DAC\*      | ✅    | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
 | FLASH      | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
