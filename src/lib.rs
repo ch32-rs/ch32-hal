@@ -118,8 +118,13 @@ pub mod usart;
 /// Common structures for USB drivers
 pub mod usb;
 
-#[cfg(otg)]
+#[cfg(any(otg, usb_x0fs))]
 pub mod otg_fs;
+
+#[cfg(any(otg, usb_x0fs))]
+pub mod usbfs {
+    pub use crate::otg_fs::*;
+}
 
 #[cfg(usbd)]
 pub mod usbd;
