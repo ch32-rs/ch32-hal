@@ -10,6 +10,7 @@ use embassy_hal_internal::drop::OnDrop;
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::interrupt::typelevel::Interrupt;
+pub use crate::mode::{Async, Blocking};
 use crate::pac::adc::vals;
 #[cfg(adc_v3)]
 pub use crate::pac::adc::vals::Pga;
@@ -56,11 +57,6 @@ impl State {
     }
 }
 
-/// Blocking ADC mode.
-pub enum Blocking {}
-/// Async ADC mode.
-pub enum Async {}
-
 /// ADC interrupt handler.
 pub struct InterruptHandler<T: Instance> {
     _phantom: PhantomData<T>,
@@ -76,13 +72,13 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 }
 
 /// Analog to Digital driver.
-pub struct Adc<'d, T: Instance, MODE = Blocking> {
+pub struct Adc<'d, T: Instance, MODE: crate::mode::Mode = Blocking> {
     #[allow(unused)]
     adc: Peri<'d, T>,
     _mode: PhantomData<MODE>,
 }
 
-impl<'d, T: Instance, MODE> Adc<'d, T, MODE> {
+impl<'d, T: Instance, MODE: crate::mode::Mode> Adc<'d, T, MODE> {
     fn new_inner(adc: Peri<'d, T>, config: Config) -> Self {
         T::enable_and_reset();
 
