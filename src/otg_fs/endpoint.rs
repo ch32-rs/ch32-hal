@@ -1,11 +1,10 @@
 use core::marker::PhantomData;
 use core::task::Poll;
 
-use ch32_metapac::otg::vals::{EpRxResponse, EpTxResponse, UsbToken};
-use embassy_usb_driver::{Direction, EndpointError, EndpointInfo};
+use embassy_usb_driver::{EndpointError, EndpointInfo};
 use futures::future::poll_fn;
 
-use super::{Instance, EP_MAX_PACKET_SIZE, EP_WAKERS};
+use super::{EpRxResponse, EpTxResponse, Instance, UsbToken, EP_MAX_PACKET_SIZE, EP_WAKERS};
 use crate::interrupt::typelevel::Interrupt;
 use crate::usb::{Dir, EndpointData, In, Out};
 
@@ -18,9 +17,7 @@ pub struct Endpoint<'d, T, D, const SIZE: usize> {
 
 impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
     pub(crate) fn new(info: EndpointInfo, data: EndpointData<'d, SIZE>) -> Self {
-        T::regs()
-            .uep_dma(info.addr.index() as usize)
-            .write_value(data.buffer.addr() as u32);
+        T::set_ep_dma(info.addr.index(), data.buffer.addr() as u32);
         Self {
             _phantom: PhantomData,
             info,
@@ -42,28 +39,7 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
     }
 
     fn is_enabled(&self) -> bool {
-        let regs = T::regs();
-        match (self.info.addr.index(), self.info.addr.direction()) {
-            (4, Direction::In) => regs.uep4_1_mod().read().uep4_tx_en(),
-            (4, Direction::Out) => regs.uep4_1_mod().read().uep4_rx_en(),
-            (1, Direction::In) => regs.uep4_1_mod().read().uep1_tx_en(),
-            (1, Direction::Out) => regs.uep4_1_mod().read().uep1_rx_en(),
-
-            (2, Direction::In) => regs.uep2_3_mod().read().uep2_tx_en(),
-            (2, Direction::Out) => regs.uep2_3_mod().read().uep2_rx_en(),
-            (3, Direction::In) => regs.uep2_3_mod().read().uep3_tx_en(),
-            (3, Direction::Out) => regs.uep2_3_mod().read().uep3_rx_en(),
-
-            (5, Direction::In) => regs.uep5_6_mod().read().uep5_tx_en(),
-            (5, Direction::Out) => regs.uep5_6_mod().read().uep5_rx_en(),
-            (6, Direction::In) => regs.uep5_6_mod().read().uep6_tx_en(),
-            (6, Direction::Out) => regs.uep5_6_mod().read().uep6_rx_en(),
-
-            (7, Direction::In) => regs.uep7_mod().read().uep7_tx_en(),
-            (7, Direction::Out) => regs.uep7_mod().read().uep7_rx_en(),
-
-            _ => panic!("Unsupported EP"),
-        }
+        T::ep_is_enabled(self.info.addr.index(), self.info.addr.direction())
     }
 }
 
@@ -90,11 +66,8 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointIn for Endp
 
         // Write buffer, txLen, and ACK
         self.data.buffer.write_volatile(buf);
-        regs.uep_t_len(ep).write_value(buf.len() as u8);
-        regs.uep_tx_ctrl(ep).modify(|v| {
-            v.set_t_tog(!v.t_tog());
-            v.set_mask_t_res(EpTxResponse::ACK);
-        });
+        T::set_ep_tx_len(ep, buf.len() as u8);
+        T::toggle_ep_tx_response(ep, EpTxResponse::ACK);
 
         // Wait for TX complete
         let tx_result = poll_fn(|ctx| {
@@ -106,9 +79,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointIn for Endp
                     let token = status.mask_token();
                     let ret = match token {
                         UsbToken::IN => {
-                            regs.uep_tx_ctrl(ep).modify(|v| {
-                                v.set_mask_t_res(EpTxResponse::NAK);
-                            });
+                            T::set_ep_tx_response(ep, EpTxResponse::NAK);
                             Poll::Ready(Ok(()))
                         }
                         token => {
@@ -146,10 +117,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
 
         // Tx Ctrl should be NAK
 
-        regs.uep_rx_ctrl(ep).modify(|v| {
-            v.set_r_tog(!v.r_tog());
-            v.set_mask_r_res(EpRxResponse::ACK);
-        });
+        T::toggle_ep_rx_response(ep, EpRxResponse::ACK);
 
         // poll for packet
         let bytes_read = poll_fn(|ctx| {
@@ -161,7 +129,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
                     let ret = match status.mask_token() {
                         UsbToken::OUT => {
                             // upper bits are reserved (0)
-                            let len = regs.rx_len().read().0 as usize;
+                            let len = T::ep_rx_len();
 
                             self.data.buffer.read_volatile(&mut buf[..len]);
                             Poll::Ready(Ok(len))
@@ -172,9 +140,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
                         }
                     };
 
-                    regs.uep_rx_ctrl(ep).modify(|v| {
-                        v.set_mask_r_res(EpRxResponse::NAK);
-                    });
+                    T::set_ep_rx_response(ep, EpRxResponse::NAK);
                     regs.int_fg().write(|v| v.set_transfer(true));
                     ret
                 } else {
@@ -228,8 +194,8 @@ where
                     match int_status.mask_token() {
                         UsbToken::SETUP => {
                             // SETUP packet token
-                            regs.uep_tx_ctrl(0).write(|w| w.set_mask_t_res(EpTxResponse::NAK));
-                            regs.uep_rx_ctrl(0).write(|w| w.set_mask_r_res(EpRxResponse::NAK));
+                            T::set_ep_tx_response(0, EpTxResponse::NAK);
+                            T::set_ep_rx_response(0, EpRxResponse::NAK);
 
                             let mut data = [0u8; 8];
                             self.ep0_buf.buffer.read_volatile(&mut data[..8]);
@@ -258,15 +224,9 @@ where
         }
 
         if first {
-            regs.uep_rx_ctrl(0).write(|v| {
-                v.set_r_tog(true);
-                v.set_mask_r_res(EpRxResponse::ACK);
-            })
+            T::set_ep_rx_toggle_response(0, true, EpRxResponse::ACK);
         } else {
-            regs.uep_rx_ctrl(0).modify(|v| {
-                v.set_r_tog(!v.r_tog());
-                v.set_mask_r_res(EpRxResponse::ACK);
-            });
+            T::toggle_ep_rx_response(0, EpRxResponse::ACK);
         }
 
         // poll for packet
@@ -278,11 +238,9 @@ where
                 if status.mask_uis_endp() == 0 {
                     let res = match status.mask_token() {
                         UsbToken::OUT => {
-                            let len = regs.rx_len().read().0 as usize;
+                            let len = T::ep_rx_len();
                             self.ep0_buf.buffer.read_volatile(&mut buf[..len]);
-                            regs.uep_rx_ctrl(0).modify(|v| {
-                                v.set_mask_r_res(EpRxResponse::NAK);
-                            });
+                            T::set_ep_rx_response(0, EpRxResponse::NAK);
                             Poll::Ready(Ok(len))
                         }
                         UsbToken::RSVD | UsbToken::IN | UsbToken::SETUP => unreachable!(),
@@ -313,18 +271,12 @@ where
 
         self.ep0_buf.buffer.write_volatile(data);
         // TODO: manual is wrong here, t_len(3) should be a u16
-        regs.uep_t_len(0).write_value(data.len() as u8);
+        T::set_ep_tx_len(0, data.len() as u8);
 
         if first {
-            regs.uep_tx_ctrl(0).write(|v| {
-                v.set_mask_t_res(EpTxResponse::ACK);
-                v.set_t_tog(true);
-            });
+            T::set_ep_tx_toggle_response(0, true, EpTxResponse::ACK);
         } else {
-            regs.uep_tx_ctrl(0).modify(|v| {
-                v.set_mask_t_res(EpTxResponse::ACK);
-                v.set_t_tog(!v.t_tog());
-            });
+            T::toggle_ep_tx_response(0, EpTxResponse::ACK);
         }
 
         // Poll for last packet to finsh transfer
@@ -337,9 +289,7 @@ where
                     if status.mask_uis_endp() == 0 {
                         let res = match status.mask_token() {
                             UsbToken::IN => {
-                                regs.uep_tx_ctrl(0).modify(|v| {
-                                    v.set_mask_t_res(EpTxResponse::NAK);
-                                });
+                                T::set_ep_tx_response(0, EpTxResponse::NAK);
                                 Poll::Ready(Ok(()))
                             }
                             token => {
@@ -363,11 +313,8 @@ where
         .await?;
 
         if last {
-            regs.uep_rx_ctrl(0).write(|v| {
-                // Set RX to true to expect the STATUS (OUT) packet
-                v.set_mask_r_res(EpRxResponse::ACK);
-                v.set_r_tog(true);
-            });
+            // Set RX to true to expect the STATUS (OUT) packet
+            T::set_ep_rx_toggle_response(0, true, EpRxResponse::ACK);
 
             // Expect the empty OUT token for status
             poll_fn(|ctx| {
@@ -378,14 +325,12 @@ where
                     if status.mask_uis_endp() == 0 {
                         let res = match status.mask_token() {
                             UsbToken::OUT => {
-                                if regs.rx_len().read().0 != 0 {
+                                if T::ep_rx_len() != 0 {
                                     error!("Expected 0 len OUT stage, found non-zero len, aborting");
                                     Poll::Ready(Err(EndpointError::BufferOverflow))
                                 } else {
                                     // Set the EP back to NAK so that we are "not ready to recieve"
-                                    regs.uep_rx_ctrl(0).modify(|v| {
-                                        v.set_mask_r_res(EpRxResponse::NAK);
-                                    });
+                                    T::set_ep_rx_response(0, EpRxResponse::NAK);
                                     Poll::Ready(Ok(()))
                                 }
                             }
@@ -418,11 +363,8 @@ where
         let regs = T::regs();
 
         // Rx should already be NAK
-        regs.uep_t_len(0).write_value(0);
-        regs.uep_tx_ctrl(0).write(|v| {
-            v.set_t_tog(true);
-            v.set_mask_t_res(EpTxResponse::ACK);
-        });
+        T::set_ep_tx_len(0, 0);
+        T::set_ep_tx_toggle_response(0, true, EpTxResponse::ACK);
 
         poll_fn(|ctx| {
             super::EP_WAKERS[0].register(ctx.waker());
@@ -433,9 +375,7 @@ where
                     match status.mask_token() {
                         UsbToken::IN => {
                             // Maybe stall? and unstall when we actually set addr
-                            regs.uep_tx_ctrl(0).write(|v| {
-                                v.set_mask_t_res(EpTxResponse::NAK);
-                            });
+                            T::set_ep_tx_response(0, EpTxResponse::NAK);
                             regs.int_fg().write(|v| v.set_transfer(true));
                         }
                         token => panic!("Token = {}", token.to_bits()),
@@ -454,13 +394,8 @@ where
     }
 
     async fn reject(&mut self) {
-        let regs = T::regs();
-        regs.uep_rx_ctrl(0).write(|v| {
-            v.set_mask_r_res(EpRxResponse::STALL);
-        });
-        regs.uep_tx_ctrl(0).write(|v| {
-            v.set_mask_t_res(EpTxResponse::STALL);
-        });
+        T::set_ep_rx_response(0, EpRxResponse::STALL);
+        T::set_ep_tx_response(0, EpTxResponse::STALL);
     }
 
     async fn accept_set_address(&mut self, addr: u8) {
