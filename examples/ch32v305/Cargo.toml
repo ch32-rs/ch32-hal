@@ -14,7 +14,9 @@ embassy-executor = { version = "0.10.0", features = [
     "platform-spin",
     "executor-thread",
 ] }
+embassy-futures = "0.1.2"
 embassy-time = "0.5.1"
+embassy-usb = "0.5.1"
 
 qingke-rt = "0.7"
 qingke = "0.7"
