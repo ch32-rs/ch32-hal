@@ -135,10 +135,11 @@ where
     }
 
     fn find_free_ep_address(&self, _dir: Direction) -> Result<u8, embassy_usb_driver::EndpointAllocError> {
-        // Skip index 0 which is reserved for control endpoint
+        // Endpoint 0 is reserved for the control pipe. Match the Embassy USB
+        // drivers by only auto-allocating non-control endpoints from index 1.
         Ok(self
             .allocated
-            .next_false_index(0)
+            .next_false_index(1)
             .ok_or(embassy_usb_driver::EndpointAllocError)? as u8)
     }
 
@@ -158,7 +159,9 @@ where
                 }
 
                 let ep_num = addr.index();
-                if ep_num >= MAX_NR_EP {
+                // Endpoint 0 is allocated by start() for the control pipe, so
+                // class endpoint allocation must never claim it explicitly.
+                if ep_num == 0 || ep_num >= MAX_NR_EP {
                     return Err(embassy_usb_driver::EndpointAllocError);
                 }
 

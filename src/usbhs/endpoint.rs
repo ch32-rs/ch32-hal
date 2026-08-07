@@ -62,6 +62,10 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
         poll_fn(|ctx| {
             super::EP_WAKERS[index].register(ctx.waker());
 
+            if index != 0 && !self.is_enabled() {
+                return Poll::Ready(Err(EndpointError::Disabled));
+            }
+
             let transfer = d.int_fg().read().transfer();
             let status = r.int_st().read();
             if transfer && status.endp() == index as u8 {
@@ -121,6 +125,10 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
 
         poll_fn(|ctx| {
             EP_WAKERS[index].register(ctx.waker());
+
+            if index != 0 && !self.is_enabled() {
+                return Poll::Ready(Err(EndpointError::Disabled));
+            }
 
             let transfer = d.int_fg().read().transfer();
             let status = r.int_st().read();
