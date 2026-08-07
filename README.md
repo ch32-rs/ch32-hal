@@ -40,8 +40,12 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 | EXTI\*     | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
 | UART\*     | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ❓    | ❓    |
 | SPI\*      | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | N/A   | ❓    |
-| I2C        | ✅    | ✅  | ✅   | ❓   | ❓   | ❓   | ❓    | ❓    |
+| SDIO\*     | ✅    | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
+| I2C\*      | ✅    | ✅  | ✅   | ❓   | ❓   | ❓   | ❓    | ❓    |
 | ADC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
+| DAC\*      | ✅    | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
+| FLASH      | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
+| RNG\*      | ✅    | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
 | Timer(PWM) | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ✅    | ✅    |
 | USBD       | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
 | USB/OTG FS | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
