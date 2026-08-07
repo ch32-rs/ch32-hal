@@ -2,15 +2,20 @@
 
 #![macro_use]
 
+use core::future::poll_fn;
 use core::marker::PhantomData;
+use core::task::Poll;
 
+use embassy_hal_internal::drop::OnDrop;
 use embassy_sync::waitqueue::AtomicWaker;
 
+use crate::interrupt::typelevel::Interrupt;
+pub use crate::mode::{Async, Blocking};
 use crate::pac::adc::vals;
 #[cfg(adc_v3)]
 pub use crate::pac::adc::vals::Pga;
 pub use crate::pac::adc::vals::SampleTime;
-use crate::{peripherals, Peri};
+use crate::{interrupt, peripherals, Peri};
 
 /// ADC bit resolution
 #[cfg(any(adc_v003, adc_ch641))]
@@ -52,15 +57,29 @@ impl State {
     }
 }
 
-/// Analog to Digital driver.
-pub struct Adc<'d, T: Instance> {
-    #[allow(unused)]
-    adc: Peri<'d, T>,
+/// ADC interrupt handler.
+pub struct InterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
 }
 
-impl<'d, T: Instance> Adc<'d, T> {
+impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        if T::regs().statr().read().eoc() {
+            T::regs().ctlr1().modify(|w| w.set_eocie(false));
+            T::state().waker.wake();
+        }
+    }
+}
+
+/// Analog to Digital driver.
+pub struct Adc<'d, T: Instance, MODE: crate::mode::Mode = Blocking> {
     #[allow(unused)]
-    pub fn new(adc: Peri<'d, T>, config: Config) -> Self {
+    adc: Peri<'d, T>,
+    _mode: PhantomData<MODE>,
+}
+
+impl<'d, T: Instance, MODE: crate::mode::Mode> Adc<'d, T, MODE> {
+    fn new_inner(adc: Peri<'d, T>, config: Config) -> Self {
         T::enable_and_reset();
 
         // TODO: ADCPRE
@@ -97,7 +116,10 @@ impl<'d, T: Instance> Adc<'d, T> {
             while T::regs().ctlr2().read().cal() {} // wait for calibration to be done
         }
 
-        Self { adc }
+        Self {
+            adc,
+            _mode: PhantomData,
+        }
     }
 
     // regular conversion
@@ -176,6 +198,48 @@ impl<'d, T: Instance> Adc<'d, T> {
         }
     }
 
+    fn start_async_conversion() {
+        if T::regs().statr().read().eoc() {
+            let _ = T::regs().rdatar().read().data();
+        }
+
+        T::regs().ctlr2().modify(|w| w.set_swstart(true));
+    }
+
+    async fn wait_for_conversion(&mut self) -> u16 {
+        let on_drop = OnDrop::new(|| {
+            T::regs().ctlr1().modify(|w| w.set_eocie(false));
+        });
+
+        poll_fn(|cx| {
+            if T::regs().statr().read().eoc() {
+                return Poll::Ready(());
+            }
+
+            T::state().waker.register(cx.waker());
+            T::regs().ctlr1().modify(|w| w.set_eocie(true));
+
+            if T::regs().statr().read().eoc() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
+
+        T::regs().ctlr1().modify(|w| w.set_eocie(false));
+        on_drop.defuse();
+
+        T::regs().rdatar().read().data()
+    }
+}
+
+impl<'d, T: Instance> Adc<'d, T, Blocking> {
+    #[allow(unused)]
+    pub fn new(adc: Peri<'d, T>, config: Config) -> Self {
+        Self::new_inner(adc, config)
+    }
+
     // Get_ADC_Val
     #[cfg(adc_v3)]
     pub fn convert(&mut self, channel: &mut impl AdcChannel<T>, sample_time: SampleTime, pga: Pga) -> u16 {
@@ -199,6 +263,35 @@ impl<'d, T: Instance> Adc<'d, T> {
         while !T::regs().statr().read().eoc() {}
 
         T::regs().rdatar().read().data()
+    }
+}
+
+impl<'d, T: Instance> Adc<'d, T, Async> {
+    pub fn new_async(
+        adc: Peri<'d, T>,
+        config: Config,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+    ) -> Self {
+        let adc = Self::new_inner(adc, config);
+
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
+
+        adc
+    }
+
+    #[cfg(adc_v3)]
+    pub async fn convert(&mut self, channel: &mut impl AdcChannel<T>, sample_time: SampleTime, pga: Pga) -> u16 {
+        self.configure_channel(channel, 1, sample_time, pga);
+        Self::start_async_conversion();
+        self.wait_for_conversion().await
+    }
+
+    #[cfg(not(adc_v3))]
+    pub async fn convert(&mut self, channel: &mut impl AdcChannel<T>, sample_time: SampleTime) -> u16 {
+        self.configure_channel(channel, 1, sample_time);
+        Self::start_async_conversion();
+        self.wait_for_conversion().await
     }
 }
 
