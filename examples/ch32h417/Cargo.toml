@@ -13,19 +13,21 @@ ch32-hal = { path = "../../", features = [
     "rt",
 ] }
 
-qingke = "0.7"
+qingke = { version = "0.7", features = ["unsafe-trust-wch-atomics"] }
 qingke-rt = "0.7"
 
-panic-halt = "1.0"
+defmt = "1"
+defmt-rtt = "0.4"
 embedded-hal = "1.0.0"
 
 [profile.release]
+debug = 2
 strip = false
-lto = true
-opt-level = "z"
+lto = false
+opt-level = 3
 
-# Pin qingke at the V3F/V5F PR (ch32-rs/qingke#23). Once that PR lands
-# and qingke is republished, drop this patch.
+# Pin qingke at local ch32h417-dualcore branch for integration testing.
+# Once qingke#23 lands and is republished, replace with version = "0.8".
 [patch.crates-io]
-qingke = { git = "https://github.com/ch32-rs/qingke", rev = "5973481b9ccebd163d881dfff9fef921d9082d8e" }
-qingke-rt = { git = "https://github.com/ch32-rs/qingke", rev = "5973481b9ccebd163d881dfff9fef921d9082d8e" }
+qingke = { path = "/Users/mono/Elec/WCH/qingke" }
+qingke-rt = { path = "/Users/mono/Elec/WCH/qingke/qingke-rt" }
