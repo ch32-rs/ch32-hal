@@ -13,11 +13,10 @@ ch32-hal = { path = "../../", features = [
     "rt",
 ] }
 
-qingke = { version = "0.7", features = ["unsafe-trust-wch-atomics"] }
+qingke = { version = "0.7", features = ["unsafe-trust-wch-atomics", "dual-core"] }
 qingke-rt = "0.7"
 
-defmt = "1"
-defmt-rtt = "0.4"
+panic-halt = "1.0"
 embedded-hal = "1.0.0"
 
 [profile.release]
