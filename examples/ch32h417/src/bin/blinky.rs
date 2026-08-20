@@ -1,3 +1,7 @@
+//! Blinky for nanoCH32H417 (V3F core, boot hart 0).
+//!
+//! LED0 = PF2 (active-high: PF2 → 1K → LED → GND).
+
 #![no_std]
 #![no_main]
 
@@ -13,12 +17,9 @@ fn main() -> ! {
 
     let mut led = Output::new(p.PF2, Level::Low, Default::default());
     let mut delay = Delay;
-    let mut counter: u32 = 0;
 
     loop {
         led.toggle();
-        unsafe { core::ptr::write_volatile(0x200a0000 as *mut u32, counter); }
-        counter = counter.wrapping_add(1);
         delay.delay_ms(500);
     }
 }
