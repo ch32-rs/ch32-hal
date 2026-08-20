@@ -1,5 +1,6 @@
 //! Minimal V5F (hart 1) — toggle LED1 (PF0) via raw GPIO registers.
-//! No ch32-hal dependency — V3F already configured clocks.
+//! Uses no ch32-hal APIs (V3F already configured clocks); the ch32-hal
+//! dependency in Cargo.toml only supplies metapac's device.x/memory.x.
 
 #![no_std]
 #![no_main]

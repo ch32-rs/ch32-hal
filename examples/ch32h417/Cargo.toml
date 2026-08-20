@@ -25,8 +25,8 @@ strip = false
 lto = false
 opt-level = 3
 
-# Pin qingke at local ch32h417-dualcore branch for integration testing.
-# Once qingke#23 lands and is republished, replace with version = "0.8".
+# Pin qingke at the V3F/V5F PR (ch32-rs/qingke#23). Once that PR lands
+# and qingke is republished, drop this patch.
 [patch.crates-io]
-qingke = { path = "/Users/mono/Elec/WCH/qingke" }
-qingke-rt = { path = "/Users/mono/Elec/WCH/qingke/qingke-rt" }
+qingke = { git = "https://github.com/ch32-rs/qingke", rev = "6043830a8d22bd8e0669bfa368ef7b73a0a63b1f" }
+qingke-rt = { git = "https://github.com/ch32-rs/qingke", rev = "6043830a8d22bd8e0669bfa368ef7b73a0a63b1f" }
