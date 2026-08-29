@@ -524,6 +524,81 @@ impl<'d, T: Instance> I2c<'d, T, Async, Slave> {
         })
         .await
     }
+
+    /// Async receive bytes from master after [`SlaveCommand::WriteCommand`].
+    ///
+    /// Uses DMA to transfer data from I2C data register to buffer.
+    /// Returns actual number of bytes received or error with partial count.
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, (usize, Error)> {
+        T::regs().ctlr2().modify(|w| {
+            // ifbufen needs to be disabled with dma
+            w.set_itbufen(false);
+            w.set_dmaen(true);
+            w.set_last(false); // only relevant for master mode, just keep it off
+        });
+
+        let on_drop = OnDrop::new(|| {
+            T::regs().ctlr2().modify(|w| {
+                w.set_dmaen(false);
+                w.set_iterren(false);
+                w.set_itevten(false);
+            });
+        });
+
+        let state = T::state();
+
+        let dma_transfer = unsafe {
+            let dst = T::regs().datar().as_ptr() as *mut u8;
+            self.rx_dma.as_mut().unwrap().read(dst, buf, Default::default())
+        };
+
+        // release clock stretch and start transfer from master to slave
+        T::regs().star1().modify(|w| w.set_addr(false));
+
+        let poll_events = poll_fn(|cx| {
+            state.waker.register(cx.waker());
+
+            match Self::check_and_clear_error_flags() {
+                Err(e) => {
+                    // on error soft reset
+                    T::regs().ctlr1().modify(|w| w.set_swrst(true));
+                    T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                    Poll::Ready(Err(e))
+                }
+                Ok(star1) => {
+                    if star1.stopf() {
+                        T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                        Poll::Ready(Ok::<(), Error>(()))
+                    } else {
+                        Self::enable_interrupts();
+                        Poll::Pending
+                    }
+                }
+            }
+        });
+
+        let result = match select(dma_transfer, poll_events).await {
+            Either::Second(Err(e)) => Err(e),
+            Either::Second(Ok(_)) => Ok(()),
+            Either::First(_) => {
+                // dma transfer finished no more bytes will be received
+                // if master tries to send more a nack should be triggered
+                T::regs().ctlr1().modify(|w| w.set_ack(false));
+                T::regs().ctlr2().modify(|w| w.set_dmaen(false));
+
+                Ok(())
+            }
+        };
+
+        let remaining = self.rx_dma.as_ref().unwrap().remaining_bytes();
+        let received = buf.len() - remaining;
+
+        drop(on_drop);
+        match result {
+            Ok(_) => Ok(received),
+            Err(err) => Err((received, err)),
+        }
+    }
 }
 
 impl<'d, T: Instance, M: Mode, O: OperatingMode> I2c<'d, T, M, O> {
