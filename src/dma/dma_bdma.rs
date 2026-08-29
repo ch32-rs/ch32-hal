@@ -251,7 +251,7 @@ impl AnyChannel {
         }
     }
 
-    fn get_remaining_transfers(&self) -> u16 {
+    pub fn get_remaining_transfers(&self) -> u16 {
         let info = self.info();
         match self.info().dma {
             DmaInfo::Dma(r) => r.ch(info.num).ndtr().read().ndt(),
