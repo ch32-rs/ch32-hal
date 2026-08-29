@@ -311,6 +311,11 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Master> {
     }
 }
 
+enum TransmissionState {
+    Continue,
+    Finished,
+}
+
 impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Slave> {
     pub fn listen_blocking(&mut self) -> Result<SlaveCommand, Error> {
         #[cfg(feature = "embassy")]
@@ -381,6 +386,83 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Slave> {
         Ok(received_bytes)
     }
 
+    fn check_transmission_state(&mut self) -> Result<TransmissionState, Error> {
+        match Self::check_and_clear_error_flags() {
+            Err(err) => Err(err),
+            Ok(star1) => {
+                if star1.stopf() {
+                    T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                    Ok(TransmissionState::Finished)
+                } else {
+                    Ok(TransmissionState::Continue)
+                }
+            }
+        }
+    }
+
+    /// call this after receiving [`SlaveCommand::ReadCommand`] to send data to master
+    pub fn blocking_write(&mut self, trans_buf: &[u8]) -> Result<(), Error> {
+        // disable ack in send mode the slave does not send ack
+        T::regs().ctlr1().modify(|w| w.set_ack(false));
+
+        //clear addr status to start transmission
+        T::regs().star1().modify(|w| w.set_addr(false));
+
+        for (i, b) in trans_buf.iter().enumerate() {
+            // wait for current byte transfer to be finished
+            let mut tx_e = T::regs().star1().read().tx_e();
+            while !tx_e {
+                tx_e = T::regs().star1().read().tx_e();
+                // theoretically the following check should be done after
+                // a small timeout at the position of this comment. Master nack is
+                // delayed to tx_e state change, so if the master sends a nack
+                // the slave might already try to send the next byte and can not
+                // detect that it was not received by the master
+                // (in case master expects less data) than slave sends
+                // so slave can only detect nack errors on send to expected byte differences
+                // bigger than 1 byte. This is quite an edge case and introducing a timer requirement
+                // for accurate delay seems like more hassle that it's worth to fix the case.
+                // Especially since in the general case master know how many bytes to receive
+                match self.check_transmission_state() {
+                    Err(err) => {
+                        T::regs().ctlr1().modify(|w| w.set_stop(true));
+                        T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                        return Err(err);
+                    }
+                    Ok(TransmissionState::Finished) => {
+                        // last byte was not sent yet
+                        T::regs().ctlr1().modify(|w| w.set_stop(true));
+                        T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                        return Err(Error::Nack);
+                    }
+                    Ok(TransmissionState::Continue) => {}
+                }
+            }
+
+            T::regs().datar().write(|w| w.set_datar(*b));
+        }
+
+        // wait for stop event to occur
+        while !T::regs().star1().read().tx_e() {
+            match self.check_transmission_state() {
+                Err(Error::Nack) => {
+                    // all bytes where already sent, last nack is expected
+                    break;
+                }
+                Err(err) => {
+                    T::regs().ctlr1().modify(|w| w.set_stop(true));
+                    T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                    return Err(err);
+                }
+                _ => {}
+            }
+        }
+        // according to the ref manual, when this is set in slave mode
+        // te slave device will release SDA and SLC after the pending transfer
+        T::regs().ctlr1().modify(|w| w.set_stop(true));
+
+        // all bytes sent and stop bit received
+        Ok(())
     }
 }
 
