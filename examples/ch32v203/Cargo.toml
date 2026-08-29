@@ -8,6 +8,10 @@ name = "usbd"
 path = "src/bin/usbd.rs"
 required-features = ["embassy-executor/arch-spin"]
 
+[[bin]]
+name = "i2c_slave_async"
+path = "src/bin/i2c_slave_async.rs"
+
 [dependencies]
 ch32-hal = { path = "../../", features = [
     "ch32v203g6u6",
