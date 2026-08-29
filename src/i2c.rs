@@ -7,7 +7,7 @@ use core::task::Poll;
 use embassy_futures::select::{select, Either};
 use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::i2c::Operation;
-use mode::{OperatingMode, Master, Slave};
+use mode::{Master, OperatingMode, Slave};
 
 use crate::dma::ChannelAndRequest;
 use crate::gpio::{AFType, Speed};
@@ -24,7 +24,6 @@ pub mod mode {
     /// Trait for I2C master operations.
     #[allow(private_bounds)]
     pub trait OperatingMode: SealedMode {}
-
 
     /// Mode allowing for I2C master operations.
     pub struct Master;
@@ -113,7 +112,7 @@ pub struct Config {
 #[derive(Debug, Clone, Copy)]
 pub enum SlaveAddress {
     SevenBit(u8),
-    TenBit(u16)
+    TenBit(u16),
 }
 
 /// I2C config for slave mode operation
@@ -126,6 +125,16 @@ pub enum SlaveAddress {
 pub struct SlaveConfig {
     pub address: SlaveAddress,
     pub general_call: bool,
+}
+
+#[derive(Debug)]
+pub enum SlaveCommand {
+    /// received general call addresse, can process incoming data
+    GeneralCall,
+    /// received read command, will enter transmitter mode to respond with data
+    ReadCommand,
+    /// received write command, should read incoming data
+    WriteCommand,
 }
 
 impl Default for Config {
@@ -291,12 +300,46 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Master> {
             }),
         }
         T::regs().ctlr1().modify(|w| w.set_pe(true));
+
         I2c::<'d, T, M, Slave> {
             tx_dma: self.tx_dma.take(),
             rx_dma: self.rx_dma.take(),
             #[cfg(feature = "embassy")]
             timeout: self.timeout,
             _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Slave> {
+    pub fn listen_blocking(&mut self) -> Result<SlaveCommand, Error> {
+        #[cfg(feature = "embassy")]
+        let timout = self.timeout();
+
+        T::regs().ctlr1().modify(|w| w.set_pe(true));
+        // clear status to remove and dirty state before starting listen if ack has not been enabled yet
+        if !T::regs().ctlr1().read().ack() {
+            let _ = Self::check_and_clear_error_flags();
+            // enable ACK to let master now the device is alive
+            T::regs().ctlr1().modify(|w| w.set_ack(true));
+        }
+
+        // blocking wait for addresse receive
+        while !T::regs().star1().read().addr() {
+            #[cfg(feature = "embassy")]
+            timout.check().ok_or(Error::Timeout)?;
+        }
+
+        let star2 = T::regs().star2().read();
+
+        if star2.gencall() {
+            Ok(SlaveCommand::GeneralCall)
+        } else {
+            if star2.tra() {
+                Ok(SlaveCommand::ReadCommand)
+            } else {
+                Ok(SlaveCommand::WriteCommand)
+            }
         }
     }
 }
@@ -1025,7 +1068,6 @@ impl<'d, T: Instance> embedded_hal_async::i2c::I2c for I2c<'d, T, Async, Master>
     async fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
         self.write_read(address, write, read).await
     }
-
 
     /// not yet implemented!
     async fn transaction(
