@@ -599,6 +599,106 @@ impl<'d, T: Instance> I2c<'d, T, Async, Slave> {
             Err(err) => Err((received, err)),
         }
     }
+
+    /// Async send bytes to master after [`SlaveCommand::ReadCommand`].
+    ///
+    /// Uses DMA to transfer data from buffer to I2C data register.
+    /// Returns Ok when master stops reading or NACKs.
+    pub async fn write(&mut self, data: &[u8]) -> Result<(), Error> {
+        // acking is the masters job on slave response
+        T::regs().ctlr1().modify(|w| w.set_ack(false));
+
+        let on_drop = OnDrop::new(|| {
+            T::regs().ctlr2().modify(|w| {
+                w.set_dmaen(false);
+                w.set_iterren(false);
+                w.set_itevten(false);
+            });
+        });
+
+        let state = T::state();
+
+        T::regs().ctlr2().modify(|w| {
+            w.set_itbufen(false);
+            w.set_dmaen(true);
+            w.set_last(false);
+        });
+
+        let dma_transfer = unsafe {
+            let dst = T::regs().datar().as_ptr() as *mut u8;
+            self.tx_dma.as_mut().unwrap().write(data, dst, Default::default())
+        };
+
+        // clearing address flag starts response
+        T::regs().star1().modify(|w| w.set_addr(false));
+
+        let poll_events = poll_fn(|cx| {
+            state.waker.register(cx.waker());
+
+            let star1 = T::regs().star1().read();
+
+            if star1.stopf() {
+                Poll::Ready(Ok::<(), Error>(()))
+            } else {
+                match Self::check_and_clear_error_flags() {
+                    Err(e) => {
+                        T::regs().ctlr1().modify(|w| w.set_swrst(true));
+                        T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                        Poll::Ready(Err(e))
+                    }
+                    Ok(_) => {
+                        Self::enable_interrupts();
+                        Poll::Pending
+                    }
+                }
+            }
+        });
+
+        let result = match select(dma_transfer, poll_events).await {
+            Either::Second(Err(e)) => Err(e),
+            Either::First(_) => {
+                // when dma tranfer is finished, disable dma interrupt
+                // enable normal buffer events to wait for last transmission
+                // to finish
+                T::regs().ctlr2().modify(|w| {
+                    w.set_itbufen(true);
+                    w.set_dmaen(false);
+                });
+                // wait for last transfer to complete
+                let _ = poll_fn(|cx| {
+                    state.waker.register(cx.waker());
+
+                    let star1 = T::regs().star1().read();
+                    if star1.tx_e() {
+                        Poll::Ready(())
+                    } else {
+                        Self::enable_interrupts();
+                        Poll::Pending
+                    }
+                })
+                .await;
+                // if the master expects more bytes than the transfer
+                // was configured to send, this releases the SCL and
+                // SDA line as the slave, otherwise the bus might be locked
+                // up indefinitly
+                T::regs().ctlr1().modify(|w| w.set_stop(true));
+                Ok(())
+            }
+            _ => Ok(()),
+        };
+
+        let star1 = T::regs().star1().read();
+        if star1.af() {
+            T::regs().star1().modify(|w| w.set_af(false));
+        } else if star1.stopf() {
+            T::regs().ctlr1().modify(|w| w.set_swrst(false));
+        }
+
+        drop(on_drop);
+
+        // Fallthrough is success
+        Ok(())
+    }
 }
 
 impl<'d, T: Instance, M: Mode, O: OperatingMode> I2c<'d, T, M, O> {
