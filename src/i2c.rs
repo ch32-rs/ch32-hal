@@ -267,6 +267,38 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Master> {
 
         regs.ctlr1().modify(|w| w.set_pe(true));
     }
+
+    /// configure device for slave mode operation using supplied i2c addresses
+    pub fn into_slave(mut self, slave_config: SlaveConfig) -> I2c<'d, T, M, Slave> {
+        T::regs().ctlr1().modify(|w| w.set_pe(false));
+        T::regs().ctlr1().modify(|w| w.set_engc(slave_config.general_call));
+        match slave_config.address {
+            SlaveAddress::SevenBit(addr) => T::regs().oaddr1().modify(|w| {
+                w.set_addmode(false);
+                // not documentet in every version of the reference manual
+                // specific bit needs to be 1, no further utility
+                w.set_must1(true);
+                w.set_add7_1(addr);
+            }),
+            SlaveAddress::TenBit(addr) => T::regs().oaddr1().modify(|w| {
+                w.set_addmode(true);
+                // not documentet in every version of the reference manual
+                // specific bit needs to be 1, no further utility
+                w.set_must1(true);
+                w.set_add9_8((addr >> 8) as u8);
+                w.set_add7_1((addr >> 1) as u8);
+                w.set_add0(addr & 0x0001 == 0x0001);
+            }),
+        }
+        T::regs().ctlr1().modify(|w| w.set_pe(true));
+        I2c::<'d, T, M, Slave> {
+            tx_dma: self.tx_dma.take(),
+            rx_dma: self.rx_dma.take(),
+            #[cfg(feature = "embassy")]
+            timeout: self.timeout,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<'d, T: Instance, M: Mode, O: OperatingMode> I2c<'d, T, M, O> {
