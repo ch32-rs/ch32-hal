@@ -342,6 +342,46 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Slave> {
             }
         }
     }
+
+    /// call this after receiving [`SlaveCommand::WriteCommand`] to receive data from master
+    pub fn blocking_read(&mut self, recv_buf: &mut [u8]) -> Result<usize, (usize, Error)> {
+        //clear addr status to start receiving bytes
+        T::regs().star1().modify(|w| w.set_addr(false));
+
+        let mut received_bytes = 0;
+        while received_bytes <= recv_buf.len() {
+            let star1 = T::regs().star1().read();
+            // received data \o/
+            if star1.rx_ne() && received_bytes == recv_buf.len() {
+                //received more data than fits in buffer
+                T::regs().ctlr1().modify(|w| w.set_stop(true));
+                T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                return Err((received_bytes, Error::Overrun));
+            } else if star1.rx_ne() && received_bytes < recv_buf.len() {
+                recv_buf[received_bytes] = T::regs().datar().read().datar();
+                received_bytes += 1;
+
+                if received_bytes == recv_buf.len() {
+                    // the last byte that fits the buffer was just received
+                    // so any further byte can not be processed
+                    T::regs().ctlr1().modify(|w| w.set_ack(false));
+                }
+            } else if star1.stopf() {
+                // master stopped sending data, return early
+                T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                return Ok(received_bytes);
+            } else {
+                // check for any error states
+                Self::check_and_clear_error_flags().map_err(|err| (received_bytes, err))?;
+            }
+        }
+        // this should no be reachable, earlier exits in the loop are expected
+        // using unreachable would be possible! but returning is probably better for
+        // stability reasons
+        Ok(received_bytes)
+    }
+
+    }
 }
 
 impl<'d, T: Instance, M: Mode, O: OperatingMode> I2c<'d, T, M, O> {
