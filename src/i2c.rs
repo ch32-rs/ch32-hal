@@ -466,6 +466,66 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Slave> {
     }
 }
 
+impl<'d, T: Instance> I2c<'d, T, Async, Slave> {
+    #[inline]
+    fn enable_interrupts() {
+        T::regs().ctlr2().modify(|w| {
+            w.set_itevten(true);
+            w.set_iterren(true);
+        });
+    }
+
+    /// Async wait for master to address us and return the command type.
+    ///
+    /// This is the async version of [`Self::listen_blocking`].
+    pub async fn listen(&mut self) -> Result<SlaveCommand, Error> {
+        T::regs().ctlr1().modify(|w| w.set_pe(true));
+
+        if !T::regs().ctlr1().read().ack() {
+            let _ = Self::check_and_clear_error_flags();
+            T::regs().ctlr1().modify(|w| w.set_ack(true));
+        }
+
+        let state = T::state();
+
+        poll_fn(|cx| {
+            state.waker.register(cx.waker());
+
+            let star1 = T::regs().star1().read();
+
+            if star1.addr() {
+                let star2 = T::regs().star2().read();
+
+                if star2.gencall() {
+                    Poll::Ready(Ok(SlaveCommand::GeneralCall))
+                } else if star2.tra() {
+                    Poll::Ready(Ok(SlaveCommand::ReadCommand))
+                } else {
+                    Poll::Ready(Ok(SlaveCommand::WriteCommand))
+                }
+            } else {
+                match Self::check_and_clear_error_flags() {
+                    Err(e) => {
+                        T::regs().ctlr1().modify(|w| w.set_swrst(true));
+                        T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                        Poll::Ready(Err(e))
+                    }
+                    Ok(_) => {
+                        // with some bus error states, the i2c peripheral might reset and unset acknoledge
+                        // if this happens without triggering a different error state we might never poll again
+                        // leading to the listen never returing, force setting ack here prevents the likelyhood
+                        // of this happeing signifcantly
+                        T::regs().ctlr1().modify(|w| w.set_ack(true));
+                        Self::enable_interrupts();
+                        Poll::Pending
+                    }
+                }
+            }
+        })
+        .await
+    }
+}
+
 impl<'d, T: Instance, M: Mode, O: OperatingMode> I2c<'d, T, M, O> {
     fn timeout(&self) -> Timeout {
         Timeout {
