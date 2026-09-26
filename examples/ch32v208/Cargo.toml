@@ -31,8 +31,8 @@ embedded-graphics = "0.8.2"
 # crates.io. Each ships both an async and a blocking flavour, which is what the
 # `*_blocking` examples exercise.
 #
-# The floor is 0.1.1 rather than 0.1.0 throughout, and it is a behavioural floor
-# for several of them, not a cosmetic one:
+# The floor is 0.1.1 rather than 0.1.0 for most of them, and 0.1.2 for spl06, and
+# it is a behavioural floor rather than a cosmetic one:
 #   * bme280  0.1.1 programs CTRL_HUM before CTRL_MEAS. In 0.1.0 the humidity
 #             oversampling was never applied, so humidity read a plausible but
 #             fake value in the sixties or low seventies.
@@ -40,12 +40,15 @@ embedded-graphics = "0.8.2"
 #             the first read after init is a measurement rather than the output
 #             registers' reset value.
 #   * l3g4200d 0.1.1 also stops truncating the rate to whole degrees per second.
+#   * spl06   0.1.2 waits for COEF_RDY before reading the calibration block. Until
+#             then a cold-boot init could store an all-zero calibration, which
+#             every later measurement silently used: 0 Pa and 0.00 degC forever.
 edrv-mpu6050 = "0.1.1"
 edrv-mhz19 = "0.1.1"
 edrv-pmsx003 = "0.1.1"
 edrv-vl53l0x = "0.1.1"
 edrv-bme680 = "0.1.1"
-edrv-spl06 = "0.1.1"
+edrv-spl06 = "0.1.2"
 edrv-bme280 = "0.1.1"
 edrv-adxl345 = "0.1.1"
 edrv-hmc5883l = "0.1.1"

@@ -154,14 +154,14 @@ async fn main(_spawner: Spawner) -> ! {
     }
 
     // Soft reset first: `init` deliberately does not reset (matching bme280 and
-    // bme680), and a reset is the only way to be sure the calibration registers
-    // are loaded. `reset` already waits out TCoef_rdy.
+    // bme680), so this is what puts the configuration registers back to their
+    // defaults. Both `reset` and `init` now wait out TCoef_rdy themselves.
     if let Err(e) = sensor.reset(&mut Delay).await {
         println!("soft reset failed: {:?}", e);
         park().await;
     }
 
-    match sensor.init().await {
+    match sensor.init(&mut Delay).await {
         Ok(()) => {
             println!("calibration read, default oversampling programmed");
             println!(

@@ -110,14 +110,15 @@ fn main() -> ! {
         }
     }
 
-    // `init` deliberately does not reset (matching bme280/bme680); reset first so
-    // the calibration registers are certainly loaded. `reset` waits out TCoef_rdy.
+    // `init` deliberately does not reset (matching bme280/bme680), so reset first
+    // to put the configuration registers back to their defaults. Both `reset` and
+    // `init` now wait out TCoef_rdy themselves.
     if let Err(e) = sensor.reset(&mut delay) {
         println!("soft reset failed: {:?}", e);
         park();
     }
 
-    match sensor.init() {
+    match sensor.init(&mut delay) {
         Ok(()) => {
             println!("calibration read");
             println!("");
