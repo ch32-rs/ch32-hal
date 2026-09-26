@@ -23,6 +23,23 @@ qingke = "0.7"
 panic-halt = "1.0"
 embedded-storage = "0.3.1"
 
+# SSD1306 128x64 OLED over I2C (async interface) + embedded-graphics drawing
+ssd1306 = { version = "0.10.0", features = ["async"] }
+embedded-graphics = "0.8.2"
+
+# Sensor drivers from our own embedded-drivers collection. Each one ships both an
+# async and a blocking flavour, which is what the `*_blocking` examples exercise.
+edrv-mpu6050 = "0.1.0"
+edrv-mhz19 = "0.1.0"
+edrv-pmsx003 = "0.1.0"
+edrv-vl53l0x = "0.1.0"
+edrv-bme680 = "0.1.0"
+edrv-spl06 = "0.1.0"
+
+# The edrv UART drivers are generic over these traits; see src/uart_io.rs for the
+# adapter that bridges them to ch32-hal's USART.
+embedded-io = "0.7"
+
 embassy-net = { version = "0.9.1", features = ["tcp", "udp", "dhcpv4", "medium-ethernet", "proto-ipv4"] }
 embassy-net-driver = "0.2.0"
 static_cell = "2.1"
