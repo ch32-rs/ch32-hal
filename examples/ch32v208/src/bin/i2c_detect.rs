@@ -107,11 +107,14 @@ fn device_name(addr: u8) -> &'static str {
         0x3E => "SH1106 OLED (alt)",
         0x40..=0x47 => "INA219 / HTU21D / Si7021 / PCA9685",
         0x48..=0x4F => "ADS1115 / LM75 / PCF8591",
-        0x50..=0x57 => "24Cxx EEPROM / AT24Cxx",
+        // 0x53 is where an ADXL345 sits when its ALT-ADDRESS pin is high (low
+        // gives 0x1D), and it overlaps the EEPROM range, so it is called out.
+        0x53 => "ADXL345 accelerometer / 24Cxx EEPROM",
+        0x50..=0x52 | 0x54..=0x57 => "24Cxx EEPROM / AT24Cxx",
         0x5A => "MLX90614 IR thermometer",
         0x5C | 0x5D => "BH1750 / CCS811",
         0x60..=0x67 => "MPL3115A2 / MCP4725 DAC",
-        0x68 | 0x69 => "DS1307/DS3231 RTC / MPU6050",
+        0x68 | 0x69 => "DS1307/DS3231 RTC / MPU6050 / L3G4200D gyro",
         0x6A | 0x6B => "LSM6DS3 / L3GD20 gyro",
         0x70..=0x75 => "TCA9548A mux / PCA9685",
         // 0x76/0x77 is a barometer address with two unrelated families on it:
@@ -122,7 +125,7 @@ fn device_name(addr: u8) -> &'static str {
         //
         // plus the MS5611, which has no ID register at all. The address alone
         // tells you nothing, so `i2c_identify` reads both ID registers.
-        0x76 | 0x77 => "BMP180/280, BME280, BME680 or SPL06 barometer",
+        0x76 | 0x77 => "BMP085/180/280, BME280, BME680 or SPL06 barometer",
         _ => "unknown device",
     }
 }
@@ -132,7 +135,7 @@ fn device_name(addr: u8) -> &'static str {
 /// Used to point the reader at the tool that can give an answer instead of a
 /// guess. Extend this when a probe is added to `i2c_identify`.
 fn identify_supported(addr: u8) -> bool {
-    matches!(addr, 0x29 | 0x68 | 0x69 | 0x76 | 0x77)
+    matches!(addr, 0x1C | 0x1D | 0x1E | 0x29 | 0x53 | 0x68 | 0x69 | 0x76 | 0x77)
 }
 
 /// Scan the whole bus once and print a table plus a list of found devices.
@@ -158,7 +161,7 @@ async fn scan(i2c: &mut I2cBus) {
         for col in 0..16u8 {
             let addr = row + col;
 
-            if addr < SCAN_FIRST || addr > SCAN_LAST {
+            if !(SCAN_FIRST..=SCAN_LAST).contains(&addr) {
                 print!("   ");
                 continue;
             }

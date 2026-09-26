@@ -76,17 +76,25 @@ type I2cBus = I2c<'static, peripherals::I2C2, Blocking>;
 
 /// Address reported by `i2c_detect`. Change this to probe something else.
 ///
-/// Three families are handled so far:
+/// Five families are handled so far:
 ///
-/// * `0x29` - `i2c_identify` reads the light/colour/ToF ID registers.
-/// * `0x68` / `0x69` - reads `WHO_AM_I` (`0x75`) for the InvenSense IMU family,
-///   and `PWR_MGMT_1` (`0x6B`) as a second signal. This address is *also* the
-///   DS1307/DS3231 RTC, which has no ID register, so the read doubles as the
-///   way to tell them apart.
-/// * `0x76` / `0x77` - reads **both** ID registers: `0xD0` for the Bosch line
-///   (BMP180/280, BME280, BME680/688) and `0x0D` for the Goertek/Infineon
-///   SPL06-001/007. They are different registers, so probing only one of them
-///   silently misses the other family.
+/// * `0x29` - the light/colour/ToF ID registers.
+/// * `0x1E` - the HMC5883L magnetometer, whose ID is three ASCII registers
+///   spelling `H43` rather than one byte.
+/// * `0x1C` / `0x1D` / `0x53` - the ADXL345 accelerometer, which answers on
+///   `0x1D` or `0x53` depending on its `ALT-ADDRESS` pin. `0x53` overlaps the
+///   24Cxx EEPROM range, which is why a scanner guesses wrong there.
+/// * `0x68` / `0x69` - **three** different parts with three different ID
+///   registers: InvenSense IMUs at `0x75`, the ST L3G4200D gyro at `0x0F`
+///   (reading `0xD3`), and the DS1307/DS3231 RTC, which has no ID register at
+///   all. Reading only `0x75` silently misses the ST part.
+/// * `0x76` / `0x77` - **both** Bosch-style registers: `0xD0` for the Bosch line
+///   (BMP085/180, BMP280, BME280, BME680/688) and `0x0D` for the
+///   Goertek/Infineon SPL06-001/007. Different registers, so probing only one
+///   misses the other family.
+///
+/// A GY-80 module carries HMC5883L (`0x1E`), ADXL345 (`0x53`), L3G4200D
+/// (`0x69`) and BMP085 (`0x77`) - so all four of its addresses are covered.
 const TARGET: u8 = 0x29;
 
 /// Bus speed; 100 kHz is safe for every candidate part.
@@ -133,12 +141,16 @@ fn main() -> ! {
     // Different address families need different ID registers, so dispatch on the
     // address the scanner reported.
     match TARGET {
-        // MPU6050 and friends. Also the DS1307/DS3231 RTC address, which is why
-        // this needs a real ID read rather than a table lookup.
+        // MPU6050 and friends, the ST gyro that shares the address, and the
+        // DS1307/DS3231 RTC - three different ID registers on one address.
         0x68 | 0x69 => probe_imu(&mut i2c),
-        // The Bosch pressure-sensor line, which is what `i2c_detect` now reports
-        // for 0x76/0x77 instead of calling it a PCA9685.
+        // The Bosch pressure-sensor line (and the SPL06, which uses a different
+        // register entirely).
         0x76 | 0x77 => probe_pressure(&mut i2c),
+        // Magnetometer and accelerometer addresses, including the alternates an
+        // ADXL345 answers on when its ALT-ADDRESS pin is strapped high.
+        0x1E => probe_hmc5883l(&mut i2c),
+        0x1C | 0x1D | 0x53 => probe_adxl345(&mut i2c),
         _ => probe_0x29(&mut i2c),
     }
 
@@ -293,7 +305,65 @@ fn probe_pressure(i2c: &mut I2cBus) {
     }
 }
 
-/// InvenSense IMU family at `0x68`/`0x69`, plus the RTC that shares the address.
+/// HMC5883L magnetometer at `0x1E`: three ASCII identification registers.
+fn probe_hmc5883l(i2c: &mut I2cBus) {
+    // Unlike most parts, Honeywell puts the ID in three consecutive registers
+    // and it spells "H43" rather than being a single byte.
+    let id_a = read_register(i2c, "IDENT_A (reg 0x0A)", &[0x0A]);
+    let id_b = read_register(i2c, "IDENT_B (reg 0x0B)", &[0x0B]);
+    let id_c = read_register(i2c, "IDENT_C (reg 0x0C)", &[0x0C]);
+
+    println!("");
+    println!("---- identification ----");
+
+    match (id_a, id_b, id_c) {
+        (Some(0x48), Some(0x34), Some(0x33)) => {
+            println!("  HMC5883L 3-axis magnetometer (ID registers spell \"H43\")");
+            read_register(i2c, "MODE      (reg 0x02)", &[0x02]);
+            read_register(i2c, "CONFIG_A  (reg 0x00)", &[0x00]);
+        }
+        (Some(a), Some(b), Some(c)) => println!(
+            "  ID registers read 0x{:02X} 0x{:02X} 0x{:02X}, expected 0x48 0x34 0x33 (\"H43\")",
+            a, b, c
+        ),
+        _ => {
+            println!("  Not all three identification registers answered.");
+            println!("  An LSM303 also sits at 0x1E, but its magnetometer has a different");
+            println!("  register map.");
+        }
+    }
+}
+
+/// ADXL345 accelerometer, which answers on `0x53` or `0x1D` depending on the
+/// `ALT-ADDRESS` pin.
+fn probe_adxl345(i2c: &mut I2cBus) {
+    let devid = read_register(i2c, "DEVID (reg 0x00)", &[0x00]);
+
+    println!("");
+    println!("---- identification ----");
+
+    match devid {
+        Some(0xE5) => {
+            println!("  ADXL345 3-axis accelerometer (DEVID 0xE5)");
+            println!(
+                "    ALT-ADDRESS {} -> this is the {} address",
+                if TARGET == 0x53 { "high" } else { "low" },
+                if TARGET == 0x53 { "0x53" } else { "0x1D" }
+            );
+            read_register(i2c, "POWER_CTL  (reg 0x2D)", &[0x2D]);
+            read_register(i2c, "DATA_FORMAT(reg 0x31)", &[0x31]);
+        }
+        Some(other) => println!("  DEVID 0x{:02X}, expected 0xE5 - not an ADXL345.", other),
+        None => {
+            println!("  No DEVID response.");
+            println!("  0x53 is also inside the 24Cxx EEPROM range, so a small EEPROM on");
+            println!("  a board like this looks the same to a scanner.");
+        }
+    }
+}
+
+/// InvenSense IMU family at `0x68`/`0x69`, the ST gyro that shares it, plus the
+/// RTC that shares it too.
 fn probe_imu(i2c: &mut I2cBus) {
     // WHO_AM_I is the definitive test: the DS1307/DS3231 RTCs on the same
     // address have no ID register at all.
@@ -301,9 +371,24 @@ fn probe_imu(i2c: &mut I2cBus) {
     // 0x40 after reset on an MPU6050: the sleep bit is set, which is also a
     // useful proof of life when the ID read is ambiguous.
     let pwr = read_register(i2c, "PWR_MGMT_1 (reg 0x6B)", &[0x6B]);
+    // ST's L3G4200D sits on the same address and puts its WHO_AM_I somewhere
+    // else entirely: register 0x0F, and it reads 0xD3. This is what the GY-80
+    // module's gyro answers, and what a scanner calling 0x69 an MPU6050 misses.
+    let st_who = read_register(i2c, "L3G4200D WHO_AM_I (reg 0x0F)", &[0x0F]);
 
     println!("");
     println!("---- identification ----");
+
+    // The ST gyro answers 0xD3 in its own register; check it first, because on
+    // this address an MPU6050-style read can return something plausible too.
+    if st_who == Some(0xD3) {
+        println!("  L3G4200D 3-axis gyroscope (WHO_AM_I reg 0x0F = 0xD3)");
+        println!("    not an InvenSense part: this one is ST, with a different");
+        println!("    register map, so it needs `edrv-l3g4200d` rather than `edrv-mpu6050`.");
+        read_register(i2c, "CTRL_REG1  (reg 0x20)", &[0x20]);
+        read_register(i2c, "CTRL_REG4  (reg 0x23)", &[0x23]);
+        return;
+    }
 
     match who {
         // 0x68 is shared by these; they differ in which axes/sensors they carry,

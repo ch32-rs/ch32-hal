@@ -48,7 +48,7 @@ use core::fmt::Write as _;
 use ch32_hal as hal;
 use edrv_mpu6050::{regs, AccelRange, Config, DlpfCfg, GyroRange, MPU6050};
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Delay, Duration, Timer};
 use hal::i2c::I2c;
 use hal::mode::Async;
 use hal::time::Hertz;
@@ -277,7 +277,11 @@ async fn main(_spawner: Spawner) -> ! {
         accel_range: AccelRange::G2,
     };
 
-    if let Err(e) = imu.init(config).await {
+    // `init` takes a delay because edrv-mpu6050 0.1.1 waits out the gyro's ZRO
+    // settling time and selects the gyro PLL clock instead of the internal
+    // 8 MHz oscillator; 0.1.0 returned immediately and left the first reads at
+    // zero.
+    if let Err(e) = imu.init(config, &mut Delay).await {
         println!("configuration failed: {:?}", e);
         println!("Check 3V3, GND and that SDA/SCL are not swapped.");
         park().await;

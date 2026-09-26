@@ -27,14 +27,35 @@ embedded-storage = "0.3.1"
 ssd1306 = { version = "0.10.0", features = ["async"] }
 embedded-graphics = "0.8.2"
 
-# Sensor drivers from our own embedded-drivers collection. Each one ships both an
-# async and a blocking flavour, which is what the `*_blocking` examples exercise.
-edrv-mpu6050 = "0.1.0"
-edrv-mhz19 = "0.1.0"
-edrv-pmsx003 = "0.1.0"
-edrv-vl53l0x = "0.1.0"
-edrv-bme680 = "0.1.0"
-edrv-spl06 = "0.1.0"
+# Sensor drivers from our own embedded-drivers collection, all resolved from
+# crates.io. Each ships both an async and a blocking flavour, which is what the
+# `*_blocking` examples exercise.
+#
+# The floor is 0.1.1 rather than 0.1.0 throughout, and it is a behavioural floor
+# for several of them, not a cosmetic one:
+#   * bme280  0.1.1 programs CTRL_HUM before CTRL_MEAS. In 0.1.0 the humidity
+#             oversampling was never applied, so humidity read a plausible but
+#             fake value in the sixties or low seventies.
+#   * adxl345, hmc5883l, l3g4200d, mpu6050  0.1.1 wait for the first sample, so
+#             the first read after init is a measurement rather than the output
+#             registers' reset value.
+#   * l3g4200d 0.1.1 also stops truncating the rate to whole degrees per second.
+edrv-mpu6050 = "0.1.1"
+edrv-mhz19 = "0.1.1"
+edrv-pmsx003 = "0.1.1"
+edrv-vl53l0x = "0.1.1"
+edrv-bme680 = "0.1.1"
+edrv-spl06 = "0.1.1"
+edrv-bme280 = "0.1.1"
+edrv-adxl345 = "0.1.1"
+edrv-hmc5883l = "0.1.1"
+edrv-l3g4200d = "0.1.1"
+edrv-bmp180 = "0.1.1"
+
+# The GY-80 puts four devices on one I2C bus, so the bus has to be shared: the
+# `gy-80` example hands each driver an `I2cDevice` built from one `Mutex`.
+embassy-embedded-hal = "0.6.0"
+embassy-sync = "0.8.0"
 
 # The edrv UART drivers are generic over these traits; see src/uart_io.rs for the
 # adapter that bridges them to ch32-hal's USART.
