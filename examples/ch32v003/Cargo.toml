@@ -24,6 +24,7 @@ qingke = "0.7"
 qingke-rt = { version = "0.7", features=["highcode"] }
 
 panic-halt = "1.0"
+critical-section = "1.2"
 
 embedded-hal = "1.0.0"
 
