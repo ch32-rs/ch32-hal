@@ -21,10 +21,6 @@ ch32-metapac = { features = [
 qingke = { version = "0.7", features = ["critical-section-impl"] }
 qingke-rt = { version = "0.7", optional = true }
 
-# TODO: remove this
-embedded-hal-02 = { package = "embedded-hal", version = "0.2.6", features = [
-    "unproven",
-] }
 embedded-hal = { package = "embedded-hal", version = "1.0" }
 embedded-hal-async = "1.0.0"
 embedded-can = "0.4.1"

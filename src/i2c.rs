@@ -962,32 +962,6 @@ impl<'d, T: Instance> embedded_hal_async::i2c::I2c for I2c<'d, T, Async> {
     }
 }
 
-// eh02 compatible
-
-impl<'d, T: Instance, M: Mode> embedded_hal_02::blocking::i2c::Read for I2c<'d, T, M> {
-    type Error = Error;
-
-    fn read(&mut self, address: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
-        self.blocking_read(address, buffer)
-    }
-}
-
-impl<'d, T: Instance, M: Mode> embedded_hal_02::blocking::i2c::Write for I2c<'d, T, M> {
-    type Error = Error;
-
-    fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
-        self.blocking_write(address, write)
-    }
-}
-
-impl<'d, T: Instance, M: Mode> embedded_hal_02::blocking::i2c::WriteRead for I2c<'d, T, M> {
-    type Error = Error;
-
-    fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
-        self.blocking_write_read(address, write, read)
-    }
-}
-
 /// Frame type in I2C transaction.
 ///
 /// This tells each method what kind of framing to use, to generate a (repeated) start condition (ST
