@@ -20,8 +20,8 @@ embassy-executor = { version = "0.10.0", features = [
 critical-section = "1.2.0"
 
 embassy-time = "0.5.1"
-embassy-usb = "0.5.1"
-embassy-usb-driver = "=0.2.0"
+embassy-usb = "0.6.0"
+embassy-usb-driver = "=0.2.2"
 embassy-futures = "0.1.2"
 nb = "1.1.0"
 
@@ -43,7 +43,7 @@ embedded-hal = "1.0.0"
 usb-dfu-target = "0.1.0"
 
 # for eth
-embassy-net = { version = "0.8.0", features = ["tcp", "dhcpv4", "medium-ethernet", "proto-ipv4"] }
+embassy-net = { version = "0.9.1", features = ["tcp", "dhcpv4", "medium-ethernet", "proto-ipv4"] }
 embassy-net-driver = "0.2.0"
 static_cell = "2.1"
 embedded-io-async = "0.7"
