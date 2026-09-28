@@ -62,6 +62,12 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 // disable idle line detection
                 w.set_idleie(false);
             });
+        } else if cr1.tcie() && sr.tc() {
+        // Transmission complete detected
+        r.ctlr1().modify(|w| {
+            // disable Transmission complete interrupt
+            w.set_tcie(false);
+        });  
         } else if cr1.rxneie() {
             // We cannot check the RXNE flag as it is auto-cleared by the DMA controller
 
@@ -72,6 +78,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         compiler_fence(Ordering::SeqCst);
         s.rx_waker.wake();
+        s.tx_waker.wake();
     }
 }
 
@@ -223,7 +230,9 @@ impl<'d, T: Instance, M: Mode> UartTx<'d, T, M> {
     /// Block until transmission complete
     pub fn blocking_flush(&mut self) -> Result<(), Error> {
         let rb = T::regs();
-        while !rb.statr().read().tc() {} // wait for last bit on wire.
+        if rb.ctlr1().read().te() {
+            while !rb.statr().read().tc() {} // wait for last bit on wire.
+        }
         Ok(())
     }
 }
@@ -275,6 +284,37 @@ impl<'d, T: Instance> UartTx<'d, T, Async> {
         transfer.await;
         Ok(())
     }
+
+    /// Wait until transmission complete
+    pub async fn flush(&mut self) -> Result<(), Error> {
+        let r = T::regs();
+        if r.ctlr1().read().te() && !r.statr().read().tc() {
+            r.ctlr1().modify(|w| {
+                // enable Transmission Complete interrupt
+                w.set_tcie(true);
+            });
+
+            compiler_fence(Ordering::SeqCst);
+
+            // future which completes when Transmission complete is detected
+            let abort = poll_fn(move |cx| {
+                let s = T::state();
+                s.tx_waker.register(cx.waker());
+
+                let sr = r.statr().read();
+                if sr.tc() {
+                    // Transmission complete detected
+                    return Poll::Ready(());
+                }
+
+                Poll::Pending
+            });
+
+            abort.await;
+        }
+
+        Ok(())
+    }   
 }
 
 impl<'d, T: Instance> UartTx<'d, T, Blocking> {
@@ -1033,13 +1073,16 @@ impl<'d, T: Instance> core::fmt::Write for Uart<'d, T, Blocking> {
 
 // Peripheral traits
 struct State {
+    #[allow(unused)]
     rx_waker: AtomicWaker,
+    tx_waker: AtomicWaker,
 }
 
 impl State {
     const fn new() -> Self {
         Self {
             rx_waker: AtomicWaker::new(),
+            tx_waker: AtomicWaker::new(),
         }
     }
 }
