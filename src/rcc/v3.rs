@@ -433,7 +433,7 @@ fn calc_usbpre(pllclk: Hertz) -> Option<Usbpre> {
         96_000_000 => Some(Usbpre::DIV2),
         144_000_000 => Some(Usbpre::DIV3),
         #[cfg(d8w)]
-        240_000_000 => None,
+        240_000_000 => Some(Usbpre::DIV5),
         _ => None,
     }
 }
