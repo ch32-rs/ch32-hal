@@ -72,7 +72,7 @@ jobs:
           cd ../ch32-data/build/
           git clone https://github.com/ch32-rs/ch32-metapac.git
       - name: Build
-        run: cargo build --features ${{ matrix.chip }},embassy,rt,memory-x --no-default-features --target ${{ matrix.target }}
+        run: cargo build --features ${{ matrix.chip }},embassy,rt,memory-x,defmt --no-default-features --target ${{ matrix.target }}
 
   build-examples:
     name: Examples (${{ matrix.example }})
