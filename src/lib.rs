@@ -85,7 +85,7 @@ pub mod debug;
 pub mod prelude;
 
 mod peripheral;
-pub use peripheral::RccPeripheral;
+pub use peripheral::{RccPeripheral, RemapPeripheral};
 
 // #[cfg(not(ch32v0))]
 mod interrupt_ext;
@@ -148,6 +148,8 @@ pub mod can;
 
 #[cfg(all(flash, not(ch32h4)))]
 pub mod flash;
+
+mod patches;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;

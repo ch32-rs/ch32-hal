@@ -29,9 +29,10 @@ macro_rules! channel_impl {
     ($new_chx:ident, $channel:ident, $pin_trait:ident) => {
         impl<'d, T: GeneralInstance16bit> PwmPin<'d, T, $channel> {
             #[doc = concat!("Create a new ", stringify!($channel), " PWM pin instance.")]
-            pub fn $new_chx<#[cfg(not(afio_h4))] A>(
-                pin: Peri<'d, if_afio!(impl $pin_trait<T, A>)>,
+            pub fn $new_chx<#[cfg(not(afio_h4))] const REMAP: u8>(
+                pin: Peri<'d, if_remap!(impl $pin_trait<T, REMAP>)>,
             ) -> Self {
+                apply_remap!();
                 critical_section::with(|_| {
                     set_as_af!(pin, AfType::output(OutputType::PushPull, Speed::High));
                 });
