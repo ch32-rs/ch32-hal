@@ -109,10 +109,10 @@ pub struct I2c<'d, T: Instance, M: Mode> {
 
 impl<'d, T: Instance> I2c<'d, T, Async> {
     /// Create a new I2C driver.
-    pub fn new<#[cfg(not(afio_h4))] A>(
+    pub fn new<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
-        scl: Peri<'d, if_afio!(impl SclPin<T, A>)>,
-        sda: Peri<'d, if_afio!(impl SdaPin<T, A>)>,
+        scl: Peri<'d, if_remap!(impl SclPin<T, REMAP>)>,
+        sda: Peri<'d, if_remap!(impl SdaPin<T, REMAP>)>,
         _irq: impl interrupt::typelevel::Binding<T::EventInterrupt, EventInterruptHandler<T>>
             + interrupt::typelevel::Binding<T::ErrorInterrupt, ErrorInterruptHandler<T>>
             + 'd,
@@ -121,34 +121,37 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
         freq: Hertz,
         config: Config,
     ) -> Self {
+        apply_remap!();
         Self::new_inner(peri, scl, sda, new_dma!(tx_dma), new_dma!(rx_dma), freq, config)
     }
 }
 
 impl<'d, T: Instance> I2c<'d, T, Blocking> {
     /// Create a new blocking I2C driver.
-    pub fn new_blocking<#[cfg(not(afio_h4))] A>(
+    pub fn new_blocking<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
-        scl: Peri<'d, if_afio!(impl SclPin<T, A>)>,
-        sda: Peri<'d, if_afio!(impl SdaPin<T, A>)>,
+        scl: Peri<'d, if_remap!(impl SclPin<T, REMAP>)>,
+        sda: Peri<'d, if_remap!(impl SdaPin<T, REMAP>)>,
         freq: Hertz,
         config: Config,
     ) -> Self {
+        apply_remap!();
         Self::new_inner(peri, scl, sda, None, None, freq, config)
     }
 }
 
 impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     /// Create a new I2C driver.
-    fn new_inner<#[cfg(not(afio_h4))] A>(
+    fn new_inner<#[cfg(not(afio_h4))] const REMAP: u8>(
         _peri: Peri<'d, T>,
-        scl: Peri<'d, if_afio!(impl SclPin<T, A>)>,
-        sda: Peri<'d, if_afio!(impl SdaPin<T, A>)>,
+        scl: Peri<'d, if_remap!(impl SclPin<T, REMAP>)>,
+        sda: Peri<'d, if_remap!(impl SdaPin<T, REMAP>)>,
         tx_dma: Option<ChannelAndRequest<'d>>,
         rx_dma: Option<ChannelAndRequest<'d>>,
         freq: Hertz,
         config: Config,
     ) -> Self {
+        apply_remap!();
         use crate::interrupt::typelevel::Interrupt;
 
         T::enable_and_reset();
@@ -864,7 +867,7 @@ trait SealedInstance: crate::peripheral::RccPeripheral {
 
 /// I2C peripheral instance
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + 'static {
+pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + crate::peripheral::RemapBound + 'static {
     /// Event interrupt for this instance
     type EventInterrupt: interrupt::typelevel::Interrupt;
     /// Error interrupt for this instance
@@ -891,9 +894,9 @@ foreach_peripheral!(
     };
 );
 
-pin_trait!(SclPin, Instance, @A);
-pin_trait!(SdaPin, Instance, @A);
-// pin_trait!(SmbaPin, Instance, @A);
+pin_trait!(SclPin, Instance);
+pin_trait!(SdaPin, Instance);
+// pin_trait!(SmbaPin, Instance);
 dma_trait!(RxDma, Instance);
 dma_trait!(TxDma, Instance);
 
