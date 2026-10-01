@@ -9,7 +9,7 @@ ch32-hal = { path = "../../", features = [
     "memory-x",
 ] }
 qingke = { version = "0.7" }
-qingke-rt = "0.7"
+qingke-rt = { version = "0.7", features = ["v5f"] }
 panic-halt = "1.0"
 
 [profile.release]
