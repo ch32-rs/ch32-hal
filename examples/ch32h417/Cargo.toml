@@ -13,8 +13,8 @@ ch32-hal = { path = "../../", features = [
     "rt",
 ] }
 
-qingke = { version = "0.7", features = ["unsafe-trust-wch-atomics", "dual-core"] }
-qingke-rt = { version = "0.7", features = ["v3f"] }
+qingke = { version = "0.8", features = ["unsafe-trust-wch-atomics", "dual-core"] }
+qingke-rt = { version = "0.8" }
 
 panic-halt = "1.0"
 embedded-hal = "1.0.0"
@@ -24,9 +24,3 @@ debug = 2
 strip = false
 lto = false
 opt-level = 3
-
-# Pin qingke at the V3F/V5F PR (ch32-rs/qingke#23). Once that PR lands
-# and qingke is republished, drop this patch.
-[patch.crates-io]
-qingke = { git = "https://github.com/ch32-rs/qingke", rev = "6043830a8d22bd8e0669bfa368ef7b73a0a63b1f" }
-qingke-rt = { git = "https://github.com/ch32-rs/qingke", rev = "6043830a8d22bd8e0669bfa368ef7b73a0a63b1f" }
