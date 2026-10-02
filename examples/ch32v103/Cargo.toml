@@ -17,8 +17,8 @@ embassy-executor = { version = "0.10.0", features = [
 embassy-time = "0.5.1"
 
 # This is okay because we should automatically use whatever ch32-hal uses
-qingke-rt = "0.7"
-qingke = "0.7"
+qingke-rt = "0.8"
+qingke = "0.8"
 
 # Not working for now
 # defmt = "1.0"

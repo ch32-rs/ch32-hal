@@ -28,8 +28,8 @@ embassy-usb-driver = "=0.2.2"
 embassy-futures = { version = "0.1.2" }
 
 # This is okay because we should automatically use whatever ch32-hal uses
-qingke-rt = "0.7"
-qingke = "0.7"
+qingke-rt = "0.8"
+qingke = "0.8"
 
 panic-halt = "1.0"
 
