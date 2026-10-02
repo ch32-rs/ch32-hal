@@ -310,6 +310,7 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
         regs.ctrl().write(|w| {
             w.set_int_busy(true);
             w.set_dma_en(true);
+            #[cfg(otg)]
             w.set_dev_pu_en(true);
         });
 
