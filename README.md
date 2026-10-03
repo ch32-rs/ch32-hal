@@ -49,6 +49,9 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 | USB PD     | N/A   | N/A | N/A  | N/A  | ✅\* | ✅\* | ❓    | ❓    |
 | ETH\*      | ✅†   | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
 | CAN\*      | ✅    | N/A | N/A  | N/A  | N/A  | ✅   | N/A   | N/A   |
+| IWDG       | ✅    | ❌  | ❌   | ❓   | ❌   | ❌   | ❌    | ❌    |
+| WWDG       | ✅    | ❌  | ❌   | ❓   | ❌   | ❌   | ❌    | ❌    |
+| CRC        | ✅    | ❌  | ❌   | ❌   | ❌   | ❌   | ❌    | ❌    |
 
 - ✅ : Expected to work
 - ❌ : Not implemented
