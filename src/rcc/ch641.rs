@@ -92,13 +92,50 @@ pub(crate) unsafe fn init(config: Config) {
 
     let pclk2 = Hertz(hclk) / config.apb2_pre;
 
-    super::CLOCKS.sysclk = Hertz(sysclk);
-    super::CLOCKS.hclk = Hertz(hclk);
-    super::CLOCKS.pclk1 = Hertz(hclk);
-    super::CLOCKS.pclk2 = pclk2;
+    refresh_clocks(None);
+}
 
-    super::CLOCKS.pclk1_tim = Hertz(sysclk);
-    super::CLOCKS.pclk2_tim = Hertz(sysclk);
+pub(crate) unsafe fn refresh_clocks(_hse: Option<Hertz>) {
+    super::set_clocks(clocks_from_registers());
+}
+
+fn clocks_from_registers() -> super::Clocks {
+    use crate::pac::rcc::vals::Sw as Sysclk;
+
+    let cfgr = RCC.cfgr0().read();
+    let sysclk = match cfgr.sws() {
+        Sysclk::PLL => HSI_FREQUENCY.0 * 2,
+        _ => HSI_FREQUENCY.0,
+    };
+    let hclk = hclk_hz(sysclk, cfgr.hpre());
+    let pclk2 = Hertz(hclk) / cfgr.ppre2();
+    super::Clocks {
+        sysclk: Hertz(sysclk),
+        hclk: Hertz(hclk),
+        pclk1: Hertz(hclk),
+        pclk2,
+        pclk1_tim: Hertz(sysclk),
+        pclk2_tim: Hertz(sysclk),
+    }
+}
+
+fn hclk_hz(sysclk: u32, hpre: AHBPrescaler) -> u32 {
+    match hpre {
+        AHBPrescaler::DIV1 => sysclk,
+        AHBPrescaler::DIV2 => sysclk / 2,
+        AHBPrescaler::DIV3 => sysclk / 3,
+        AHBPrescaler::DIV4 => sysclk / 4,
+        AHBPrescaler::DIV5 => sysclk / 5,
+        AHBPrescaler::DIV6 => sysclk / 6,
+        AHBPrescaler::DIV7 => sysclk / 7,
+        AHBPrescaler::DIV8 => sysclk / 8,
+        AHBPrescaler::DIV16 => sysclk / 16,
+        AHBPrescaler::DIV32 => sysclk / 16,
+        AHBPrescaler::DIV64 => sysclk / 64,
+        AHBPrescaler::DIV128 => sysclk / 128,
+        AHBPrescaler::DIV256 => sysclk / 256,
+        _ => sysclk,
+    }
 }
 
 impl ops::Div<APBPrescaler> for Hertz {
