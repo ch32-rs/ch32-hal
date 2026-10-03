@@ -11,8 +11,10 @@ use {ch32_hal as hal, panic_halt as _};
 
 #[ch32_hal::entry]
 fn main() -> ! {
-    let mut config = hal::Config::default();
-    config.rcc.sysclk = hal::rcc::SysClk::Pll400MHse;
+    let config = hal::Config {
+        rcc: hal::rcc::Config::with_400m_v5f400_v3f100_hse(),
+        ..Default::default()
+    };
     let p = hal::init(config);
 
     let mut led = Output::new(p.PF2, Level::Low, Default::default());
