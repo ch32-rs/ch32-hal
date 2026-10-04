@@ -1,10 +1,10 @@
 //! CH32H4 RCC — full clock tree (RM §3.4, EVT `system_ch32h417.c`).
 //!
-//! EVT presets: [`Config::with_*`] builders (names shortened from C `SYSCLK_*` macros).
+//! EVT presets: [`Config::with_sysclk_*`] builders (names mirror C `SYSCLK_*` macro segments).
 //!
 //! ```ignore
 //! hal::init(hal::Config {
-//!     rcc: hal::rcc::Config::with_400m_v5f400_v3f100_hse(),
+//!     rcc: hal::rcc::Config::with_sysclk_400m_v5f_400m_v3f_100m_hse(),
 //!     ..Default::default()
 //! });
 //! ```
@@ -127,32 +127,32 @@ impl Config {
     }
 
     /// `SYSCLK_400M_CoreCLK_V5F_400M_V3F_100M_HSE`
-    pub fn with_400m_v5f400_v3f100_hse() -> Self {
+    pub fn with_sysclk_400m_v5f_400m_v3f_100m_hse() -> Self {
         Self::base(Recipe::M400V5f400V3f100 { osc: Oscillator::Hse })
     }
 
     /// `SYSCLK_400M_CoreCLK_V5F_400M_V3F_100M_HSI`
-    pub fn with_400m_v5f400_v3f100_hsi() -> Self {
+    pub fn with_sysclk_400m_v5f_400m_v3f_100m_hsi() -> Self {
         Self::base(Recipe::M400V5f400V3f100 { osc: Oscillator::Hsi })
     }
 
     /// `SYSCLK_480M_CoreCLK_V5F_240M_V3F_120M_HSE`
-    pub fn with_480m_v5f240_v3f120_hse() -> Self {
+    pub fn with_sysclk_480m_v5f_240m_v3f_120m_hse() -> Self {
         Self::base(Recipe::M480V5f240V3f120 { osc: Oscillator::Hse })
     }
 
     /// `SYSCLK_480M_CoreCLK_V5F_240M_V3F_120M_HSI`
-    pub fn with_480m_v5f240_v3f120_hsi() -> Self {
+    pub fn with_sysclk_480m_v5f_240m_v3f_120m_hsi() -> Self {
         Self::base(Recipe::M480V5f240V3f120 { osc: Oscillator::Hsi })
     }
 
     /// `SYSCLK_480M_CoreCLK_V5F_480M_V3F_120M_HSE`
-    pub fn with_480m_v5f480_v3f120_hse() -> Self {
+    pub fn with_sysclk_480m_v5f_480m_v3f_120m_hse() -> Self {
         Self::base(Recipe::M480V5f480V3f120 { osc: Oscillator::Hse })
     }
 
     /// `SYSCLK_480M_CoreCLK_V5F_480M_V3F_120M_HSI`
-    pub fn with_480m_v5f480_v3f120_hsi() -> Self {
+    pub fn with_sysclk_480m_v5f_480m_v3f_120m_hsi() -> Self {
         Self::base(Recipe::M480V5f480V3f120 { osc: Oscillator::Hsi })
     }
 
