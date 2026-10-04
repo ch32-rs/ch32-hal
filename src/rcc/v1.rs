@@ -270,7 +270,7 @@ fn clocks_from_registers(hse: Option<Hertz>) -> super::Clocks {
     }
 }
 
-fn sysclk_hz(sw: Sysclk, cfgr: &crate::pac::rcc::Cfgr0, hse: Option<Hertz>) -> Hertz {
+fn sysclk_hz(sw: Sysclk, cfgr: &crate::pac::rcc::regs::Cfgr0, hse: Option<Hertz>) -> Hertz {
     match sw {
         Sysclk::HSI => HSI_FREQUENCY,
         Sysclk::HSE => hse.expect("RCC: HSE frequency required"),
