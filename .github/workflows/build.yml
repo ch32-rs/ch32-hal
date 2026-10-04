@@ -80,6 +80,7 @@ jobs:
       fail-fast: false
       matrix:
         example:
+          - ch32h417
           - ch32l103
           - ch32v003
           - ch32v006
