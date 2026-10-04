@@ -1,15 +1,35 @@
 //! Dual-core demo: V3F wakes V5F, both run independently.
 //!
 //! V3F: blinks LED0 (PF2) and writes a loop counter to ITCM (0x200a0000)
-//!      and shared SRAM (0x20100000) for `wlink dump` verification.
-//! V5F: see examples/ch32h417-v5f — writes 0xDEADBEEF to ITCM
-//!      (0x200a0100) at boot, or toggles LED1 (PF0).
+//!      and to the cross-core mailbox in shared RAM (0x2017800C) for
+//!      `wlink dump` verification.
+//! V5F: see examples/ch32h417-v5f.
 //!
-//! Flashing: V3F and V5F binaries share one flash image. The V5F binary
-//! is linked at 0x08002000; merge it into the V3F image before flashing:
+//! # Flash / RAM partition
 //!
-//!   dd if=v5f.bin of=v3f.bin bs=1 seek=8192 conv=notrunc
-//!   wlink flash v3f.bin
+//! Both images tile one flash chip the way the WCH CSDK does
+//! (`Ld/V3F/Link_v3f.ld` + `Ld/V5F/Link_v5f.ld`): V3F owns the first 64K,
+//! the V5F image starts at 0x00010000. Either image states its own range, so
+//! an oversized build fails to link instead of overwriting the other image.
+//! Flash this image with `--no-run` first, then the V5F image (which resets
+//! and runs):
+//!
+//! ```text
+//! wlink flash -R target/riscv32imafc-unknown-none-elf/release/dualcore
+//! (cd ../ch32h417-v5f && wlink flash target/riscv32imafbc-unknown-none-elf/release/v5f_probe)
+//! ```
+//!
+//! `wlink` maps the V5F image's 0x00010000-based sections onto flash
+//! 0x08010000, so no `dd` merge is needed.
+//!
+//! # Cross-core mailbox (shared RAM, same layout in both crates)
+//!
+//! ```text
+//! 0x20178000  sdi_cpuid: console token
+//! 0x20178004  sdi_cpuid: V5F tick counter
+//! 0x20178008  v5f_probe: 0xDEADBEEF liveness marker
+//! 0x2017800C  dualcore:  V3F loop counter
+//! ```
 
 #![no_std]
 #![no_main]
@@ -25,8 +45,11 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-/// Must match examples/ch32h417-v5f/memory.x FLASH ORIGIN (1KB-aligned).
-const V5F_ENTRY: u32 = 0x0800_2000;
+/// Must match `examples/ch32h417-v5f/memory.x` FLASH ORIGIN (1KB-aligned).
+const V5F_ENTRY: u32 = 0x0001_0000;
+
+/// Cross-core mailbox slot (see the module docs).
+const MAILBOX_COUNTER: *mut u32 = 0x2017_800C as *mut u32;
 
 #[ch32_hal::entry]
 fn main() -> ! {
@@ -46,7 +69,7 @@ fn main() -> ! {
         led.toggle();
         unsafe {
             core::ptr::write_volatile(0x200a0000 as *mut u32, counter);
-            core::ptr::write_volatile(0x20100000 as *mut u32, counter);
+            core::ptr::write_volatile(MAILBOX_COUNTER, counter);
         }
         counter = counter.wrapping_add(1);
         delay.delay_ms(500);

@@ -8,7 +8,9 @@ ch32-hal = { path = "../../", features = [
     "ch32h417qeu6-v5f",
     "memory-x",
 ] }
-qingke = { version = "0.8" }
+# `dual-core` gates `qingke::pfic::HartId` (read from PFIC_SCTLR), which the
+# sdi_cpuid demo uses to report which hart is executing.
+qingke = { version = "0.8", features = ["dual-core"] }
 qingke-rt = { version = "0.8" }
 panic-halt = "1.0"
 
