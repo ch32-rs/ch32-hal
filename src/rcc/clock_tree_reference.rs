@@ -256,8 +256,8 @@ pub mod families {
         //! **API（preset）**：
         //!
         //! ```text
-        //! Config::with_400m_v5f400_v3f100_hse()
-        //! Config::with_480m_v5f240_v3f120_hsi()
+        //! Config::with_sysclk_400m_v5f_400m_v3f_100m_hse()
+        //! Config::with_sysclk_480m_v5f_240m_v3f_120m_hsi()
         //! Config::with_hsi()
         //!   .with_hse(hse)
         //!   .with_ls(ls)
@@ -276,12 +276,12 @@ pub mod families {
         //!
         pub const PRESET_TO_C: &[(&str, &str)] = &[
             ("Config::with_hsi()", "(none, POR HSI 25M)"),
-            ("Config::with_400m_v5f400_v3f100_hse()", "SYSCLK_400M_CoreCLK_V5F_400M_V3F_100M_HSE"),
-            ("Config::with_400m_v5f400_v3f100_hsi()", "SYSCLK_400M_CoreCLK_V5F_400M_V3F_100M_HSI"),
-            ("Config::with_480m_v5f240_v3f120_hse()", "SYSCLK_480M_CoreCLK_V5F_240M_V3F_120M_HSE"),
-            ("Config::with_480m_v5f240_v3f120_hsi()", "SYSCLK_480M_CoreCLK_V5F_240M_V3F_120M_HSI"),
-            ("Config::with_480m_v5f480_v3f120_hse()", "SYSCLK_480M_CoreCLK_V5F_480M_V3F_120M_HSE"),
-            ("Config::with_480m_v5f480_v3f120_hsi()", "SYSCLK_480M_CoreCLK_V5F_480M_V3F_120M_HSI"),
+            ("Config::with_sysclk_400m_v5f_400m_v3f_100m_hse()", "SYSCLK_400M_CoreCLK_V5F_400M_V3F_100M_HSE"),
+            ("Config::with_sysclk_400m_v5f_400m_v3f_100m_hsi()", "SYSCLK_400M_CoreCLK_V5F_400M_V3F_100M_HSI"),
+            ("Config::with_sysclk_480m_v5f_240m_v3f_120m_hse()", "SYSCLK_480M_CoreCLK_V5F_240M_V3F_120M_HSE"),
+            ("Config::with_sysclk_480m_v5f_240m_v3f_120m_hsi()", "SYSCLK_480M_CoreCLK_V5F_240M_V3F_120M_HSI"),
+            ("Config::with_sysclk_480m_v5f_480m_v3f_120m_hse()", "SYSCLK_480M_CoreCLK_V5F_480M_V3F_120M_HSE"),
+            ("Config::with_sysclk_480m_v5f_480m_v3f_120m_hsi()", "SYSCLK_480M_CoreCLK_V5F_480M_V3F_120M_HSI"),
         ];
     }
 }

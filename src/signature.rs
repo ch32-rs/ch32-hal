@@ -142,6 +142,12 @@ fn chip_id_to_name(id: u32) -> &'static str {
     // CH641D-0x641105x0
     // CH641U-0x641505x0
     // CH641P-0x641605x0
+
+    // CH32H417QEU-0x417005xD (EVT `DBGMCU_GetCHIPID`)
+    // CH32H417MEU-0x417105xD
+    // CH32H417WEU-0x417205xD
+    // CH32H415REU-0x415005xD
+    // CH32H416RDU-0x416005xD
     match id >> 16 {
         0x3033 => "CH32V303CBT6",
         0x3032 => "CH32V303RBT6",
@@ -230,6 +236,12 @@ fn chip_id_to_name(id: u32) -> &'static str {
         0x6411 => "CH641D",
         0x6415 => "CH641U",
         0x6416 => "CH641P",
+
+        0x4170 => "CH32H417QEU",
+        0x4171 => "CH32H417MEU",
+        0x4172 => "CH32H417WEU",
+        0x4150 => "CH32H415REU",
+        0x4160 => "CH32H416RDU",
 
         _ => "Unknown",
     }
