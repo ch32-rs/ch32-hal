@@ -737,7 +737,12 @@ foreach_pin!(
 /// Enable the GPIO peripheral clock.
 
 pub(crate) unsafe fn init(_cs: CriticalSection) {
-    #[cfg(not(afio_h4))]
+    // Gated on "the chip has an AFIO peripheral", like embassy-stm32's
+    // `gpio::init`. CH32H4 needs it too: its pin mux lives in
+    // `AFIO.GPIO_AFR`, which `set_as_af` writes for every AF pin. With the
+    // AFIO clock off those writes are silently dropped and every pin stays
+    // on AF0.
+    #[cfg(afio)]
     <crate::peripherals::AFIO as crate::peripheral::SealedRccPeripheral>::enable_and_reset_with_cs(_cs);
 
     crate::_generated::init_gpio();
