@@ -22,7 +22,7 @@ use pac::spi::vals::BaudRate;
 use pac::spi::Spi as Regs;
 
 use crate::dma::{slice_ptr_parts, word, ChannelAndRequest};
-use crate::gpio::{AFType, AnyPin, Pull, Speed};
+use crate::gpio::{AfType, AnyPin, OutputType, Pull, SealedPin, Speed};
 use crate::mode::{Async, Blocking, Mode as PeriMode};
 use crate::time::Hertz;
 use crate::{pac, peripherals, Peri};
@@ -295,24 +295,19 @@ impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
 
 impl<'d, T: Instance> Spi<'d, T, Blocking> {
     /// Create a new SPI driver.
-    pub fn new_blocking<const REMAP: u8>(
+    pub fn new_blocking<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        sck: Peri<'d, impl SckPin<T, REMAP>>,
-        mosi: Peri<'d, impl MosiPin<T, REMAP>>,
-        miso: Peri<'d, impl MisoPin<T, REMAP>>,
+        sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
+        mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
+        miso: Peri<'d, if_afio!(impl MisoPin<T, A>)>,
         config: Config,
     ) -> Self {
-        T::set_remap(REMAP);
-
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        miso.set_as_input(Pull::None);
 
         Self::new_inner(
             peri,
-            Some(sck.into()),
-            Some(mosi.into()),
-            Some(miso.into()),
+            new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(miso, AfType::input(Pull::None)),
             None,
             None,
             config,
@@ -320,73 +315,57 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
     }
 
     /// Create a new SPI driver, in RX-only mode (only MISO pin, no MOSI).
-    pub fn new_blocking_rxonly<const REMAP: u8>(
+    pub fn new_blocking_rxonly<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        sck: Peri<'d, impl SckPin<T, REMAP>>,
-        miso: Peri<'d, impl MisoPin<T, REMAP>>,
+        sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
+        miso: Peri<'d, if_afio!(impl MisoPin<T, A>)>,
         config: Config,
     ) -> Self {
-        T::set_remap(REMAP);
 
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        miso.set_as_input(Pull::None);
-
-        Self::new_inner(peri, Some(sck.into()), None, Some(miso.into()), None, None, config)
+        Self::new_inner(peri, new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)), None, new_pin!(miso, AfType::input(Pull::None)), None, None, config)
     }
 
     /// Create a new SPI driver, in TX-only mode (only MOSI pin, no MISO).
-    pub fn new_blocking_txonly<const REMAP: u8>(
+    pub fn new_blocking_txonly<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        sck: Peri<'d, impl SckPin<T, REMAP>>,
-        mosi: Peri<'d, impl MosiPin<T, REMAP>>,
+        sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
+        mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
         config: Config,
     ) -> Self {
-        T::set_remap(REMAP);
 
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
-
-        Self::new_inner(peri, Some(sck.into()), Some(mosi.into()), None, None, None, config)
+        Self::new_inner(peri, new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)), new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)), None, None, None, config)
     }
 
     /// Create a new SPI driver, in TX-only mode, without SCK pin.
     ///
     /// This can be useful for bit-banging non-SPI protocols.
-    pub fn new_blocking_txonly_nosck<const REMAP: u8>(
+    pub fn new_blocking_txonly_nosck<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        mosi: Peri<'d, impl MosiPin<T, REMAP>>,
+        mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
         config: Config,
     ) -> Self {
-        T::set_remap(REMAP);
 
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
-
-        Self::new_inner(peri, None, Some(mosi.into()), None, None, None, config)
+        Self::new_inner(peri, None, new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)), None, None, None, config)
     }
 }
 
 impl<'d, T: Instance> Spi<'d, T, Async> {
     /// Create a new SPI driver.
-    pub fn new<const REMAP: u8>(
+    pub fn new<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        sck: Peri<'d, impl SckPin<T, REMAP>>,
-        mosi: Peri<'d, impl MosiPin<T, REMAP>>,
-        miso: Peri<'d, impl MisoPin<T, REMAP>>,
+        sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
+        mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
+        miso: Peri<'d, if_afio!(impl MisoPin<T, A>)>,
         tx_dma: Peri<'d, impl TxDma<T>>,
         rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Self {
-        T::set_remap(REMAP);
-
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        miso.set_as_input(Pull::None);
 
         Self::new_inner(
             peri,
-            Some(sck.into()),
-            Some(mosi.into()),
-            Some(miso.into()),
+            new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(miso, AfType::input(Pull::None)),
             new_dma!(tx_dma),
             new_dma!(rx_dma),
             config,
@@ -394,23 +373,19 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
     }
 
     /// Create a new SPI driver, in RX-only mode (only MISO pin, no MOSI).
-    pub fn new_rxonly<const REMAP: u8>(
+    pub fn new_rxonly<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        sck: Peri<'d, impl SckPin<T, REMAP>>,
-        miso: Peri<'d, impl MisoPin<T, REMAP>>,
+        sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
+        miso: Peri<'d, if_afio!(impl MisoPin<T, A>)>,
         rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Self {
-        T::set_remap(REMAP);
-
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        miso.set_as_input(Pull::None);
 
         Self::new_inner(
             peri,
-            Some(sck.into()),
+            new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)),
             None,
-            Some(miso.into()),
+            new_pin!(miso, AfType::input(Pull::None)),
             None,
             new_dma!(rx_dma),
             config,
@@ -418,22 +393,18 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
     }
 
     /// Create a new SPI driver, in TX-only mode (only MOSI pin, no MISO).
-    pub fn new_txonly<const REMAP: u8>(
+    pub fn new_txonly<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        sck: Peri<'d, impl SckPin<T, REMAP>>,
-        mosi: Peri<'d, impl MosiPin<T, REMAP>>,
+        sck: Peri<'d, if_afio!(impl SckPin<T, A>)>,
+        mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
         tx_dma: Peri<'d, impl TxDma<T>>,
         config: Config,
     ) -> Self {
-        T::set_remap(REMAP);
-
-        sck.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
 
         Self::new_inner(
             peri,
-            Some(sck.into()),
-            Some(mosi.into()),
+            new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)),
             None,
             new_dma!(tx_dma),
             None,
@@ -444,17 +415,14 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
     /// Create a new SPI driver, in TX-only mode, without SCK pin.
     ///
     /// This can be useful for bit-banging non-SPI protocols.
-    pub fn new_txonly_nosck<const REMAP: u8>(
+    pub fn new_txonly_nosck<#[cfg(afio)] A>(
         peri: Peri<'d, T>,
-        mosi: Peri<'d, impl MosiPin<T, REMAP>>,
+        mosi: Peri<'d, if_afio!(impl MosiPin<T, A>)>,
         tx_dma: Peri<'d, impl TxDma<T>>,
         config: Config,
     ) -> Self {
-        T::set_remap(REMAP);
 
-        mosi.set_as_af_output(AFType::OutputPushPull, Speed::High);
-
-        Self::new_inner(peri, None, Some(mosi.into()), None, new_dma!(tx_dma), None, config)
+        Self::new_inner(peri, None, new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)), None, new_dma!(tx_dma), None, config)
     }
 
     /// SPI write, using DMA.
@@ -787,10 +755,7 @@ trait SealedInstance {
 /// SPI instance trait.
 #[allow(private_bounds)]
 pub trait Instance:
-    embassy_hal_internal::PeripheralType
-    + crate::peripheral::RccPeripheral
-    + crate::peripheral::RemapPeripheral
-    + SealedInstance
+    embassy_hal_internal::PeripheralType + crate::peripheral::RccPeripheral + SealedInstance
 {
 }
 
@@ -804,14 +769,14 @@ foreach_peripheral!(
     };
 );
 
-pin_trait!(SckPin, Instance);
-pin_trait!(MosiPin, Instance);
-pin_trait!(MisoPin, Instance);
-pin_trait!(CsPin, Instance);
+pin_trait!(SckPin, Instance, @A);
+pin_trait!(MosiPin, Instance, @A);
+pin_trait!(MisoPin, Instance, @A);
+pin_trait!(CsPin, Instance, @A);
 
 // I2S pins
-pin_trait!(MckPin, Instance);
-pin_trait!(CkPin, Instance);
+pin_trait!(MckPin, Instance, @A);
+pin_trait!(CkPin, Instance, @A);
 
 dma_trait!(RxDma, Instance);
 dma_trait!(TxDma, Instance);

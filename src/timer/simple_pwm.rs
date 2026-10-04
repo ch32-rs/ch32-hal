@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 
 use super::low_level::{CountingMode, OutputCompareMode, OutputPolarity, Timer};
 use super::{Channel, Channel1Pin, Channel2Pin, Channel3Pin, Channel4Pin, GeneralInstance16bit};
-use crate::gpio::{AFType, AnyPin};
+use crate::gpio::{AfType, AnyPin, OutputType, Speed};
 use crate::time::Hertz;
 use crate::Peri;
 
@@ -29,10 +29,11 @@ macro_rules! channel_impl {
     ($new_chx:ident, $channel:ident, $pin_trait:ident) => {
         impl<'d, T: GeneralInstance16bit> PwmPin<'d, T, $channel> {
             #[doc = concat!("Create a new ", stringify!($channel), " PWM pin instance.")]
-            pub fn $new_chx<const REMAP: u8>(pin: Peri<'d, impl $pin_trait<T, REMAP>>) -> Self {
+            pub fn $new_chx<#[cfg(afio)] A>(
+                pin: Peri<'d, if_afio!(impl $pin_trait<T, A>)>,
+            ) -> Self {
                 critical_section::with(|_| {
-                    pin.set_as_af_output(AFType::OutputPushPull, Default::default());
-                    T::set_remap(REMAP);
+                    set_as_af!(pin, AfType::output(OutputType::PushPull, Speed::High));
                 });
                 PwmPin {
                     _pin: pin.into(),
