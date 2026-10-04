@@ -7,10 +7,17 @@ edition = "2021"
 # Default to the V3F hart (boot core). For V5F examples, switch the
 # feature to `ch32h417qeu6-v5f` and update the target JSON to use the
 # riscv32imafbc-style profile (V5F adds the B extension and ICache).
-ch32-hal = { path = "../../", features = [
+# `default-features = false` drops `embassy`: the CH32H4 embassy time
+# driver is still pending (the systick one reaches for V3-only register
+# names and `time-driver-timN` starves main in its interrupt handler), and
+# this crate's examples are all blocking. Without `embassy` the I2C
+# driver's timeout uses the plain counter `Timeout` instead of
+# `embassy_time`, so no time driver is needed.
+ch32-hal = { path = "../../", default-features = false, features = [
     "ch32h417qeu6-v3f",
     "memory-x",
     "rt",
+    "exti",
 ] }
 
 qingke = { version = "0.8", features = ["unsafe-trust-wch-atomics", "dual-core"] }
@@ -18,6 +25,9 @@ qingke-rt = { version = "0.8" }
 
 panic-halt = "1.0"
 embedded-hal = "1.0.0"
+
+# I2C sensor used by `src/bin/bme280_blocking.rs`.
+edrv-bme280 = "0.1.1"
 
 [profile.release]
 debug = 2
