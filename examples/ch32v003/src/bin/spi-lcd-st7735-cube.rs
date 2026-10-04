@@ -262,7 +262,6 @@ fn main() -> ! {
     let mut spi_config = hal::spi::Config::default();
     spi_config.frequency = Hertz::mhz(1);
 
-    // Remap 0
     let spi = Spi::new_blocking_txonly::<0>(p.SPI1, sck, sda, spi_config);
 
     rst.set_low();

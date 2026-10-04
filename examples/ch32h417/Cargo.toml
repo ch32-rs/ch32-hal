@@ -1,0 +1,26 @@
+[package]
+name = "ch32h417-examples"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Default to the V3F hart (boot core). For V5F examples, switch the
+# feature to `ch32h417qeu6-v5f` and update the target JSON to use the
+# riscv32imafbc-style profile (V5F adds the B extension and ICache).
+ch32-hal = { path = "../../", features = [
+    "ch32h417qeu6-v3f",
+    "memory-x",
+    "rt",
+] }
+
+qingke = { version = "0.8", features = ["unsafe-trust-wch-atomics", "dual-core"] }
+qingke-rt = { version = "0.8" }
+
+panic-halt = "1.0"
+embedded-hal = "1.0.0"
+
+[profile.release]
+debug = 2
+strip = false
+lto = false
+opt-level = 3

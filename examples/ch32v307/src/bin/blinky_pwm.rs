@@ -16,7 +16,7 @@ async fn main(_spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
 
-    // use remap 1, or 3
+    // PA15 is TIM2_CH1 in remap groups 1 *and* 3 — pick one explicitly.
     let pin = PwmPin::new_ch1::<1>(p.PA15);
     let mut pwm = SimplePwm::new(
         p.TIM2,
