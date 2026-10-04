@@ -31,7 +31,7 @@ const V5F_ENTRY: u32 = 0x0800_2000;
 #[ch32_hal::entry]
 fn main() -> ! {
     let mut config = hal::Config::default();
-    config.rcc = hal::rcc::Config::with_400m_v5f400_v3f100_hsi();
+    config.rcc = hal::rcc::Config::with_sysclk_400m_v5f_400m_v3f_100m_hsi();
     let p = hal::init(config);
 
     let mut led = Output::new(p.PF2, Level::Low, Default::default());
