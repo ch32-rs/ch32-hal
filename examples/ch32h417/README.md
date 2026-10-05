@@ -26,7 +26,7 @@ files that exist:
 | Kind | Files | Examples |
 |---|---|---|
 | **v3f-only** | `v3f/src/bin/NAME.rs` | `blinky`, `i2c_scan`, `bme280_blocking`, `sdi_print`, `launcher` |
-| **dual-core** | `v3f/src/bin/NAME.rs` + `v5f/src/bin/NAME.rs` | `cpuid`, `dualcore`, `hello`, `pingpong`, `sdi_cpuid` |
+| **dual-core** | `v3f/src/bin/NAME.rs` + `v5f/src/bin/NAME.rs` | `atomics`, `cpuid`, `dualcore`, `hello`, `pingpong`, `sdi_cpuid` |
 
 In a dual-core example the V3F half brings the chip up (clocks, GPIO, SDI),
 hands over to hart 1, and reports; the V5F half is deliberately small — it runs
@@ -148,6 +148,29 @@ The same split as the WCH CSDK (`EXAM/…/Common/Ld/V3F/Link_v3f.ld` and
 Either image declares its own range, so an oversized build fails to link
 instead of overwriting the other image; `xtask merge` checks the sizes again
 while assembling the merged image.
+
+### Cross-core atomics (`atomics`)
+
+Both cores `fetch_add` the *same* shared word, concurrently, `CAS_INCREMENTS`
+(1,000,000) times each — so the total must be exactly 2,000,000. Anything less
+means updates were lost, i.e. the atomics were emulated rather than performed by
+the A extension. That matters because the only fallback available here is a
+critical section that masks *one* hart's interrupts (`qingke`'s
+`SingleHartCriticalSection`), which cannot serialise two cores.
+
+```text
+cargo xtask flash --example atomics --dual-core   # both cores hammer, then stop
+cargo xtask report                                 # total, done mask, verdict
+cargo xtask run   --example atomics --dual-core    # prints the verdict over SDI
+```
+
+Both target JSONs therefore set `"atomic-cas": true` and both crates enable
+`qingke/unsafe-trust-wch-atomics` — the feature qingke gates behind a warning
+that its atomics were "most likely broken" *as tested on QingKe V4*. On this
+H417 the litmus above passes (2,000,000 with no lost updates), which is what
+makes the feature warranted rather than hopeful. Note the exchange takes several
+seconds: hart 1 runs this loop from flash and the test's `delay`-free pacing is
+whatever the cores' clocks give.
 
 ### Shared-memory ping-pong (`pingpong`)
 

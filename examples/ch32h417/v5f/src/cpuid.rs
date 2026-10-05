@@ -23,14 +23,11 @@ pub fn note_trap() {
     TRAP_HIT.store(1, Ordering::Relaxed);
 }
 
-/// Read and clear the trap flag. Plain load/store rather than `swap`: hart 1's
-/// atomics come from the critical-section fallback (the `unsafe-trust-wch-atomics`
-/// feature is only enabled for the boot core), and this is single-threaded
-/// per core anyway.
+/// Read and clear the trap flag. `swap` (an A-extension `amoor.w`/`lr.w`+`sc.w`)
+/// is available because both target JSONs advertise `atomic-cas: true` and both
+/// crates enable `qingke`'s `unsafe-trust-wch-atomics`.
 fn take_trap() -> bool {
-    let hit = TRAP_HIT.load(Ordering::Relaxed) != 0;
-    TRAP_HIT.store(0, Ordering::Relaxed);
-    hit
+    TRAP_HIT.swap(0, Ordering::Relaxed) != 0
 }
 
 /// Read one CSR, returning `(value, present)` — `present` is false when the

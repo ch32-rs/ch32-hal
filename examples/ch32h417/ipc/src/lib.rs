@@ -37,7 +37,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Bumped whenever the field layout below changes. Both images are flashed
 /// independently, so a stale half must be able to notice it does not match.
-pub const LAYOUT_VERSION: u32 = 2;
+pub const LAYOUT_VERSION: u32 = 3;
 
 /// Number of probed CSRs in [`Mailbox::cpuid_values`].
 pub const CPUID_CSRS: usize = 14;
@@ -73,6 +73,13 @@ pub const DUALCORE_MARKER: u32 = 0xDEAD_BEEF;
 /// Written by hart 1's `cpuid` half once its whole block is in place.
 pub const CPUID_DONE: u32 = 0xC0DE_0001;
 
+/// Increments each core performs in the `atomics` example, on the *same* word.
+pub const CAS_INCREMENTS: u32 = 1_000_000;
+
+/// `cas_done` bits, one per core.
+pub const CAS_DONE_V3F: u32 = 1 << 0;
+pub const CAS_DONE_V5F: u32 = 1 << 1;
+
 /// The shared structure. Field order is the ABI — append new fields at the end
 /// and bump [`LAYOUT_VERSION`].
 #[repr(C)]
@@ -100,6 +107,13 @@ pub struct Mailbox {
     pub cpuid_progress: AtomicU32,
     /// `pingpong`: hart 1's round counter, incremented once per answered round.
     pub ping: AtomicU32,
+    /// `atomics`: the contended word both cores increment with `fetch_add`; the
+    /// total must equal `2 * CAS_INCREMENTS` for the hardware atomics to be
+    /// usable across cores.
+    pub cas_total: AtomicU32,
+    /// `atomics`: [`CAS_DONE_V3F`] / [`CAS_DONE_V5F`], set once a core has
+    /// finished its increments.
+    pub cas_done: AtomicU32,
     /// `pingpong`: the boot core's echo — equal to [`Self::ping`] once it has
     /// answered that round, so `ping != pong` means "a round is outstanding".
     pub pong: AtomicU32,
@@ -122,6 +136,8 @@ impl Mailbox {
             cpuid_buildcfg: AtomicU32::new(0),
             cpuid_done: AtomicU32::new(0),
             cpuid_progress: AtomicU32::new(0),
+            cas_total: AtomicU32::new(0),
+            cas_done: AtomicU32::new(0),
             ping: AtomicU32::new(0),
             pong: AtomicU32::new(0),
         }
@@ -143,6 +159,8 @@ impl Mailbox {
         self.cpuid_buildcfg.store(0, Ordering::Relaxed);
         self.cpuid_done.store(0, Ordering::Relaxed);
         self.cpuid_progress.store(0, Ordering::Relaxed);
+        self.cas_total.store(0, Ordering::Relaxed);
+        self.cas_done.store(0, Ordering::Relaxed);
         self.ping.store(0, Ordering::Relaxed);
         self.pong.store(0, Ordering::Relaxed);
         self.layout_version.store(LAYOUT_VERSION, Ordering::Relaxed);
