@@ -40,6 +40,13 @@ use std::process::{exit, Command};
 /// Bytes an erased flash byte reads as, used to pad the merged image.
 const ERASED: u8 = 0xFF;
 
+/// Where the chip's flash starts in the address space; `Core::flash_base` is
+/// relative to it.
+const CHIP_FLASH_BASE: u64 = 0x0800_0000;
+
+/// How many times a flash is retried before giving up.
+const VERIFY_ATTEMPTS: u32 = 3;
+
 /// One core of the chip.
 ///
 /// `flash_base` / `flash_limit` mirror that core's `memory.x` (the V3F owns the
@@ -236,6 +243,13 @@ fn build(opts: &Options) {
 }
 
 /// `flash` (watch = false) and `run` (watch = true) share this.
+///
+/// The non-final cores are written with `--no-run` and read back, so nothing
+/// starts half-programmed. The final core is written by a plain `wlink flash`,
+/// which is what resets and runs the chip — and, on this part, what actually
+/// releases hart 1: a write with `--no-run` (or a later `wlink reset run`)
+/// leaves the second core held by the debug module until the board is
+/// power-cycled.
 fn flash(opts: &Options, watch: bool) {
     let Some(example) = &opts.example else {
         fail(&format!(
@@ -250,20 +264,84 @@ fn flash(opts: &Options, watch: bool) {
 
     for (i, core) in cores.iter().enumerate() {
         let elf = example_elf(core, example);
-        let mut args = vec!["flash", "--enable-sdi-print"];
-        if i + 1 == cores.len() {
-            // The last write is the one that resets and runs the chip; the
-            // earlier ones must leave it halted so nothing starts half-flashed.
+        let last = i + 1 == cores.len();
+        println!("flashing {} ...", core.name);
+
+        if last {
+            let mut args = vec!["flash", "--enable-sdi-print"];
             if watch {
                 args.push("--watch-serial");
             }
+            args.push(elf.to_str().expect("utf-8 path"));
+            // The console occupies the command, so a `run` cannot read back
+            // afterwards; `flash` retries until the image verifies.
+            program_verified(core, example, &elf, &args, !watch);
         } else {
-            args.push("--no-run");
+            let args = [
+                "flash",
+                "--enable-sdi-print",
+                "--no-run",
+                elf.to_str().expect("utf-8 path"),
+            ];
+            program_verified(core, example, &elf, &args, true);
         }
-        args.push(elf.to_str().expect("utf-8 path"));
-        println!("flashing {} ...", core.name);
-        run("wlink", &args, &root());
     }
+}
+
+/// Runs `wlink` with `args`, then reads the region back and compares it with the
+/// image that was built (`check`). Retries the whole command on mismatch.
+///
+/// `wlink flash` has been observed to return success while only part of the
+/// image — or none of it — reached the flash: the log stops after
+/// `Read protected: false` and never prints `Flash done`. Without this check
+/// that looks exactly like a firmware bug in the code under test.
+fn program_verified(core: &Core, example: &str, elf: &Path, args: &[&str], check: bool) {
+    let expected = flatten(elf, core);
+    for attempt in 1..=VERIFY_ATTEMPTS {
+        run("wlink", args, &root());
+        if !check {
+            return;
+        }
+        match read_flash(core, expected.len()) {
+            // `wlink dump` rounds its length up to a word, so compare the
+            // image-sized prefix rather than the vectors themselves.
+            Some(actual) if actual.len() >= expected.len() && actual[..expected.len()] == expected => {
+                println!("  {} verified ({} bytes)", core.name, expected.len());
+                return;
+            }
+            Some(actual) => println!(
+                "  {}: read-back differs ({} of {} bytes match) on attempt {attempt}",
+                core.name,
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .take_while(|(a, b)| a == b)
+                    .count(),
+                expected.len()
+            ),
+            None => println!("  {}: read-back failed on attempt {attempt}", core.name),
+        }
+    }
+    fail(&format!(
+        "{}: `{example}` is not in flash after {VERIFY_ATTEMPTS} attempts — \
+         the probe returned success but did not program the image",
+        core.name
+    ));
+}
+
+/// Reads `len` bytes of `core`'s image back out of flash, or `None` on failure.
+fn read_flash(core: &Core, len: usize) -> Option<Vec<u8>> {
+    let tmp = env::temp_dir().join(format!("h417-verify-{}-{}.bin", core.name, std::process::id()));
+    let address = format!("{:#010x}", CHIP_FLASH_BASE + core.flash_base);
+    let length = len.to_string();
+    let status = Command::new("wlink")
+        .args(["dump", &address, &length, "-o", tmp.to_str()?])
+        .current_dir(root())
+        .status()
+        .ok()?;
+    let bytes = status.success().then(|| fs::read(&tmp).ok()).flatten();
+    let _ = fs::remove_file(&tmp);
+    bytes
 }
 
 /// A contiguous payload of the merged image.
