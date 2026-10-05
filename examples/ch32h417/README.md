@@ -39,27 +39,36 @@ rejected by `xtask`.
 ```sh
 cd examples/ch32h417
 
-cargo xtask build --example cpuid      # both cores of a dual-core example
-cargo xtask build --example i2c_scan   # a v3f-only example
-cargo xtask build                      # everything
+cargo xtask build  --example cpuid                 # boot core only (the default)
+cargo xtask build  --example cpuid --dual-core     # both of its halves
+cargo xtask build  --example cpuid --jump-v5f      # jumper + cpuid's V5F half
+cargo xtask build                                  # everything
 
-cargo xtask flash --example dualcore   # build + write both images, no console
-cargo xtask run   --example dualcore   # same, plus the SDI console
-cargo xtask flash --example launcher --v3f-only   # boot core alone
+cargo xtask flash  --example dualcore --dual-core  # build + write both, no console
+cargo xtask run    --example dualcore --dual-core  # same, plus the SDI console
+cargo xtask flash  --example cpuid --jump-v5f      # jump firmware + V5F payload
+cargo xtask flash  --jump-v5f                      # reflash the jumper alone
 
-cargo xtask merge  --example dualcore  # out/dualcore.bin + out/dualcore.hex
+cargo xtask merge  --example dualcore --dual-core  # out/dualcore.bin + .hex
 cargo xtask report                     # decode the mailbox the examples publish
 ```
 
-There are two things to select, matching the two kinds of example: **which
-example**, and whether a dual-core example is written **whole** (both cores) or
-only on the **boot core** (`--v3f-only`, which leaves the V5F region as it is).
-There is deliberately no V5F-only mode — reset never starts hart 1, so it would
-have nothing to run. `--no-build` skips the build step and `--out DIR` moves the
-merged artifacts.
+Two things are selected: **which example**, and **what to program**:
 
-Flashing a dual-core example writes the V3F image first with `--no-run` and the
-V5F image last, because the final write is the one that resets and runs the chip:
+| Layout | Boot core (`v3f`) | Second core (`v5f`) |
+|---|---|---|
+| *(default)* | the named example's half | left exactly as it is |
+| `--dual-core` | the named example's half | the named example's half |
+| `--jump-v5f` | the generic jumper, `launcher` | the named example's half |
+
+The default is the boot core alone because reset only ever starts that core: a
+V5F payload is written when you ask for it, and there is deliberately no V5F-only
+mode — it would have nothing to run. `--no-build` skips the build step and
+`--out DIR` moves the merged artifacts. Merging needs both images, so it asks for
+`--dual-core` or `--jump-v5f`.
+
+Flashing writes the boot core first with `--no-run` and the last image with a
+plain write, because the final write is the one that resets and runs the chip:
 only then are both images in place.
 
 ### Reading results back
@@ -85,17 +94,19 @@ and `mhartid = 1` is what shows the values came from the second core rather than
 from the boot core's probe.
 
 ```sh
-cargo xtask flash --example cpuid   # hand over, let hart 1 probe itself
-cargo xtask report                  # read hart 1's block back out
+cargo xtask flash --example cpuid --dual-core   # hand over, let hart 1 probe itself
+cargo xtask report                              # read hart 1's block back out
 ```
 
-`launcher` is the same handover with nothing else: a generic V3F image that brings
-the shared blocks up, wakes hart 1 at the address `v5f/memory.x` links it to, and
-parks the V3F in `wfi`. With `--v3f-only` it starts whatever V5F payload is
-already in flash, including one built by hand:
+`launcher` is the same handover with nothing else: a generic V3F-only image that
+brings the shared blocks up, wakes hart 1 at the address `v5f/memory.x` links it
+to, and parks the V3F in `wfi`. `--jump-v5f` puts that jumper on the boot core
+while programming a V5F payload next to it, so a V5F half needs no V3F
+counterpart of its own:
 
 ```sh
-cargo xtask flash --example launcher --v3f-only   # start the existing V5F image
+cargo xtask flash --example cpuid --jump-v5f   # jumper + cpuid's V5F half
+cargo xtask flash --jump-v5f                   # reflash the jumper alone
 ```
 
 It is deliberately not an embassy application — no executor, and `hal::init()`
