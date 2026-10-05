@@ -8,10 +8,11 @@
 //! merge them into a single image.
 //!
 //! ```text
-//! cargo xtask build [--example NAME] [--core v3f|v5f]
-//! cargo xtask flash --example NAME [--core v3f|v5f] [--no-build]
-//! cargo xtask run   --example NAME [--core v3f|v5f] [--no-build]
+//! cargo xtask build [--example NAME] [--v3f-only]
+//! cargo xtask flash --example NAME [--v3f-only] [--no-build]
+//! cargo xtask run   --example NAME [--v3f-only] [--no-build]
 //! cargo xtask merge --example NAME [--out DIR]
+//! cargo xtask report
 //! ```
 //!
 //! # The two kinds of example
@@ -64,7 +65,7 @@ const QUICK_TIMEOUT: Duration = Duration::from_secs(30);
 /// first 64K and the V5F image starts at 0x00010000, the same split the WCH
 /// CSDK uses in `Ld/V3F/Link_v3f.ld` and `Ld/V5F/Link_v5f.ld`).
 struct Core {
-    /// Directory name below this one, and the value of `--core`.
+    /// Directory name below this one.
     name: &'static str,
     /// Rust target of the custom JSON in that directory.
     target: &'static str,
