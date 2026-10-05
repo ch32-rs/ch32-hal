@@ -1,8 +1,7 @@
 //! Dual-core demo: V3F wakes V5F, both run independently.
 //!
-//! V3F: blinks LED0 (PF2) and writes a loop counter to ITCM (0x200a0000)
-//!      and to the cross-core mailbox in shared RAM (0x2017800C) for
-//!      `wlink dump` verification.
+//! V3F: blinks LED0 (PF2) and writes a loop counter to ITCM (0x200a0000) and to
+//!      the cross-core mailbox for `cargo xtask report` verification.
 //! V5F: `v5f/src/bin/dualcore.rs` marks the mailbox and idles; this core owns
 //! the console, the LEDs and the clocks.
 //!
@@ -19,22 +18,21 @@
 //! its own range, so an oversized build fails to link instead of overwriting
 //! the other image.
 //!
-//! # Cross-core mailbox (shared RAM, same layout in both crates)
+//! # Cross-core mailbox
 //!
-//! ```text
-//! 0x20178000  sdi_cpuid: console token
-//! 0x20178004  sdi_cpuid: V5F tick counter
-//! 0x20178008  dualcore:  0xDEADBEEF liveness marker (written by the V5F)
-//! 0x2017800C  dualcore:  V3F loop counter
-//! ```
+//! The mailbox is the `ch32h417-ipc` crate: one `#[repr(C)]` structure that both
+//! harts place at the start of `SRAM_SHARED` through their own linker scripts
+//! (see `ipc/shared.x`), so the fields cannot drift between the two images — or
+//! from `cargo xtask report`, which links the same crate.
 
 #![no_std]
 #![no_main]
 
+use ch32_hal as hal;
+use ch32h417_ipc as ipc;
 use core::panic::PanicInfo;
 use hal::delay::Delay;
 use hal::gpio::{Level, Output};
-use ch32_hal as hal;
 use qingke::pfic;
 
 #[panic_handler]
@@ -45,8 +43,6 @@ fn panic(_info: &PanicInfo) -> ! {
 /// Must match `v5f/memory.x` FLASH ORIGIN (1KB-aligned).
 const V5F_ENTRY: u32 = 0x0001_0000;
 
-/// Cross-core mailbox slot (see the module docs).
-const MAILBOX_COUNTER: *mut u32 = 0x2017_800C as *mut u32;
 
 #[ch32_hal::entry]
 fn main() -> ! {
@@ -58,16 +54,20 @@ fn main() -> ! {
     let mut delay = Delay;
     let mut counter: u32 = 0;
 
+    // Clear the mailbox before the handover so `xtask report` describes this run
+    // rather than leftovers from another example.
+    ipc::mailbox().clear();
+
     // Wake V5F (CPU-originated WAKEIP + SENDEVENT; debug-bus writes to
     // PFIC_SCTLR do not generate the wake event).
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
 
     loop {
         led.toggle();
-        unsafe {
-            core::ptr::write_volatile(0x200a0000 as *mut u32, counter);
-            core::ptr::write_volatile(MAILBOX_COUNTER, counter);
-        }
+        ipc::mailbox()
+            .dualcore_counter
+            .store(counter, core::sync::atomic::Ordering::Relaxed);
+        unsafe { core::ptr::write_volatile(0x200a0000 as *mut u32, counter) };
         counter = counter.wrapping_add(1);
         delay.delay_ms(500);
     }

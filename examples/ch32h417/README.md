@@ -143,26 +143,33 @@ The same split as the WCH CSDK (`EXAM/…/Common/Ld/V3F/Link_v3f.ld` and
 |---|---|---|
 | `0x00000000` + 64K | V3F image | `v3f/memory.x` |
 | `0x00010000` + 960K−64K | V5F image | `v5f/memory.x`, code copied to ITCM by the CSDK |
-| `0x20178000` + 32K | shared RAM mailbox | declared by both `memory.x` |
+| `0x20178000` + 32K | shared region (`ipc::Mailbox`) | declared by both `memory.x`; defined by the V3F image only |
 
 Either image declares its own range, so an oversized build fails to link
 instead of overwriting the other image; `xtask merge` checks the sizes again
 while assembling the merged image.
 
-### Mailbox map
+### Mailbox and shared region
+
+There is exactly **one** shared region — `SRAM_SHARED` (`0x20178000` + 32K), the
+tail of the 512K block the chip shares between the two harts, declared with the
+same address in both `memory.x`. Inside it lives exactly **one** shared object,
+the `ch32h417-ipc` crate's `Mailbox` (`#[repr(C)]`, fields documented there):
+console token, the two liveness counters, and the V5F's CSR report block.
+
+The boot core **defines** it; the second core **consumes its address**:
 
 ```
-0x20178000  sdi_cpuid: console token
-0x20178004  sdi_cpuid: V5F tick counter
-0x20178008  dualcore:  0xDEADBEEF liveness marker written by the V5F
-0x2017800C  dualcore:  V3F loop counter
-0x20178010… cpuid:     V5F CSR report block (see v3f/src/bin/cpuid.rs)
+v3f image   .shared (NOLOAD) -> ipc::MAILBOX @ 0x20178000   (defined here, and only here)
+xtask       post-processes the V3F ELF (llvm-nm -S) -> out/layout.txt
+v5f image   no .shared at all -> ipc::at(MAILBOX_ADDR) from the generated layout
 ```
 
-`cargo xtask report` decodes all of it — the console is not usable for this, as
-the next note explains. The V3F half of `cpuid` clears the mailbox before the
-handover, so the report always describes the current run rather than whatever an
-earlier example left in shared RAM.
+Because the region is `NOLOAD` it costs no flash, nothing zeroes it at boot (so
+it survives one core resetting while the other runs), and the boot core clears it
+before handing over — `cargo xtask report` then describes the current run rather
+than whatever an earlier example left behind. The layout file also carries a
+version word, so two independently flashed halves can notice they disagree.
 
 ## Notes
 

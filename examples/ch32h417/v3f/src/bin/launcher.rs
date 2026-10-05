@@ -23,6 +23,7 @@
 #![no_std]
 #![no_main]
 
+use ch32h417_ipc as ipc;
 use hal::println;
 use qingke::pfic;
 use {ch32_hal as hal, panic_halt as _};
@@ -30,12 +31,6 @@ use {ch32_hal as hal, panic_halt as _};
 /// Must match `v5f/memory.x` FLASH ORIGIN (1KB-aligned).
 const V5F_ENTRY: u32 = 0x0001_0000;
 
-/// Start of the cross-core mailbox in shared RAM, and the words `cargo xtask
-/// report` reads. Clearing it here keeps that report honest: shared RAM survives
-/// a reset, so without this it could show fields an earlier example left behind
-/// if the V5F payload never gets as far as writing its own.
-const MB_BASE: u32 = 0x2017_8000;
-const MB_WORDS: u32 = 0x58 / 4;
 
 #[ch32_hal::entry]
 fn main() -> ! {
@@ -44,9 +39,9 @@ fn main() -> ! {
     let _p = hal::init(hal::Config::default());
     hal::debug::SDIPrint::enable();
 
-    for i in 0..MB_WORDS {
-        unsafe { core::ptr::write_volatile((MB_BASE + i * 4) as *mut u32, 0) };
-    }
+    // Keep `cargo xtask report` honest: shared RAM survives a reset, so without
+    // this it could show fields an earlier example left behind.
+    ipc::mailbox().clear();
 
     // Wake the second core before printing anything. `SDIPrint::write_str`
     // spins until the debug module consumes `DATA0`, which never happens

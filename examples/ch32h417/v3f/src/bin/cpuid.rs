@@ -48,6 +48,7 @@
 #![no_std]
 #![no_main]
 
+use ch32h417_ipc as ipc;
 use hal::{print, println};
 use qingke::pfic::{self, HartId};
 use {ch32_hal as hal, panic_halt as _};
@@ -58,55 +59,19 @@ const V5F_ENTRY: u32 = 0x0001_0000;
 /// Number of probed CSRs (see [`CSR_NAMES`]).
 const N_CSRS: u32 = 14;
 
-/// Start of the cross-core mailbox in shared RAM, and how much of it
-/// `cargo xtask report` reads (token/ticks/marker/counter + the block below).
-const MB_BASE: u32 = 0x2017_8000;
-const MB_WORDS: u32 = 0x58 / 4;
 
-/// Clears the mailbox before the handover: shared RAM survives a reset, so
-/// without this `report` would show fields another example left behind.
-fn clear_mailbox() {
-    for i in 0..MB_WORDS {
-        unsafe { core::ptr::write_volatile((MB_BASE + i * 4) as *mut u32, 0) };
-    }
-}
 
-/// hart 1's report block in the shared-RAM mailbox (`RAM_SHARED` at
-/// 0x20178000; the full map is documented in `dualcore.rs`). Each offset is
-/// derived from the previous one so changing [`N_CSRS`] keeps both cores in
-/// step.
-const MB_V5F_PRESENT: *const u32 = 0x2017_8010 as *const u32;
-const MB_V5F_VALUES: *const u32 = 0x2017_8014 as *const u32;
-const MB_V5F_BUILDCFG: *const u32 = MB_V5F_VALUES.wrapping_add(N_CSRS as usize) as *const u32;
-const MB_V5F_DONE: *const u32 = MB_V5F_BUILDCFG.wrapping_add(1) as *const u32;
-/// hart 1's "how far did I get" marker (see the V5F copy).
-const MB_V5F_PROGRESS: *const u32 = MB_V5F_DONE.wrapping_add(1) as *const u32;
+/// The probed CSRs must match the mailbox's value block.
+const _: () = assert!(N_CSRS as usize == ipc::CPUID_CSRS);
 
-/// Written by hart 1 once its whole block is in place.
-const DONE_MAGIC: u32 = 0xC0DE_0001;
-
-/// The probed CSRs, in report order. Index `i` corresponds to bit `i` of the
-/// present mask and slot `i` of the value block. `csrr` takes an immediate, so
-/// the matching addresses live in [`probe_all`].
-const CSR_NAMES: [&str; N_CSRS as usize] = [
-    "mvendorid",
-    "marchid",
-    "mimpid",
-    "mhartid",
-    "misa",
-    "mstatus",
-    "mtvec",
-    "mepc",
-    "mcause",
-    "corecfgr",
-    "intsyscr",
-    "gintenr",
-    "cache_strtg_ctlr",
-    "cache_pmp_ovr",
-];
+/// The probed CSRs, in report order, come from the shared crate so the examples
+/// and `xtask report` cannot disagree about them. Index `i` corresponds to bit
+/// `i` of the present mask and slot `i` of the value block; `csrr` takes an
+/// immediate, so the matching addresses live in [`probe_all`].
+const CSR_NAMES: [&str; N_CSRS as usize] = ipc::CPUID_CSR_NAMES;
 
 /// Index of `misa` in [`CSR_NAMES`]; it is decoded after the table.
-const MISA_INDEX: usize = 4;
+const MISA_INDEX: usize = ipc::CPUID_MISA_INDEX;
 
 /// Set by [`ExceptionHandler`] when a probed read faulted.
 static mut TRAP_HIT: u32 = 0;
@@ -243,23 +208,19 @@ fn print_csr_block(values: &[u32; N_CSRS as usize], present: u32) {
 /// is kept alive whether or not hart 1 reported.
 fn report_v5f() -> ! {
     println!("=== V5F (hart 1) ===");
-    if unsafe { core::ptr::read_volatile(MB_V5F_DONE) } != DONE_MAGIC {
+    let mailbox = ipc::mailbox();
+    if mailbox.cpuid_done.load(core::sync::atomic::Ordering::Relaxed) != ipc::CPUID_DONE {
         println!(
             "no report from hart 1 (magic missing; its progress marker = {})",
-            unsafe { core::ptr::read_volatile(MB_V5F_PROGRESS) }
+            mailbox.cpuid_progress.load(core::sync::atomic::Ordering::Relaxed)
         );
     } else {
-        let mut values = [0u32; N_CSRS as usize];
-        for (i, value) in values.iter_mut().enumerate() {
-            *value = unsafe { core::ptr::read_volatile(MB_V5F_VALUES.wrapping_add(i)) };
-        }
+        let values = mailbox.cpuid_snapshot();
         println!(
             "image build features = {:#04x}",
-            unsafe { core::ptr::read_volatile(MB_V5F_BUILDCFG) }
+            mailbox.cpuid_buildcfg.load(core::sync::atomic::Ordering::Relaxed)
         );
-        print_csr_block(&values, unsafe {
-            core::ptr::read_volatile(MB_V5F_PRESENT)
-        });
+        print_csr_block(&values, mailbox.cpuid_present.load(core::sync::atomic::Ordering::Relaxed));
     }
 
     loop {
@@ -279,7 +240,7 @@ fn main() -> ! {
     // SDI print, so printing first would leave hart 1 unscheduled on a plain
     // `cargo xtask flash`. Waking first means the V5F probes itself either way;
     // `cargo xtask report` then reads its block back out of the mailbox.
-    clear_mailbox();
+    ipc::mailbox().clear();
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
 
     println!("=== V3F (boot core) ===");
@@ -295,7 +256,7 @@ fn main() -> ! {
     // Wait for hart 1 to fill its block (bounded, so a dead hart 1 cannot
     // wedge this one).
     let mut spins = 0u32;
-    while unsafe { core::ptr::read_volatile(MB_V5F_DONE) } != DONE_MAGIC {
+    while ipc::mailbox().cpuid_done.load(core::sync::atomic::Ordering::Relaxed) != ipc::CPUID_DONE {
         spins += 1;
         if spins > 20_000_000 {
             break;
