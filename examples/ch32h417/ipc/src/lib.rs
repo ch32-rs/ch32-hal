@@ -37,7 +37,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Bumped whenever the field layout below changes. Both images are flashed
 /// independently, so a stale half must be able to notice it does not match.
-pub const LAYOUT_VERSION: u32 = 1;
+pub const LAYOUT_VERSION: u32 = 2;
 
 /// Number of probed CSRs in [`Mailbox::cpuid_values`].
 pub const CPUID_CSRS: usize = 14;
@@ -98,9 +98,18 @@ pub struct Mailbox {
     pub cpuid_done: AtomicU32,
     /// `cpuid`: how many CSRs hart 1 has probed, for diagnosing a hang.
     pub cpuid_progress: AtomicU32,
+    /// `pingpong`: hart 1's round counter, incremented once per answered round.
+    pub ping: AtomicU32,
+    /// `pingpong`: the boot core's echo — equal to [`Self::ping`] once it has
+    /// answered that round, so `ping != pong` means "a round is outstanding".
+    pub pong: AtomicU32,
 }
 
 impl Mailbox {
+    /// Initialiser for the boot core's static; the consuming side never
+    /// constructs one, so this is gated with the `define` feature to keep the
+    /// second core's build warning-free.
+    #[cfg(feature = "define")]
     const fn new() -> Self {
         Self {
             layout_version: AtomicU32::new(0),
@@ -113,6 +122,8 @@ impl Mailbox {
             cpuid_buildcfg: AtomicU32::new(0),
             cpuid_done: AtomicU32::new(0),
             cpuid_progress: AtomicU32::new(0),
+            ping: AtomicU32::new(0),
+            pong: AtomicU32::new(0),
         }
     }
 
@@ -132,6 +143,8 @@ impl Mailbox {
         self.cpuid_buildcfg.store(0, Ordering::Relaxed);
         self.cpuid_done.store(0, Ordering::Relaxed);
         self.cpuid_progress.store(0, Ordering::Relaxed);
+        self.ping.store(0, Ordering::Relaxed);
+        self.pong.store(0, Ordering::Relaxed);
         self.layout_version.store(LAYOUT_VERSION, Ordering::Relaxed);
     }
 

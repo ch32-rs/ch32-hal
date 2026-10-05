@@ -711,8 +711,9 @@ fn report() {
         };
     }
 
-    /// Bytes to read: the whole structure.
-    const LEN: usize = at!(cpuid_progress) + 4;
+    /// Bytes to read: the whole structure, so a field added at the end cannot be
+    /// decoded past the end of the dump.
+    const LEN: usize = core::mem::size_of::<ch32h417_ipc::Mailbox>();
 
     let base = read_layout_address();
     let tmp = env::temp_dir().join(format!("h417-mailbox-{}.bin", std::process::id()));
@@ -763,6 +764,8 @@ fn report() {
         }
     );
     println!("  dualcore  counter = {}", word(at!(dualcore_counter)));
+    println!("  pingpong  ping    = {}", word(at!(ping)));
+    println!("  pingpong  pong    = {}", word(at!(pong)));
 
     if word(at!(cpuid_done)) != ch32h417_ipc::CPUID_DONE {
         println!(

@@ -25,6 +25,7 @@
 /// `ch32-metapac` for the V5F hart, re-exported so examples have one import path.
 pub use ch32_metapac as pac;
 
+pub mod cpuid;
 pub mod sdi;
 
 /// Layout of the shared region, as exported by the boot core's ELF.
