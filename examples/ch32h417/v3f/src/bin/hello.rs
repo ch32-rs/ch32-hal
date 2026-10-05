@@ -25,8 +25,11 @@ fn main() -> ! {
     let _p = hal::init(hal::Config::default());
     hal::debug::SDIPrint::enable();
 
-    println!("V3F: waking hart 1 at {:#010x} (V5F blinks LED1/PF0)", V5F_ENTRY);
+    // Wake hart 1 before printing: `SDIPrint::write_str` spins until the debug
+    // module consumes `DATA0`, which only happens once wlink has armed SDI
+    // print, so a plain `flash` would block here and never start hart 1.
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
+    println!("V3F: woke hart 1 at {:#010x} (V5F blinks LED1/PF0)", V5F_ENTRY);
 
     loop {
         hal::delay::Delay.delay_ms(1000);
