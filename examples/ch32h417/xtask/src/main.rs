@@ -92,25 +92,28 @@ const CORES: [Core; 2] = [
     },
 ];
 
-/// The core that reset starts, and the only one an example may be limited to.
-const BOOT_CORE: &str = "v3f";
-
 const USAGE: &str = "\
 usage: cargo xtask <command> [options]
 
 commands:
-  build [--example NAME] [--v3f-only]       build one example (or everything)
-  flash --example NAME [--v3f-only] [--no-build]
+  build [--example NAME] [--dual-core | --jump-v5f]     build one example (or all)
+  flash --example NAME [--dual-core | --jump-v5f] [--no-build]
                                             build, then flash and reset
-  run   --example NAME [--v3f-only] [--no-build]
+  run   --example NAME [--dual-core | --jump-v5f] [--no-build]
                                             like flash, plus the SDI console
-  merge --example NAME [--out DIR]          merge the images into .bin + .hex
+  merge --example NAME [--dual-core | --jump-v5f] [--out DIR]
+                                            merge the images into .bin + .hex
   report                                    read the mailbox back as a report
 
-A dual-core example is programmed core by core, V3F first. `--v3f-only` writes
-the boot core alone and leaves the V5F region untouched — that is how a bare V5F
-payload is run under the generic `launcher`. Reset only ever starts the V3F, so
-there is no V5F-only mode; see the module docs.";
+what gets programmed:
+  (default)      the boot core alone (same as --v3f-only); the V5F region keeps
+                 whatever image it already holds
+  --dual-core    both halves of the named example, V3F first
+  --jump-v5f     the generic jump-only firmware (`launcher`) on the boot core
+                 and, when --example names one, that example's V5F half
+
+Reset only ever starts the V3F, so there is no V5F-only mode; see the module
+docs.";
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -133,7 +136,7 @@ fn main() {
 /// Parsed command line.
 struct Options {
     example: Option<String>,
-    v3f_only: bool,
+    layout: Layout,
     no_build: bool,
     out: Option<PathBuf>,
 }
@@ -142,7 +145,7 @@ impl Options {
     fn parse(args: &[String]) -> Options {
         let mut opts = Options {
             example: None,
-            v3f_only: false,
+            layout: Layout::V3fOnly,
             no_build: false,
             out: None,
         };
@@ -150,7 +153,10 @@ impl Options {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--example" => opts.example = args.next().cloned(),
-                "--v3f-only" => opts.v3f_only = true,
+                // The default, accepted so a script can say what it means.
+                "--v3f-only" => opts.layout = Layout::V3fOnly,
+                "--dual-core" => opts.layout = Layout::DualCore,
+                "--jump-v5f" => opts.layout = Layout::JumpV5f,
                 "--out" => opts.out = args.next().map(PathBuf::from),
                 "--no-build" => opts.no_build = true,
                 other => fail(&format!("unknown option `{other}`\n\n{USAGE}")),
@@ -159,42 +165,90 @@ impl Options {
         opts
     }
 
-    /// Cores to act on: the boot core alone with `--v3f-only`, otherwise every
-    /// core that carries the example (both, for a dual-core example).
+    /// Cores to act on, each with the image that supplies it.
     ///
-    /// Rejects a V5F-only example — hart 1 has no entry point of its own, since
-    /// reset only starts the V3F.
-    fn select(&self) -> Vec<&'static Core> {
-        let carrying: Vec<&'static Core> = match &self.example {
-            Some(example) => CORES
-                .iter()
-                .filter(|core| example_source(core, example).exists())
-                .collect(),
-            None => CORES.iter().collect(),
+    /// With no `--example` this is every core, which is what `build` wants; the
+    /// commands that need an image of their own reject the empty example.
+    fn jobs(&self) -> Vec<Job> {
+        let job = |core: &'static Core, example: &str| Job {
+            core,
+            example: example.to_string(),
         };
+        let boot = core_named(BOOT_CORE);
+        let second = core_named(SECOND_CORE);
 
-        if carrying.is_empty() {
-            let example = self.example.as_deref().unwrap_or_default();
-            fail(&format!("no core carries the `{example}` example"));
+        match (self.example.as_deref(), self.layout) {
+            (None, Layout::JumpV5f) => vec![job(boot, JUMP_FIRMWARE)],
+            (None, _) => CORES
+                .iter()
+                .map(|core| Job {
+                    core,
+                    example: String::new(),
+                })
+                .collect(),
+            // The boot core alone; the V5F region keeps whatever it holds.
+            (Some(example), Layout::V3fOnly) => {
+                require_source(boot, example);
+                vec![job(boot, example)]
+            }
+            (Some(example), Layout::DualCore) => {
+                require_source(boot, example);
+                require_source(second, example);
+                vec![job(boot, example), job(second, example)]
+            }
+            // The generic jumper on the boot core, the named example on hart 1.
+            (Some(example), Layout::JumpV5f) => {
+                require_source(second, example);
+                vec![job(boot, JUMP_FIRMWARE), job(second, example)]
+            }
         }
-        if !carrying.iter().any(|core| core.name == BOOT_CORE) {
-            let example = self.example.as_deref().unwrap_or_default();
-            fail(&format!(
-                "`{example}` only exists for the V5F, which cannot start on its own:\n\
-                 \x20     reset runs the V3F, so every example needs a v3f/src/bin/{example}.rs\n\
-                 \x20     half that wakes hart 1"
-            ));
-        }
+    }
+}
 
-        if self.v3f_only {
-            // The V5F region keeps whatever image it already holds.
-            carrying
-                .into_iter()
-                .filter(|core| core.name == BOOT_CORE)
-                .collect()
-        } else {
-            carrying
-        }
+/// What to program.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    /// The named example's boot-core half only. The default: the boot core is
+    /// what reset starts, and rewriting the V5F payload is opt-in.
+    V3fOnly,
+    /// Both halves of the named example.
+    DualCore,
+    /// The generic jump-only firmware on the boot core, plus the named
+    /// example's V5F half when an example is given.
+    JumpV5f,
+}
+
+/// One core to act on, and the example that supplies its image.
+struct Job {
+    core: &'static Core,
+    example: String,
+}
+
+/// The core reset starts, and the one that carries the entry point.
+const BOOT_CORE: &str = "v3f";
+
+/// The other core, which only ever runs what the boot core hands over to it.
+const SECOND_CORE: &str = "v5f";
+
+/// The V3F-only firmware whose whole job is to hand over to hart 1.
+const JUMP_FIRMWARE: &str = "launcher";
+
+/// The core with this directory name.
+fn core_named(name: &str) -> &'static Core {
+    CORES
+        .iter()
+        .find(|core| core.name == name)
+        .expect("core names are fixed")
+}
+
+/// Fails unless `core` carries `example`.
+fn require_source(core: &Core, example: &str) {
+    if !example_source(core, example).exists() {
+        fail(&format!(
+            "`{example}` has no {}-core half ({} does not exist)",
+            core.name,
+            example_source(core, example).display()
+        ));
     }
 }
 
@@ -305,18 +359,18 @@ fn recover(attempt: u32) {
 }
 
 fn build(opts: &Options) {
-    let cores = opts.select();
-    for core in cores {
-        let dir = root().join(core.name);
+    let jobs = opts.jobs();
+    for job in &jobs {
+        let dir = root().join(job.core.name);
         let mut args = vec!["build", "--release"];
-        if let Some(example) = &opts.example {
-            args.extend(["--bin", example]);
+        if !job.example.is_empty() {
+            args.extend(["--bin", &job.example]);
         }
-        println!("building {} ...", core.name);
+        println!("building {} ...", job.core.name);
         run("cargo", &args, &dir);
     }
     if opts.example.is_some() {
-        println!("built: {}", describe(&opts.select()));
+        println!("built: {}", describe(&jobs));
     }
 }
 
@@ -328,21 +382,23 @@ fn build(opts: &Options) {
 /// request (`dump`, `regs`, `status`) pauses the cores: a read-back check there
 /// would measure the paused state instead of the running one.
 fn flash(opts: &Options, watch: bool) {
-    let Some(example) = &opts.example else {
+    let jobs = opts.jobs();
+    if jobs.iter().any(|job| job.example.is_empty()) {
         fail(&format!(
-            "`{}` needs --example\n\n{USAGE}",
+            "`{}` needs --example (or `--jump-v5f` on its own)\n\n{USAGE}",
             if watch { "run" } else { "flash" }
         ));
-    };
-    let cores = opts.select();
+    }
     if !opts.no_build {
         build(opts);
     }
+    let writes_second_core = jobs.iter().any(|job| job.core.name != BOOT_CORE);
 
-    for (i, core) in cores.iter().enumerate() {
-        let elf = example_elf(core, example);
-        let last = i + 1 == cores.len();
-        println!("flashing {} ...", core.name);
+    for (i, job) in jobs.iter().enumerate() {
+        let core = job.core;
+        let elf = example_elf(core, &job.example);
+        let last = i + 1 == jobs.len();
+        println!("flashing {} ({}) ...", core.name, job.example);
 
         if last {
             // The final write resets and runs the chip. `run` adds the SDI pair
@@ -352,7 +408,7 @@ fn flash(opts: &Options, watch: bool) {
             // debug module attached and the second core paused.
             let mut args = vec!["flash"];
             if watch {
-                if is_dual_core(example) {
+                if writes_second_core {
                     println!(
                         "note: watching keeps wlink attached, and any wlink request pauses the\n\
                          \x20     cores — while the console is open the V5F half cannot run.\n\
@@ -369,17 +425,9 @@ fn flash(opts: &Options, watch: bool) {
                 "--no-run",
                 elf.to_str().expect("utf-8 path"),
             ];
-            program_verified(core, example, &elf, &args, true);
+            program_verified(core, &job.example, &elf, &args, true);
         }
     }
-}
-
-/// Whether `example` has a V5F half, i.e. it is a dual-core example.
-fn is_dual_core(example: &str) -> bool {
-    CORES
-        .iter()
-        .filter(|core| core.name != BOOT_CORE)
-        .any(|core| example_source(core, example).exists())
 }
 
 /// Runs `wlink` with `args`, then reads the region back and compares it with the
@@ -458,19 +506,32 @@ struct Segment {
 }
 
 fn merge(opts: &Options) {
-    let Some(example) = &opts.example else {
-        fail(&format!("`merge` needs --example\n\n{USAGE}"));
+    let jobs = opts.jobs();
+    let boot = jobs.iter().find(|job| job.core.name == BOOT_CORE && !job.example.is_empty());
+    let second = jobs
+        .iter()
+        .find(|job| job.core.name == SECOND_CORE && !job.example.is_empty());
+    let (Some(boot), Some(second)) = (boot, second) else {
+        fail(&format!(
+            "merging needs both cores — pass --dual-core, or --jump-v5f with --example\n\n{USAGE}"
+        ));
     };
 
-    let segments: Vec<Segment> = opts
-        .select()
+    let segments: Vec<Segment> = [boot, second]
         .into_iter()
-        .map(|core| Segment {
-            core: core.name,
-            base: core.flash_base,
-            bytes: flatten(&example_elf(core, example), core),
+        .map(|job| Segment {
+            core: job.core.name,
+            base: job.core.flash_base,
+            bytes: flatten(&example_elf(job.core, &job.example), job.core),
         })
         .collect();
+    // The merged file is named after what runs on hart 1, with the jumper called
+    // out when the boot core is the generic firmware.
+    let name = if boot.example == JUMP_FIRMWARE {
+        format!("jump-{}", second.example)
+    } else {
+        second.example.clone()
+    };
 
     // Assemble the full image: erased flash, with each core's payload at its
     // own offset.
@@ -488,8 +549,8 @@ fn merge(opts: &Options) {
     let out_dir = opts.out.clone().unwrap_or_else(|| root().join("out"));
     fs::create_dir_all(&out_dir)
         .unwrap_or_else(|e| fail(&format!("cannot create {}: {e}", out_dir.display())));
-    let bin = out_dir.join(format!("{example}.bin"));
-    let hex = out_dir.join(format!("{example}.hex"));
+    let bin = out_dir.join(format!("{name}.bin"));
+    let hex = out_dir.join(format!("{name}.hex"));
     fs::write(&bin, &image).unwrap_or_else(|e| fail(&format!("cannot write {}: {e}", bin.display())));
     fs::write(&hex, intel_hex(&segments))
         .unwrap_or_else(|e| fail(&format!("cannot write {}: {e}", hex.display())));
@@ -728,11 +789,16 @@ fn record(record_type: u8, address: u16, data: &[u8]) -> String {
     format!("{line}{checksum:02X}\n")
 }
 
-/// `v3f` / `v3f+v5f` label for the final build line.
-fn describe(cores: &[&'static Core]) -> String {
-    cores
-        .iter()
-        .map(|core| core.name)
+/// `v3f:cpuid+v5f:cpuid` label for the final build line.
+fn describe(jobs: &[Job]) -> String {
+    jobs.iter()
+        .map(|job| {
+            if job.example.is_empty() {
+                job.core.name.to_string()
+            } else {
+                format!("{}:{}", job.core.name, job.example)
+            }
+        })
         .collect::<Vec<_>>()
         .join("+")
 }
