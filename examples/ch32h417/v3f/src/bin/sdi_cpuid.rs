@@ -35,6 +35,7 @@
 #![no_std]
 #![no_main]
 
+use ch32h417_ipc as ipc;
 use hal::println;
 use qingke::pfic::{self, HartId};
 use {ch32_hal as hal, panic_halt as _};
@@ -46,8 +47,6 @@ const V5F_ENTRY: u32 = 0x0001_0000;
 /// address in both crates' `memory.x` — the CSDK's convention). `PRINT_TURN`
 /// is the hart allowed to drive SDI, `V5F_TICKS` is the second core's
 /// liveness counter.
-const PRINT_TURN: *mut u32 = 0x2017_8000 as *mut u32;
-const V5F_TICKS: *mut u32 = 0x2017_8004 as *mut u32;
 
 /// Bounded spin so a missing/stopped hart 1 cannot wedge this one (~1s).
 const HANDOFF_SPINS: u32 = 5_000_000;
@@ -60,8 +59,8 @@ fn main() -> ! {
     let _p = hal::init(hal::Config::default());
 
     unsafe {
-        core::ptr::write_volatile(PRINT_TURN, 0);
-        core::ptr::write_volatile(V5F_TICKS, 0);
+        ipc::mailbox().sdi_token.store(0, core::sync::atomic::Ordering::Relaxed);
+        ipc::mailbox().sdi_ticks.store(0, core::sync::atomic::Ordering::Relaxed);
     }
 
     hal::debug::SDIPrint::enable();
@@ -71,22 +70,22 @@ fn main() -> ! {
     println!("[V3F] waking the second core at {:#010x}", V5F_ENTRY);
 
     // Hand the console to hart 1, then start it.
-    unsafe { core::ptr::write_volatile(PRINT_TURN, 1) };
+    unsafe { ipc::mailbox().sdi_token.store(1, core::sync::atomic::Ordering::Relaxed) };
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
 
     // Wait for hart 1 to print its banner and hand the token back.
     let mut spins = 0u32;
-    while unsafe { core::ptr::read_volatile(PRINT_TURN) } != 0 {
+    while unsafe { ipc::mailbox().sdi_token.load(core::sync::atomic::Ordering::Relaxed) } != 0 {
         spins += 1;
         if spins > HANDOFF_SPINS {
             break;
         }
     }
-    unsafe { core::ptr::write_volatile(PRINT_TURN, 0) };
+    unsafe { ipc::mailbox().sdi_token.store(0, core::sync::atomic::Ordering::Relaxed) };
 
     let mut n = 0u32;
     loop {
-        let v5f_ticks = unsafe { core::ptr::read_volatile(V5F_TICKS) };
+        let v5f_ticks = unsafe { ipc::mailbox().sdi_ticks.load(core::sync::atomic::Ordering::Relaxed) };
         println!("[V3F] tick {} | [V5F] ticks {}", n, v5f_ticks);
         n = n.wrapping_add(1);
 

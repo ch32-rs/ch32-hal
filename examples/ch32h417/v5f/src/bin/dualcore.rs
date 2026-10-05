@@ -1,7 +1,8 @@
 //! Dual-core demo — V5F half.
 //!
 //! Woken by `v3f/src/bin/dualcore.rs`, it marks the cross-core mailbox and
-//! idles. If `0x20178008` reads `0xDEADBEEF` after the wake, the V5F executed.
+//! idles. If `dualcore_marker` reads `0xDEADBEEF` in `cargo xtask report`, the
+//! V5F executed.
 //! The marker deliberately lives in `RAM_SHARED` (declared with the same
 //! address in both crates' `memory.x`, mirroring the CSDK's `RAM_SHARED`
 //! section) rather than in ITCM: ITCM is the *V3F's* private RAM, and the
@@ -11,15 +12,15 @@
 #![no_std]
 #![no_main]
 
+use ch32h417_ipc as ipc;
+use ch32h417_v5f::mailbox;
 use panic_halt as _;
-
-/// Cross-core mailbox slot (see the module docs).
-const MAILBOX_PROBE: *mut u32 = 0x2017_8008 as *mut u32;
 
 #[qingke_rt::entry]
 fn main() -> ! {
-    unsafe {
-        core::ptr::write_volatile(MAILBOX_PROBE, 0xDEAD_BEEF);
-    }
+    mailbox()
+        .dualcore_marker
+        .store(ipc::DUALCORE_MARKER, core::sync::atomic::Ordering::Relaxed);
+
     loop {}
 }

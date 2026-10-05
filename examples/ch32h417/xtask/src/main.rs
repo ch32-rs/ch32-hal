@@ -280,10 +280,16 @@ fn example_elf(core: &Core, example: &str) -> PathBuf {
 
 /// Runs a program from `dir`, failing the xtask if it does.
 fn run(program: &str, args: &[&str], dir: &Path) {
+    run_env(program, args, dir, &[])
+}
+
+/// Like [`run`], with extra environment variables for the child.
+fn run_env(program: &str, args: &[&str], dir: &Path, env: &[(&str, &str)]) {
     println!("  {} {}", program, args.join(" "));
     let status = Command::new(program)
         .args(args)
         .current_dir(dir)
+        .envs(env.iter().copied())
         .status()
         .unwrap_or_else(|e| fail(&format!("failed to run `{program}`: {e}")));
     if !status.success() {
@@ -360,18 +366,108 @@ fn recover(attempt: u32) {
 
 fn build(opts: &Options) {
     let jobs = opts.jobs();
+    // The boot core owns the shared region, so it is built first; its ELF is then
+    // post-processed into the layout the other cores consume.
+    let mut layout: Option<PathBuf> = None;
+
     for job in &jobs {
+        if job.core.name != BOOT_CORE && layout.is_none() {
+            layout = Some(write_layout(&jobs));
+        }
+
         let dir = root().join(job.core.name);
         let mut args = vec!["build", "--release"];
         if !job.example.is_empty() {
             args.extend(["--bin", &job.example]);
         }
         println!("building {} ...", job.core.name);
-        run("cargo", &args, &dir);
+
+        match (&layout, job.core.name != BOOT_CORE) {
+            (Some(path), true) => run_env(
+                "cargo",
+                &args,
+                &dir,
+                &[("H417_LAYOUT", path.to_str().expect("utf-8 path"))],
+            ),
+            _ => run("cargo", &args, &dir),
+        }
     }
     if opts.example.is_some() {
         println!("built: {}", describe(&jobs));
     }
+}
+
+/// Post-processes the boot core's ELF into the shared layout the other cores
+/// consume: the address and size its linker gave to the mailbox, plus the layout
+/// version. Written as plain `key 0xvalue` lines so `v5f/build.rs` can turn it
+/// into constants and `report` can read it back.
+fn write_layout(jobs: &[Job]) -> PathBuf {
+    let boot = jobs
+        .iter()
+        .find(|job| job.core.name == BOOT_CORE)
+        .expect("a boot-core job");
+    let candidates: Vec<String> = if boot.example.is_empty() {
+        // `cargo xtask build` with no example: any boot-core image will do, the
+        // region is a property of the map, not of one example.
+        ["dualcore", "cpuid", "sdi_cpuid", "launcher"]
+            .iter()
+            .map(|name| name.to_string())
+            .collect()
+    } else {
+        vec![boot.example.clone()]
+    };
+
+    for example in candidates {
+        let elf = example_elf(core_named(BOOT_CORE), &example);
+        if !elf.exists() {
+            continue;
+        }
+        if let Some((address, size)) = mailbox_symbol(&elf) {
+            let out_dir = root().join("out");
+            fs::create_dir_all(&out_dir)
+                .unwrap_or_else(|e| fail(&format!("cannot create {}: {e}", out_dir.display())));
+            let path = out_dir.join("layout.txt");
+            let text = format!(
+                "mailbox_addr {address:#010x}
+mailbox_size {size:#x}
+layout_version {}
+",
+                ch32h417_ipc::LAYOUT_VERSION
+            );
+            fs::write(&path, text)
+                .unwrap_or_else(|e| fail(&format!("cannot write {}: {e}", path.display())));
+            println!(
+                "layout: {} -> {address:#010x} ({size} bytes)",
+                path.display()
+            );
+            return path;
+        }
+    }
+    fail(
+        "no boot-core image with a `MAILBOX` symbol found — build a boot-core example first\n\
+         \x20     (all shared symbols are defined by the V3F image; the V5F consumes their address)",
+    )
+}
+
+/// `(address, size)` of the `MAILBOX` symbol in `elf`.
+fn mailbox_symbol(elf: &Path) -> Option<(u32, u32)> {
+    let output = Command::new(nm())
+        .args(["-S", elf.to_str()?])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let (address, size) = (fields.next()?, fields.next()?);
+        if !line.ends_with("MAILBOX") {
+            continue;
+        }
+        return Some((
+            u32::from_str_radix(address, 16).ok()?,
+            u32::from_str_radix(size, 16).ok()?,
+        ));
+    }
+    None
 }
 
 /// `flash` (watch = false) and `run` (watch = true) share this.
@@ -579,45 +675,49 @@ fn merge(opts: &Options) {
     println!("intel hex:    {}", hex.display());
 }
 
-/// Mailbox fields the dual-core examples publish, and the names of the CSRs the
-/// V5F half probes (`v5f/src/bin/cpuid.rs`).
-const MB_BASE: u64 = 0x2017_8000;
-const MB_CPUID_PRESENT: u64 = 0x2017_8010;
-const MB_CPUID_VALUES: u64 = 0x2017_8014;
-const N_CSRS: usize = 14;
-const MB_CPUID_BUILDCFG: u64 = MB_CPUID_VALUES + N_CSRS as u64 * 4;
-const MB_CPUID_DONE: u64 = MB_CPUID_BUILDCFG + 4;
-const MB_CPUID_PROGRESS: u64 = MB_CPUID_DONE + 4;
-const MB_END: u64 = MB_CPUID_PROGRESS + 4;
-const DONE_MAGIC: u32 = 0xC0DE_0001;
-const DUALCORE_MARKER: u32 = 0xDEAD_BEEF;
-
-const CSR_NAMES: [&str; N_CSRS] = [
-    "mvendorid",
-    "marchid",
-    "mimpid",
-    "mhartid",
-    "misa",
-    "mstatus",
-    "mtvec",
-    "mepc",
-    "mcause",
-    "corecfgr",
-    "intsyscr",
-    "gintenr",
-    "cache_strtg_ctlr",
-    "cache_pmp_ovr",
-];
+/// The mailbox address the boot core exported, as written by [`write_layout`].
+fn read_layout_address() -> u64 {
+    let path = root().join("out/layout.txt");
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| {
+        fail(&format!(
+            "cannot read {}: {e}\n     run `cargo xtask build --example NAME --dual-core` first",
+            path.display()
+        ))
+    });
+    for line in text.lines() {
+        if let Some(raw) = line.strip_prefix("mailbox_addr ") {
+            if let Ok(address) = u32::from_str_radix(raw.trim().trim_start_matches("0x"), 16) {
+                return address as u64;
+            }
+        }
+    }
+    fail(&format!("no mailbox_addr in {}", path.display()))
+}
 
 /// Reads the mailbox back and decodes it.
 ///
 /// The V5F half cannot report over SDI while a console is attached — every wlink
-/// request pauses the cores, and the console keeps one attached — so the
-/// examples publish what they find here instead, and this prints it afterwards.
+/// request pauses the cores, and the console keeps one attached — so the examples
+/// publish what they find in shared RAM instead, and this prints it afterwards.
+///
+/// The layout comes from the `ch32h417-ipc` crate: the very `#[repr(C)]` struct
+/// both cores place at `SRAM_SHARED`, linked into this tool so the field offsets
+/// decoded here cannot drift from the ones they write.
 fn report() {
+    /// Offset of one mailbox field, from the shared definition.
+    macro_rules! at {
+        ($field:ident) => {
+            core::mem::offset_of!(ch32h417_ipc::Mailbox, $field)
+        };
+    }
+
+    /// Bytes to read: the whole structure.
+    const LEN: usize = at!(cpuid_progress) + 4;
+
+    let base = read_layout_address();
     let tmp = env::temp_dir().join(format!("h417-mailbox-{}.bin", std::process::id()));
-    let address = format!("{MB_BASE:#010x}");
-    let length = (MB_END - MB_BASE).to_string();
+    let address = format!("{base:#010x}");
+    let length = LEN.to_string();
     let read = run_timed(
         "wlink",
         &[
@@ -637,46 +737,54 @@ fn report() {
         fs::read(&tmp).unwrap_or_else(|e| fail(&format!("reading {}: {e}", tmp.display())));
     let _ = fs::remove_file(&tmp);
 
-    let word = |offset: u64| -> u32 {
-        let i = (offset - MB_BASE) as usize;
-        u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]])
+    let word = |offset: usize| -> u32 {
+        u32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]])
     };
 
-    println!("mailbox @ {MB_BASE:#010x}");
-    println!("  sdi_cpuid token   = {:#010x}", word(MB_BASE));
-    println!("  sdi_cpuid ticks   = {}", word(MB_BASE + 0x04));
-    let marker = word(MB_BASE + 0x08);
+    println!("mailbox @ {base:#010x}");
+    let version = word(at!(layout_version));
+    if version != ch32h417_ipc::LAYOUT_VERSION {
+        println!(
+            "  note: the flashed half reports mailbox layout v{version}, this tool knows v{} — \
+             reflash both halves",
+            ch32h417_ipc::LAYOUT_VERSION
+        );
+    }
+
+    println!("  sdi_cpuid token   = {:#010x}", word(at!(sdi_token)));
+    println!("  sdi_cpuid ticks   = {}", word(at!(sdi_ticks)));
+    let marker = word(at!(dualcore_marker));
     println!(
         "  dualcore  marker  = {marker:#010x}{}",
-        if marker == DUALCORE_MARKER {
+        if marker == ch32h417_ipc::DUALCORE_MARKER {
             "  (hart 1 ran)"
         } else {
             ""
         }
     );
-    println!("  dualcore  counter = {}", word(MB_BASE + 0x0C));
+    println!("  dualcore  counter = {}", word(at!(dualcore_counter)));
 
-    if word(MB_CPUID_DONE) != DONE_MAGIC {
+    if word(at!(cpuid_done)) != ch32h417_ipc::CPUID_DONE {
         println!(
             "  cpuid: no report from hart 1 (magic missing, progress = {})",
-            word(MB_CPUID_PROGRESS)
+            word(at!(cpuid_progress))
         );
         return;
     }
     println!(
         "  cpuid  (hart 1)   image build features = {:#04x}",
-        word(MB_CPUID_BUILDCFG)
+        word(at!(cpuid_buildcfg))
     );
-    let present = word(MB_CPUID_PRESENT);
+    let present = word(at!(cpuid_present));
     let mut misa = None;
-    for (i, name) in CSR_NAMES.iter().enumerate() {
-        let value = word(MB_CPUID_VALUES + i as u64 * 4);
+    for (i, name) in ch32h417_ipc::CPUID_CSR_NAMES.iter().enumerate() {
+        let value = word(at!(cpuid_values) + i * 4);
         if present & (1 << i) == 0 {
             println!("    {name:<18}   absent (read faulted)");
             continue;
         }
         println!("    {name:<18} = {value:#010x}");
-        if *name == "misa" {
+        if i == ch32h417_ipc::CPUID_MISA_INDEX {
             misa = Some(value);
         }
     }
@@ -735,7 +843,17 @@ fn flatten(elf: &Path, core: &Core) -> Vec<u8> {
 }
 
 /// `llvm-objcopy` shipped with the active toolchain, falling back to `PATH`.
+/// `llvm-nm` shipped with the active toolchain, falling back to `PATH`.
+fn nm() -> String {
+    tool("llvm-nm")
+}
+
+/// `llvm-objcopy` shipped with the active toolchain, falling back to `PATH`.
 fn objcopy() -> String {
+    tool("llvm-objcopy")
+}
+
+fn tool(name: &str) -> String {
     let output = |args: &[&str]| {
         Command::new("rustc")
             .args(args)
@@ -752,13 +870,14 @@ fn objcopy() -> String {
             let path = Path::new(&sysroot)
                 .join("lib/rustlib")
                 .join(host)
-                .join("bin/llvm-objcopy");
+                .join("bin")
+                .join(name);
             if path.exists() {
                 return path.to_string_lossy().into_owned();
             }
         }
     }
-    "llvm-objcopy".to_string()
+    name.to_string()
 }
 
 /// Intel HEX for the payload segments only — the erased padding between the two

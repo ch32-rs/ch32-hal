@@ -32,13 +32,11 @@
 
 use ch32h417_v5f::sdi::SdiPrint;
 use ch32h417_v5f::sdi_println;
+use ch32h417_ipc as ipc;
+use ch32h417_v5f::mailbox;
 use qingke::pfic::HartId;
 use panic_halt as _;
 
-/// Cross-core mailbox in shared RAM (`RAM_SHARED`, declared with the same
-/// address in both crates' `memory.x` — the CSDK's convention).
-const PRINT_TURN: *mut u32 = 0x2017_8000 as *mut u32;
-const V5F_TICKS: *mut u32 = 0x2017_8004 as *mut u32;
 
 /// Bounded spin so a missing boot core cannot wedge this one (~1s).
 const HANDOFF_SPINS: u32 = 5_000_000;
@@ -48,7 +46,7 @@ fn main() -> ! {
     // Wait for the console handoff. Nothing global is initialised here — see
     // the module docs.
     let mut spins = 0u32;
-    while unsafe { core::ptr::read_volatile(PRINT_TURN) } != 1 {
+    while unsafe { mailbox().sdi_token.load(core::sync::atomic::Ordering::Relaxed) } != 1 {
         spins += 1;
         if spins > HANDOFF_SPINS {
             break;
@@ -61,13 +59,13 @@ fn main() -> ! {
 
     // Hand the console back to the boot core; it is the only SDI writer from
     // here on, so this core never has to arbitrate again.
-    unsafe { core::ptr::write_volatile(PRINT_TURN, 0) };
+    unsafe { mailbox().sdi_token.store(0, core::sync::atomic::Ordering::Relaxed) };
 
     // Report liveness through shared SRAM. A single 32-bit aligned writer and
     // a single reader need no locking.
     loop {
-        let ticks = unsafe { core::ptr::read_volatile(V5F_TICKS) };
-        unsafe { core::ptr::write_volatile(V5F_TICKS, ticks.wrapping_add(1)) };
+        let ticks = mailbox().sdi_ticks.load(core::sync::atomic::Ordering::Relaxed);
+        mailbox().sdi_ticks.store(ticks.wrapping_add(1), core::sync::atomic::Ordering::Relaxed);
 
         // The HAL's delay is not usable here (its calibration is filled in by
         // the boot core's `hal::init()` and it drives hart 0's systick), so a

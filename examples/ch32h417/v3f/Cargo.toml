@@ -20,6 +20,12 @@ ch32-hal = { path = "../../../", default-features = false, features = [
     "exti",
 ] }
 
+# The shared mailbox: `define` is on for the boot core only, because this image
+# owns the region (it places `MAILBOX` in `.shared`) and exports its address to
+# the second core. The structure itself is shared, so the field layout cannot
+# drift; `xtask report` links the same crate.
+ch32h417-ipc = { path = "../ipc", features = ["define"] }
+
 qingke = { version = "0.8.2", features = ["unsafe-trust-wch-atomics", "dual-core"] }
 qingke-rt = { version = "0.8.2" }
 

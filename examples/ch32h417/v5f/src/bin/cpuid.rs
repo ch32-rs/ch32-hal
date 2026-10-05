@@ -16,22 +16,15 @@
 #![no_std]
 #![no_main]
 
+use ch32h417_ipc as ipc;
+use ch32h417_v5f::mailbox;
 use panic_halt as _;
 
 /// Number of probed CSRs; keep in sync with the boot core's `CSR_NAMES`.
 const N_CSRS: u32 = 14;
 
-/// hart 1's report block in the shared-RAM mailbox. Each offset is derived from
-/// the previous one so changing [`N_CSRS`] keeps both cores in step.
-const MB_V5F_PRESENT: *mut u32 = 0x2017_8010 as *mut u32;
-const MB_V5F_VALUES: *mut u32 = 0x2017_8014 as *mut u32;
-const MB_V5F_BUILDCFG: *mut u32 = MB_V5F_VALUES.wrapping_add(N_CSRS as usize) as *mut u32;
-const MB_V5F_DONE: *mut u32 = MB_V5F_BUILDCFG.wrapping_add(1) as *mut u32;
-/// "How far did I get" marker, so the boot core can localise a hang.
-const MB_V5F_PROGRESS: *mut u32 = MB_V5F_DONE.wrapping_add(1) as *mut u32;
-
-/// Completion flag, written last so the boot core never reads a partial block.
-const DONE_MAGIC: u32 = 0xC0DE_0001;
+/// The probed CSRs must match the mailbox's value block.
+const _: () = assert!(N_CSRS as usize == ipc::CPUID_CSRS);
 
 static mut TRAP_HIT: u32 = 0;
 
@@ -92,19 +85,19 @@ fn main() -> ! {
     // the `cpuid` example, but a generic `launcher` does not, and a stale
     // `DONE_MAGIC` would make `xtask report` show an old block as if it were new.
     unsafe {
-        core::ptr::write_volatile(MB_V5F_PROGRESS, 0);
-        core::ptr::write_volatile(MB_V5F_DONE, 0);
+        mailbox().cpuid_progress.store(0, core::sync::atomic::Ordering::Relaxed);
+        mailbox().cpuid_done.store(0, core::sync::atomic::Ordering::Relaxed);
     }
 
     macro_rules! report {
         ($i:expr, $addr:literal) => {{
             let (v, present) = probe_csr!($addr);
-            unsafe { core::ptr::write_volatile(MB_V5F_VALUES.wrapping_add($i), v) };
+            mailbox().cpuid_values[$i].store(v, core::sync::atomic::Ordering::Relaxed);
             if present {
                 present_mask |= 1 << $i;
             }
             // Advance the progress marker so a hang is localisable.
-            unsafe { core::ptr::write_volatile(MB_V5F_PROGRESS, $i + 1) };
+            mailbox().cpuid_progress.store($i + 1, core::sync::atomic::Ordering::Relaxed);
         }};
     }
 
@@ -125,10 +118,10 @@ fn main() -> ! {
     report!(13, "0xbc3"); // cache_pmp_ovr   (QingKe V5-specific)
 
     unsafe {
-        core::ptr::write_volatile(MB_V5F_BUILDCFG, build_features());
-        core::ptr::write_volatile(MB_V5F_PRESENT, present_mask);
+        mailbox().cpuid_buildcfg.store(build_features(), core::sync::atomic::Ordering::Relaxed);
+        mailbox().cpuid_present.store(present_mask, core::sync::atomic::Ordering::Relaxed);
         // Last: tells the boot core the block above is complete.
-        core::ptr::write_volatile(MB_V5F_DONE, DONE_MAGIC);
+        mailbox().cpuid_done.store(ipc::CPUID_DONE, core::sync::atomic::Ordering::Relaxed);
     }
 
     loop {}
