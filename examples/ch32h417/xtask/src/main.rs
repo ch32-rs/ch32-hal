@@ -484,9 +484,9 @@ fn intel_hex(segments: &[Segment]) -> String {
             let address = segment.base as u32 + (i * 16) as u32;
             if address >> 16 != upper {
                 upper = address >> 16;
-                hex.push_str(&record(0, &[(upper >> 8) as u8, upper as u8], 0x04));
+                hex.push_str(&record(0x04, 0, &[(upper >> 8) as u8, upper as u8]));
             }
-            hex.push_str(&record(chunk.len() as u8, chunk, (address & 0xFFFF) as u16));
+            hex.push_str(&record(0x00, (address & 0xFFFF) as u16, chunk));
         }
     }
     hex.push_str(":00000001FF\n");
@@ -494,8 +494,17 @@ fn intel_hex(segments: &[Segment]) -> String {
 }
 
 /// One Intel HEX record: length, 16-bit address, type, data, checksum.
-fn record(len: u8, data: &[u8], address: u16) -> String {
-    let mut bytes = vec![len, (address >> 8) as u8, address as u8, 0x00];
+///
+/// The length is derived from `data` — passing it in separately is how the
+/// extended-address records ended up claiming zero bytes, which made `wlink`
+/// reject the whole file with "payload length does not match record header".
+fn record(record_type: u8, address: u16, data: &[u8]) -> String {
+    let mut bytes = vec![
+        data.len() as u8,
+        (address >> 8) as u8,
+        address as u8,
+        record_type,
+    ];
     bytes.extend_from_slice(data);
     let sum = bytes.iter().fold(0u8, |acc, b| acc.wrapping_add(*b));
     let checksum = (!sum).wrapping_add(1);
