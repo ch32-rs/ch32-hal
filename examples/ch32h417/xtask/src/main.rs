@@ -36,6 +36,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command};
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// Bytes an erased flash byte reads as, used to pad the merged image.
 const ERASED: u8 = 0xFF;
@@ -46,6 +48,15 @@ const CHIP_FLASH_BASE: u64 = 0x0800_0000;
 
 /// How many times a flash is retried before giving up.
 const VERIFY_ATTEMPTS: u32 = 3;
+
+/// Deadline for a write, generous enough that a healthy one is never cut short.
+const FLASH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long to let the link settle after a mode switch or chip reset.
+const RECOVER_SETTLE: Duration = Duration::from_secs(2);
+
+/// Deadline for a request that only moves registers or a few bytes.
+const QUICK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One core of the chip.
 ///
@@ -226,6 +237,68 @@ fn run(program: &str, args: &[&str], dir: &Path) {
     }
 }
 
+/// Runs `program`, killing it if it outlives `timeout`. Returns success.
+///
+/// Writes need this: when an earlier program was interrupted the chip's flash
+/// controller stays mid-operation, and the next `wlink flash` then waits forever
+/// for a ready bit that never arrives. Without a deadline the whole xtask hangs
+/// there, so the caller can reset the chip and retry instead.
+fn run_timed(program: &str, args: &[&str], dir: &Path, timeout: Duration) -> bool {
+    let mut child = match Command::new(program)
+        .args(args)
+        .current_dir(dir)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            println!("  failed to run `{program}`: {e}");
+            return false;
+        }
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {}
+            Err(e) => {
+                println!("  failed to wait for `{program}`: {e}");
+                return false;
+            }
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            println!("  `{program}` did not finish within {}s", timeout.as_secs());
+            return false;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Recovers a probe left wedged by an interrupted program.
+///
+/// Two states have been seen. The chip can be left mid flash operation, waiting
+/// for a ready bit that never arrives (a chip reset clears that). More often the
+/// *probe* is stuck in RV mode, where every later write hangs at the same point;
+/// switching it to DAP and back is what clears that one — no USB replug and no
+/// board power cycle needed. Try both, cheapest first.
+fn clear_stuck_flash() {
+    println!("  recovering the probe (chip reset, then link mode re-cycle) ...");
+    run_timed("wlink", &["reset", "halt"], &root(), QUICK_TIMEOUT);
+    thread::sleep(RECOVER_SETTLE);
+    run_timed("wlink", &["mode-switch", "--dap"], &root(), QUICK_TIMEOUT);
+    thread::sleep(RECOVER_SETTLE);
+    for _ in 0..2 {
+        if run_timed("wlink", &["mode-switch", "--rv"], &root(), QUICK_TIMEOUT) {
+            break;
+        }
+        thread::sleep(RECOVER_SETTLE);
+    }
+    // The link needs a moment in RV mode before it will program again; skipping
+    // this makes the retry hang exactly like the failure being recovered from.
+    thread::sleep(RECOVER_SETTLE);
+}
+
 fn build(opts: &Options) {
     let cores = opts.select();
     for core in cores {
@@ -314,9 +387,13 @@ fn is_dual_core(example: &str) -> bool {
 fn program_verified(core: &Core, example: &str, elf: &Path, args: &[&str], check: bool) {
     let expected = flatten(elf, core);
     for attempt in 1..=VERIFY_ATTEMPTS {
-        run("wlink", args, &root());
-        if !check {
+        let wrote = run_timed("wlink", args, &root(), FLASH_TIMEOUT);
+        if wrote && !check {
             return;
+        }
+        if !wrote {
+            clear_stuck_flash();
+            continue;
         }
         match read_flash(core, expected.len()) {
             // `wlink dump` rounds its length up to a word, so compare the
@@ -337,6 +414,7 @@ fn program_verified(core: &Core, example: &str, elf: &Path, args: &[&str], check
             ),
             None => println!("  {}: read-back failed on attempt {attempt}", core.name),
         }
+        clear_stuck_flash();
     }
     fail(&format!(
         "{}: `{example}` is not in flash after {VERIFY_ATTEMPTS} attempts — \
@@ -350,12 +428,13 @@ fn read_flash(core: &Core, len: usize) -> Option<Vec<u8>> {
     let tmp = env::temp_dir().join(format!("h417-verify-{}-{}.bin", core.name, std::process::id()));
     let address = format!("{:#010x}", CHIP_FLASH_BASE + core.flash_base);
     let length = len.to_string();
-    let status = Command::new("wlink")
-        .args(["dump", &address, &length, "-o", tmp.to_str()?])
-        .current_dir(root())
-        .status()
-        .ok()?;
-    let bytes = status.success().then(|| fs::read(&tmp).ok()).flatten();
+    let ok = run_timed(
+        "wlink",
+        &["dump", &address, &length, "-o", tmp.to_str()?],
+        &root(),
+        QUICK_TIMEOUT,
+    );
+    let bytes = ok.then(|| fs::read(&tmp).ok()).flatten();
     let _ = fs::remove_file(&tmp);
     bytes
 }

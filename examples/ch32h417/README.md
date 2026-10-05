@@ -114,15 +114,26 @@ while assembling the merged image.
   console and therefore shows the V3F half only.
 - **Flash writes are not always complete.** `wlink flash` has been seen to
   report success while only part of the image reached flash. `xtask` therefore
-  reads every `--no-run` image back and retries on mismatch; the final write is
-  the one that resets and runs the chip, so it cannot be checked the same way
-  without pausing it — if a dual-core example only shows V3F activity, flash it
-  again before suspecting the firmware.
+  reads every `--no-run` image back, and on a mismatch or a hung write it
+  recovers the link and retries by itself:
+
+  ```text
+  v3f: read-back failed on attempt 1
+  recovering the probe (chip reset, then link mode re-cycle) ...
+  v3f verified (7036 bytes)
+  ```
+
+  An interrupted program leaves the link stuck in RV mode, where every later
+  write hangs; `wlink mode-switch --dap` followed by `--rv` clears it, so no USB
+  replug and no power cycle are needed. The final write is the one that resets
+  and runs the chip, so it cannot be checked the same way without pausing it —
+  if a dual-core example only shows V3F activity, flash it again before
+  suspecting the firmware.
 - **Merged images.** `out/NAME.bin` is the full flash image (`0xFF` padding
   between the two payloads); `out/NAME.hex` is the same image as records, which
-  only cover the payloads. `wlink` accepts either but writes the whole address
-  range, so both program the padding — use the two-ELF `xtask flash` path for
-  day-to-day work and the merged image for distribution.
+  only cover the payloads. `wlink` accepts either and writes the whole address
+  range; both program in a few seconds on a healthy link, so use the merged
+  image to publish and the two-ELF `xtask flash` path to iterate.
 - **V5F code placement.** The V5F currently executes from flash in place; the
   CSDK copies V5F `.text` to ITCM before running. That model is not implemented
   here yet, so keep V5F halves small (CSR reads and mailbox stores, not
