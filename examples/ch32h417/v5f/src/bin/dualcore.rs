@@ -13,11 +13,13 @@
 #![no_main]
 
 use ch32h417_ipc as ipc;
-use ch32h417_v5f::mailbox;
+use ch32h417_v5f::{cache, mailbox};
 use panic_halt as _;
 
 #[qingke_rt::entry]
 fn main() -> ! {
+    cache::enable_icache();
+
     mailbox()
         .dualcore_marker
         .store(ipc::DUALCORE_MARKER, core::sync::atomic::Ordering::Relaxed);

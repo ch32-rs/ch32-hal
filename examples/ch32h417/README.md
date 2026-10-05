@@ -195,6 +195,27 @@ console cannot stall the rounds. Read the counters back after a `flash`, leaving
 a gap: *any* `wlink` request halts both harts, so a burst of reads keeps them
 halted and the counters look frozen.
 
+### Hart 1's instruction cache
+
+The datasheet's "core 1" memory block — 32 KB instruction cache, 128K ITCM,
+256K DTCM — is hart 1, the same resources the CSDK's `Link_v5f.ld` builds its
+code and data into. That cache is **disabled out of reset**
+(`cache_strtg_ctlr`/`cstrcr`, CSR `0xBC2`, `ic_disable = 1`), so a
+flash-resident V5F image fetches every instruction from flash until software
+turns it on. Every V5F half here therefore starts with
+`ch32h417_v5f::cache::enable_icache()`.
+
+Measured on a CH32H417 with the `atomics` workload (2 × 1,000,000 contended
+increments): 798,047 reached in the first four seconds with the cache off, and
+the whole run finished inside that same window with it on. The CSR reads
+`0x0f000003` before and `0x0f000001` after (bit 1 cleared; the `[27:24]` region
+permits were already set).
+
+Hart 0 has no usable cache: its copy of the register reads `0x00000003` and
+ignores writes (QingKe's instruction cache is the V4J variant). The boot core's
+speed path is running code from RAM instead — which is exactly what the CSDK's
+`RAM_CODE` in the 512K shared block does — not caching.
+
 ### Mailbox and shared region
 
 There is exactly **one** shared region — `SRAM_SHARED` (`0x20178000` + 32K), the
