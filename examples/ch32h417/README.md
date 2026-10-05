@@ -112,6 +112,28 @@ cargo xtask flash --jump-v5f                   # reflash the jumper alone
 It is deliberately not an embassy application — no executor, and `hal::init()`
 only touches the blocks the V5F halves depend on.
 
+### Writing a V5F half
+
+Hart 1 is written against **metapac only** — no `ch32-hal`, no embassy:
+
+- the boot core owns every global block (there is one RCC register file for both
+  harts) and `ch32-hal`'s `init()` assumes exactly that: `Peripherals::take()` is
+  a single-use singleton shared by both cores, and `rcc::init()` re-programs the
+  PLL and then blocks on `CFGR0.SWS == PLL`, which would switch SYSCLK out from
+  under the core that is running;
+- so `v5f/` depends on `ch32-metapac` directly, re-exported as
+  `ch32h417_v5f::pac`, and reaches printf through `v5f/src/sdi.rs`
+  (`sdi_println!`, plus a lossy `sdi_try_println!` that cannot stall hart 1);
+- `qingke-rt` still supplies the entry point, the stack and the vector table.
+
+`v5f/build.rs` ships this crate's `memory.x` **and** the `device.x` hook — qingke-rt's
+`link.x` includes both, and a crate with no HAL and no svd2rust device crate has
+to provide the latter itself.
+
+A V5F half that wants actual HAL *drivers* (GPIO, SPI, …) would need the
+secondary-core entry point tracked in `docs/backlog.md`; today's examples drive
+registers directly instead.
+
 ## Flash / RAM partition
 
 The same split as the WCH CSDK (`EXAM/…/Common/Ld/V3F/Link_v3f.ld` and

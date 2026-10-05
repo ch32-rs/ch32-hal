@@ -3,7 +3,8 @@
 //! Probes its identity/ISA CSRs and stores the results in the shared-RAM
 //! mailbox; the boot core prints them (`v3f/src/bin/cpuid.rs`).
 //!
-//! Deliberately minimal: no `hal::init()` (there is one shared RCC block and
+//! Deliberately minimal: metapac only, no `ch32-hal` and no embassy (there is
+//! one shared RCC block and
 //! the boot core has already programmed it, including this core's `FPRE`),
 //! and no SDI or `core::fmt` — the V5F's flash-resident execution is slow, so
 //! only the CSR probes and the stores happen here.

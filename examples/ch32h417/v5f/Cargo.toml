@@ -4,14 +4,23 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ch32-hal = { path = "../../../", features = [
-    "ch32h417qeu6-v5f",
+# Hart 1 is written against metapac only — no `ch32-hal`, no embassy. The boot
+# core owns bring-up (there is one shared RCC block, and the HAL's
+# `Peripherals::take()` singleton plus its PLL re-init cannot run twice on the
+# same chip), so this core drives registers through `ch32-metapac` and reaches
+# printf through `src/sdi.rs`. `src/lib.rs` documents the same rule.
+# `memory-x` supplies the linker scripts (`memory.x`/`device.x`) that qingke-rt's
+# `link.x` includes; the HAL used to forward it. It pulls no code.
+ch32-metapac = { version = "0.1.1", features = [
+    "ch32h417qeu6-qingke-v5f",
     "memory-x",
 ] }
+# Selecting the leaf core is now this crate's job: the HAL's `ch32h417qeu6-v5f`
+# feature used to do it. Enabling `qingke-rt/v5f` also enables `qingke/v5f`.
 # `dual-core` gates `qingke::pfic::HartId` (read from PFIC_SCTLR), which the
 # sdi_cpuid demo uses to report which hart is executing.
-qingke = { version = "0.8.2", features = ["dual-core"] }
-qingke-rt = { version = "0.8.2" }
+qingke = { version = "0.8.2", features = ["v5f", "dual-core"] }
+qingke-rt = { version = "0.8.2", features = ["v5f"] }
 panic-halt = "1.0"
 
 [profile.release]
