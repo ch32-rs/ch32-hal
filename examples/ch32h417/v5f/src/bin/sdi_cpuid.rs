@@ -31,6 +31,7 @@
 #![no_main]
 
 use ch32h417_v5f::sdi::SdiPrint;
+use ch32h417_v5f::cache;
 use ch32h417_v5f::sdi_println;
 use ch32h417_ipc as ipc;
 use ch32h417_v5f::mailbox;

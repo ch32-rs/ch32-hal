@@ -16,7 +16,7 @@
 #![no_std]
 #![no_main]
 
-use ch32h417_v5f::{cpuid, mailbox};
+use ch32h417_v5f::{cache, cpuid, mailbox};
 use panic_halt as _;
 
 /// Strong override of qingke-rt's weak `ExceptionHandler`: record the fault and
@@ -34,6 +34,9 @@ pub extern "C" fn ExceptionHandler() {
 
 #[qingke_rt::entry]
 fn main() -> ! {
+    // Hart 1 must enable its own instruction cache: it resets to disabled, and
+    // this image runs from flash.
+    cache::enable_icache();
     cpuid::report_self(mailbox());
 
     loop {}

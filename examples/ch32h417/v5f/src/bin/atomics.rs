@@ -8,18 +8,26 @@
 //! `atomic-cas: true` and both crates enable `qingke/unsafe-trust-wch-atomics`.
 //!
 //! Metapac only, no `ch32-hal` and no embassy — the boot core owns bring-up.
+//!
+//! It also turns hart 1's instruction cache on before starting: the cache is
+//! disabled by reset, and with it off this flash-resident loop runs an order of
+//! magnitude slower (see `ch32h417_v5f::cache`).
 
 #![no_std]
 #![no_main]
 
 use ch32h417_ipc as ipc;
-use ch32h417_v5f::mailbox;
+use ch32h417_v5f::{cache, mailbox};
 use core::sync::atomic::Ordering;
 use panic_halt as _;
 
 #[qingke_rt::entry]
 fn main() -> ! {
     let mailbox = mailbox();
+
+    // The I-cache resets to disabled; without this every fetch of this
+    // flash-resident image goes to flash.
+    cache::enable_icache();
 
     for _ in 0..ipc::CAS_INCREMENTS {
         mailbox.cas_total.fetch_add(1, Ordering::Relaxed);

@@ -16,7 +16,7 @@
 #![no_std]
 #![no_main]
 
-use ch32h417_v5f::{cpuid, mailbox};
+use ch32h417_v5f::{cache, cpuid, mailbox};
 use core::sync::atomic::Ordering;
 use panic_halt as _;
 
@@ -35,6 +35,8 @@ pub extern "C" fn ExceptionHandler() {
 
 #[qingke_rt::entry]
 fn main() -> ! {
+    cache::enable_icache();
+
     let mailbox = mailbox();
 
     // Describe ourselves first: that block is what the boot core prints.
