@@ -392,6 +392,18 @@ fn flash(opts: &Options, watch: bool) {
     if !opts.no_build {
         build(opts);
     }
+    if opts.layout == Layout::JumpV5f {
+        if let Some(example) = &opts.example {
+            if example_source(core_named(BOOT_CORE), example).exists() {
+                println!(
+                    "note: --jump-v5f replaces `{example}`'s own V3F half with the jumper,\n\
+                     \x20     so whatever that half printed or drove will not happen. Use\n\
+                     \x20     --dual-core when the example's V3F half does real work\n\
+                     \x20     (e.g. `sdi_cpuid`'s print-token handshake)."
+                );
+            }
+        }
+    }
     let writes_second_core = jobs.iter().any(|job| job.core.name != BOOT_CORE);
 
     for (i, job) in jobs.iter().enumerate() {
