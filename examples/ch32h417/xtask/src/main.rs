@@ -275,15 +275,21 @@ fn run_timed(program: &str, args: &[&str], dir: &Path, timeout: Duration) -> boo
     }
 }
 
-/// Recovers a probe left wedged by an interrupted program.
+/// Escalates between write attempts.
 ///
-/// Two states have been seen. The chip can be left mid flash operation, waiting
-/// for a ready bit that never arrives (a chip reset clears that). More often the
-/// *probe* is stuck in RV mode, where every later write hangs at the same point;
-/// switching it to DAP and back is what clears that one — no USB replug and no
-/// board power cycle needed. Try both, cheapest first.
-fn clear_stuck_flash() {
-    println!("  recovering the probe (chip reset, then link mode re-cycle) ...");
+/// The one recovery observed reproducibly is simply repeating the write: a
+/// request that follows a killed one often hangs once and then works. The
+/// stronger steps — reset the chip, then re-cycle the link's protocol mode
+/// (RV -> DAP -> RV) — are best-effort: they are cheap and have cleared the few
+/// persistent cases, but the evidence is anecdotal (one such "recovery" was
+/// really the board being restarted by hand), so they only run after a plain
+/// retry has already failed.
+fn recover(attempt: u32) {
+    if attempt == 1 {
+        println!("  retrying ...");
+        return;
+    }
+    println!("  resetting the chip and re-cycling the link mode before the retry ...");
     run_timed("wlink", &["reset", "halt"], &root(), QUICK_TIMEOUT);
     thread::sleep(RECOVER_SETTLE);
     run_timed("wlink", &["mode-switch", "--dap"], &root(), QUICK_TIMEOUT);
@@ -294,8 +300,7 @@ fn clear_stuck_flash() {
         }
         thread::sleep(RECOVER_SETTLE);
     }
-    // The link needs a moment in RV mode before it will program again; skipping
-    // this makes the retry hang exactly like the failure being recovered from.
+    // The link needs a moment in RV mode before it will program again.
     thread::sleep(RECOVER_SETTLE);
 }
 
@@ -392,7 +397,7 @@ fn program_verified(core: &Core, example: &str, elf: &Path, args: &[&str], check
             return;
         }
         if !wrote {
-            clear_stuck_flash();
+            recover(attempt);
             continue;
         }
         match read_flash(core, expected.len()) {
@@ -414,7 +419,7 @@ fn program_verified(core: &Core, example: &str, elf: &Path, args: &[&str], check
             ),
             None => println!("  {}: read-back failed on attempt {attempt}", core.name),
         }
-        clear_stuck_flash();
+        recover(attempt);
     }
     fail(&format!(
         "{}: `{example}` is not in flash after {VERIFY_ATTEMPTS} attempts — \

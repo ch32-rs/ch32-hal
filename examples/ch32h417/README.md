@@ -113,22 +113,23 @@ while assembling the merged image.
   reset and run) and read the mailbox afterwards — `cargo xtask run` opens the
   console and therefore shows the V3F half only.
 - **Flash writes are not always complete.** `wlink flash` has been seen to
-  report success while only part of the image reached flash. `xtask` therefore
-  reads every `--no-run` image back, and on a mismatch or a hung write it
-  recovers the link and retries by itself:
+  report success while only part of the image reached flash, and to hang on a
+  write for minutes. `xtask` therefore reads every `--no-run` image back and
+  repeats the write if it did not land:
 
   ```text
   v3f: read-back failed on attempt 1
-  recovering the probe (chip reset, then link mode re-cycle) ...
+  retrying ...
   v3f verified (7036 bytes)
   ```
 
-  An interrupted program leaves the link stuck in RV mode, where every later
-  write hangs; `wlink mode-switch --dap` followed by `--rv` clears it, so no USB
-  replug and no power cycle are needed. The final write is the one that resets
-  and runs the chip, so it cannot be checked the same way without pausing it —
-  if a dual-core example only shows V3F activity, flash it again before
-  suspecting the firmware.
+  Repeating the write is what fixes it — a request that follows a killed one
+  hangs once and then goes through. If two attempts both fail, `xtask` also
+  resets the chip and re-cycles the link's protocol mode (`mode-switch --dap`,
+  `--rv`) before the last attempt, which is cheap but only anecdotally
+  effective. The final write is the one that resets and runs the chip, so it
+  cannot be checked the same way without pausing it — if a dual-core example
+  only shows V3F activity, flash it again before suspecting the firmware.
 - **Merged images.** `out/NAME.bin` is the full flash image (`0xFF` padding
   between the two payloads); `out/NAME.hex` is the same image as records, which
   only cover the payloads. `wlink` accepts either and writes the whole address
