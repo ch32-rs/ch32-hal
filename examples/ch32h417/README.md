@@ -119,10 +119,10 @@ while assembling the merged image.
   without pausing it — if a dual-core example only shows V3F activity, flash it
   again before suspecting the firmware.
 - **Merged images.** `out/NAME.bin` is the full flash image (`0xFF` padding
-  between the two payloads), `out/NAME.hex` holds only the payload records.
-  Prefer the two-ELF `xtask flash` path or the `.hex` — pushing the padded
-  `.bin` through `wlink flash` writes tens of kilobytes of `0xFF` and is very
-  slow.
+  between the two payloads); `out/NAME.hex` is the same image as records, which
+  only cover the payloads. `wlink` accepts either but writes the whole address
+  range, so both program the padding — use the two-ELF `xtask flash` path for
+  day-to-day work and the merged image for distribution.
 - **V5F code placement.** The V5F currently executes from flash in place; the
   CSDK copies V5F `.text` to ITCM before running. That model is not implemented
   here yet, so keep V5F halves small (CSR reads and mailbox stores, not
