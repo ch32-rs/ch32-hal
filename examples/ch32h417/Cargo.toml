@@ -20,8 +20,8 @@ ch32-hal = { path = "../../", default-features = false, features = [
     "exti",
 ] }
 
-qingke = { version = "0.8", features = ["unsafe-trust-wch-atomics", "dual-core"] }
-qingke-rt = { version = "0.8" }
+qingke = { version = "0.8.2", features = ["unsafe-trust-wch-atomics", "dual-core"] }
+qingke-rt = { version = "0.8.2" }
 
 panic-halt = "1.0"
 embedded-hal = "1.0.0"
