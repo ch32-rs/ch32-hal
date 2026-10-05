@@ -1,6 +1,9 @@
-//! Minimal V5F (hart 1) — toggle LED1 (PF0) via raw GPIO registers.
-//! Uses no ch32-hal APIs (V3F already configured clocks); the ch32-hal
-//! dependency in Cargo.toml only supplies metapac's device.x/memory.x.
+//! Minimal dual-core example — V5F half.
+//!
+//! Woken by `v3f/src/bin/hello.rs`, it toggles LED1 (PF0) through raw GPIO
+//! registers. Uses no ch32-hal APIs (the V3F already configured the clocks);
+//! the ch32-hal dependency in Cargo.toml only supplies metapac's
+//! device.x/memory.x.
 
 #![no_std]
 #![no_main]

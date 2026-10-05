@@ -156,10 +156,13 @@ WINNERS_V3F + WINNERS_V5F equals the number of times SLOT cycled
 Where to drop these in:
 
 ```
-examples/ch32h417/src/bin/litmus_atomic_isr.rs       — test A
-examples/ch32h417/src/bin/litmus_atomic_dekker.rs    — test B (needs V5F bring-up)
-examples/ch32h417/src/bin/litmus_atomic_cas_race.rs  — test C (same)
+examples/ch32h417/v3f/src/bin/litmus_atomic_isr.rs       — test A
+examples/ch32h417/v3f/src/bin/litmus_atomic_dekker.rs    — test B (needs V5F bring-up)
+examples/ch32h417/v3f/src/bin/litmus_atomic_cas_race.rs  — test C (same)
 ```
+
+Test B/C would pair with `examples/ch32h417/v5f/src/bin/litmus_atomic_*.rs`
+halves: the V5F has no entry point of its own, so the V3F half has to wake it.
 
 Build matrix:
 

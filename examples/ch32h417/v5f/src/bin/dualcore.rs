@@ -1,6 +1,7 @@
-//! Minimal V5F probe — marks the cross-core mailbox and loops.
+//! Dual-core demo — V5F half.
 //!
-//! If `0x20178008` reads `0xDEADBEEF` after the wake, the V5F executed.
+//! Woken by `v3f/src/bin/dualcore.rs`, it marks the cross-core mailbox and
+//! idles. If `0x20178008` reads `0xDEADBEEF` after the wake, the V5F executed.
 //! The marker deliberately lives in `RAM_SHARED` (declared with the same
 //! address in both crates' `memory.x`, mirroring the CSDK's `RAM_SHARED`
 //! section) rather than in ITCM: ITCM is the *V3F's* private RAM, and the

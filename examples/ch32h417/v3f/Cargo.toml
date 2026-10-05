@@ -1,5 +1,5 @@
 [package]
-name = "ch32h417-examples"
+name = "ch32h417-v3f"
 version = "0.1.0"
 edition = "2021"
 
@@ -13,7 +13,7 @@ edition = "2021"
 # this crate's examples are all blocking. Without `embassy` the I2C
 # driver's timeout uses the plain counter `Timeout` instead of
 # `embassy_time`, so no time driver is needed.
-ch32-hal = { path = "../../", default-features = false, features = [
+ch32-hal = { path = "../../../", default-features = false, features = [
     "ch32h417qeu6-v3f",
     "memory-x",
     "rt",
