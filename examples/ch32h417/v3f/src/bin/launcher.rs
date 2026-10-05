@@ -35,11 +35,15 @@ fn main() -> ! {
     let _p = hal::init(hal::Config::default());
     hal::debug::SDIPrint::enable();
 
+    // Wake the second core before printing anything. `SDIPrint::write_str`
+    // spins until the debug module consumes `DATA0`, which never happens
+    // without `--enable-sdi-print`, so a print here would strand hart 1
+    // unscheduled whenever the console is not armed.
+    unsafe { pfic::wake_other_core(V5F_ENTRY) };
     println!(
-        "launcher: waking hart 1 at {:#010x}, V3F parks in wfi",
+        "launcher: woke hart 1 at {:#010x}, V3F parks in wfi",
         V5F_ENTRY
     );
-    unsafe { pfic::wake_other_core(V5F_ENTRY) };
 
     loop {
         unsafe { core::arch::asm!("wfi") };
