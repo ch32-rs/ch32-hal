@@ -98,14 +98,18 @@ const USAGE: &str = "\
 usage: cargo xtask <command> [options]
 
 commands:
-  build [--example NAME] [--core v3f|v5f]   build one example (or everything)
-  flash --example NAME [--core v3f|v5f] [--no-build]
+  build [--example NAME] [--v3f-only]       build one example (or everything)
+  flash --example NAME [--v3f-only] [--no-build]
                                             build, then flash and reset
-  run   --example NAME [--core v3f|v5f] [--no-build]
+  run   --example NAME [--v3f-only] [--no-build]
                                             like flash, plus the SDI console
   merge --example NAME [--out DIR]          merge the images into .bin + .hex
+  report                                    read the mailbox back as a report
 
-Examples are either v3f-only or dual-core; see the module docs.";
+A dual-core example is programmed core by core, V3F first. `--v3f-only` writes
+the boot core alone and leaves the V5F region untouched — that is how a bare V5F
+payload is run under the generic `launcher`. Reset only ever starts the V3F, so
+there is no V5F-only mode; see the module docs.";
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -119,6 +123,7 @@ fn main() {
         "flash" => flash(&opts, false),
         "run" => flash(&opts, true),
         "merge" => merge(&opts),
+        "report" => report(),
         "help" | "--help" | "-h" => println!("{USAGE}"),
         other => fail(&format!("unknown command `{other}`\n\n{USAGE}")),
     }
@@ -127,7 +132,7 @@ fn main() {
 /// Parsed command line.
 struct Options {
     example: Option<String>,
-    core: Option<String>,
+    v3f_only: bool,
     no_build: bool,
     out: Option<PathBuf>,
 }
@@ -136,7 +141,7 @@ impl Options {
     fn parse(args: &[String]) -> Options {
         let mut opts = Options {
             example: None,
-            core: None,
+            v3f_only: false,
             no_build: false,
             out: None,
         };
@@ -144,24 +149,20 @@ impl Options {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--example" => opts.example = args.next().cloned(),
-                "--core" => opts.core = args.next().cloned(),
+                "--v3f-only" => opts.v3f_only = true,
                 "--out" => opts.out = args.next().map(PathBuf::from),
                 "--no-build" => opts.no_build = true,
                 other => fail(&format!("unknown option `{other}`\n\n{USAGE}")),
             }
         }
-        if let Some(core) = &opts.core {
-            if !CORES.iter().any(|c| c.name == core) {
-                fail(&format!("unknown core `{core}` (expected v3f or v5f)"));
-            }
-        }
         opts
     }
 
-    /// Cores to act on: everything, or `--core`, intersected with the cores
-    /// that actually carry the example.
+    /// Cores to act on: the boot core alone with `--v3f-only`, otherwise every
+    /// core that carries the example (both, for a dual-core example).
     ///
-    /// Rejects a V5F-only example — hart 1 has no entry point of its own.
+    /// Rejects a V5F-only example — hart 1 has no entry point of its own, since
+    /// reset only starts the V3F.
     fn select(&self) -> Vec<&'static Core> {
         let carrying: Vec<&'static Core> = match &self.example {
             Some(example) => CORES
@@ -184,17 +185,15 @@ impl Options {
             ));
         }
 
-        let selected: Vec<&'static Core> = carrying
-            .into_iter()
-            .filter(|core| self.core.as_deref().is_none_or(|want| want == core.name))
-            .collect();
-        if selected.is_empty() {
-            let example = self.example.as_deref().unwrap_or_default();
-            fail(&format!(
-                "the `{example}` example has no source for the requested core"
-            ));
+        if self.v3f_only {
+            // The V5F region keeps whatever image it already holds.
+            carrying
+                .into_iter()
+                .filter(|core| core.name == BOOT_CORE)
+                .collect()
+        } else {
+            carrying
         }
-        selected
     }
 }
 
@@ -402,21 +401,27 @@ fn program_verified(core: &Core, example: &str, elf: &Path, args: &[&str], check
         }
         match read_flash(core, expected.len()) {
             // `wlink dump` rounds its length up to a word, so compare the
-            // image-sized prefix rather than the vectors themselves.
-            Some(actual) if actual.len() >= expected.len() && actual[..expected.len()] == expected => {
-                println!("  {} verified ({} bytes)", core.name, expected.len());
-                return;
-            }
-            Some(actual) => println!(
-                "  {}: read-back differs ({} of {} bytes match) on attempt {attempt}",
-                core.name,
-                actual
+            // image-sized prefix rather than the vectors themselves, and treat
+            // the bytes the image leaves as erased as don't-care: sections are
+            // written individually, so the alignment gaps between them keep
+            // whatever the flash held there.
+            Some(actual) if actual.len() >= expected.len() => {
+                let wrong = expected
                     .iter()
-                    .zip(&expected)
-                    .take_while(|(a, b)| a == b)
-                    .count(),
-                expected.len()
-            ),
+                    .zip(&actual)
+                    .filter(|(want, got)| **want != ERASED && want != got)
+                    .count();
+                if wrong == 0 {
+                    println!("  {} verified ({} bytes)", core.name, expected.len());
+                    return;
+                }
+                println!(
+                    "  {}: read-back differs in {wrong} of {} bytes on attempt {attempt}",
+                    core.name,
+                    expected.len()
+                );
+            }
+            Some(_) => println!("  {}: read-back was short on attempt {attempt}", core.name),
             None => println!("  {}: read-back failed on attempt {attempt}", core.name),
         }
         recover(attempt);
@@ -500,6 +505,121 @@ fn merge(opts: &Options) {
     println!("intel hex:    {}", hex.display());
 }
 
+/// Mailbox fields the dual-core examples publish, and the names of the CSRs the
+/// V5F half probes (`v5f/src/bin/cpuid.rs`).
+const MB_BASE: u64 = 0x2017_8000;
+const MB_CPUID_PRESENT: u64 = 0x2017_8010;
+const MB_CPUID_VALUES: u64 = 0x2017_8014;
+const N_CSRS: usize = 14;
+const MB_CPUID_BUILDCFG: u64 = MB_CPUID_VALUES + N_CSRS as u64 * 4;
+const MB_CPUID_DONE: u64 = MB_CPUID_BUILDCFG + 4;
+const MB_CPUID_PROGRESS: u64 = MB_CPUID_DONE + 4;
+const MB_END: u64 = MB_CPUID_PROGRESS + 4;
+const DONE_MAGIC: u32 = 0xC0DE_0001;
+const DUALCORE_MARKER: u32 = 0xDEAD_BEEF;
+
+const CSR_NAMES: [&str; N_CSRS] = [
+    "mvendorid",
+    "marchid",
+    "mimpid",
+    "mhartid",
+    "misa",
+    "mstatus",
+    "mtvec",
+    "mepc",
+    "mcause",
+    "corecfgr",
+    "intsyscr",
+    "gintenr",
+    "cache_strtg_ctlr",
+    "cache_pmp_ovr",
+];
+
+/// Reads the mailbox back and decodes it.
+///
+/// The V5F half cannot report over SDI while a console is attached — every wlink
+/// request pauses the cores, and the console keeps one attached — so the
+/// examples publish what they find here instead, and this prints it afterwards.
+fn report() {
+    let tmp = env::temp_dir().join(format!("h417-mailbox-{}.bin", std::process::id()));
+    let address = format!("{MB_BASE:#010x}");
+    let length = (MB_END - MB_BASE).to_string();
+    let read = run_timed(
+        "wlink",
+        &[
+            "dump",
+            &address,
+            &length,
+            "-o",
+            tmp.to_str().expect("utf-8 path"),
+        ],
+        &root(),
+        QUICK_TIMEOUT,
+    );
+    if !read {
+        fail("could not read the mailbox");
+    }
+    let bytes =
+        fs::read(&tmp).unwrap_or_else(|e| fail(&format!("reading {}: {e}", tmp.display())));
+    let _ = fs::remove_file(&tmp);
+
+    let word = |offset: u64| -> u32 {
+        let i = (offset - MB_BASE) as usize;
+        u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]])
+    };
+
+    println!("mailbox @ {MB_BASE:#010x}");
+    println!("  sdi_cpuid token   = {:#010x}", word(MB_BASE));
+    println!("  sdi_cpuid ticks   = {}", word(MB_BASE + 0x04));
+    let marker = word(MB_BASE + 0x08);
+    println!(
+        "  dualcore  marker  = {marker:#010x}{}",
+        if marker == DUALCORE_MARKER {
+            "  (hart 1 ran)"
+        } else {
+            ""
+        }
+    );
+    println!("  dualcore  counter = {}", word(MB_BASE + 0x0C));
+
+    if word(MB_CPUID_DONE) != DONE_MAGIC {
+        println!(
+            "  cpuid: no report from hart 1 (magic missing, progress = {})",
+            word(MB_CPUID_PROGRESS)
+        );
+        return;
+    }
+    println!(
+        "  cpuid  (hart 1)   image build features = {:#04x}",
+        word(MB_CPUID_BUILDCFG)
+    );
+    let present = word(MB_CPUID_PRESENT);
+    let mut misa = None;
+    for (i, name) in CSR_NAMES.iter().enumerate() {
+        let value = word(MB_CPUID_VALUES + i as u64 * 4);
+        if present & (1 << i) == 0 {
+            println!("    {name:<18}   absent (read faulted)");
+            continue;
+        }
+        println!("    {name:<18} = {value:#010x}");
+        if *name == "misa" {
+            misa = Some(value);
+        }
+    }
+    if let Some(misa) = misa {
+        let letters: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            .chars()
+            .enumerate()
+            .filter(|(bit, _)| misa & (1 << bit) != 0)
+            .map(|(_, letter)| letter)
+            .collect();
+        println!(
+            "    misa decode        MXL={} extensions={letters}",
+            (misa >> 30) & 3
+        );
+    }
+}
+
 /// Converts an ELF to a flat binary with `llvm-objcopy`.
 fn flatten(elf: &Path, core: &Core) -> Vec<u8> {
     if !elf.exists() {
@@ -511,9 +631,18 @@ fn flatten(elf: &Path, core: &Core) -> Vec<u8> {
     }
     let tmp = env::temp_dir().join(format!("h417-{}-{}.bin", core.name, std::process::id()));
     let objcopy = objcopy();
+    // `--gap-fill 0xFF` makes the gaps between sections read as erased flash,
+    // which is what is actually there: the sections are written individually.
     run(
         &objcopy,
-        &["-O", "binary", elf.to_str().unwrap(), tmp.to_str().unwrap()],
+        &[
+            "-O",
+            "binary",
+            "--gap-fill",
+            "0xFF",
+            elf.to_str().unwrap(),
+            tmp.to_str().unwrap(),
+        ],
         &root(),
     );
     let bytes =
