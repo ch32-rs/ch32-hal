@@ -450,22 +450,47 @@ layout_version {}
 }
 
 /// `(address, size)` of the `MAILBOX` symbol in `elf`.
+///
+/// Read straight out of the ELF symbol table instead of shelling out to
+/// `llvm-nm`: CI installs no `llvm-tools-preview`, and the layout a build needs
+/// must not depend on a tool only flashing needs.
 fn mailbox_symbol(elf: &Path) -> Option<(u32, u32)> {
-    let output = Command::new(nm())
-        .args(["-S", elf.to_str()?])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        let mut fields = line.split_whitespace();
-        let (address, size) = (fields.next()?, fields.next()?);
-        if !line.ends_with("MAILBOX") {
-            continue;
+    let data = fs::read(elf).ok()?;
+    // ELF32, little endian, then its section header table.
+    if data.len() < 0x34 || &data[0..4] != b"\x7fELF" || data[4] != 1 || data[5] != 1 {
+        return None;
+    }
+    let u16_at = |o: usize| u16::from_le_bytes([data[o], data[o + 1]]) as usize;
+    let u32_at = |o: usize| u32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]);
+    let shoff = u32_at(0x20) as usize;
+    let shentsize = u16_at(0x2e);
+    let shnum = u16_at(0x30);
+
+    // SHT_SYMTAB; its sh_link names the string table.
+    let mut symtab = None;
+    for i in 0..shnum {
+        let sh = shoff + i * shentsize;
+        if u32_at(sh + 4) == 2 {
+            symtab = Some(sh);
+            break;
         }
-        return Some((
-            u32::from_str_radix(address, 16).ok()?,
-            u32::from_str_radix(size, 16).ok()?,
-        ));
+    }
+    let symtab = symtab?;
+    let sym_off = u32_at(symtab + 0x10) as usize;
+    let sym_size = u32_at(symtab + 0x14) as usize;
+    let strtab = shoff + u32_at(symtab + 0x18) as usize * shentsize;
+    let str_off = u32_at(strtab + 0x10) as usize;
+
+    for i in 0..sym_size / 16 {
+        let sym = sym_off + i * 16;
+        let name_at = str_off + u32_at(sym) as usize;
+        let name = data[name_at..]
+            .split(|byte| *byte == 0)
+            .next()
+            .unwrap_or_default();
+        if name == b"MAILBOX" {
+            return Some((u32_at(sym + 4), u32_at(sym + 8)));
+        }
     }
     None
 }
@@ -846,11 +871,6 @@ fn flatten(elf: &Path, core: &Core) -> Vec<u8> {
 }
 
 /// `llvm-objcopy` shipped with the active toolchain, falling back to `PATH`.
-/// `llvm-nm` shipped with the active toolchain, falling back to `PATH`.
-fn nm() -> String {
-    tool("llvm-nm")
-}
-
 /// `llvm-objcopy` shipped with the active toolchain, falling back to `PATH`.
 fn objcopy() -> String {
     tool("llvm-objcopy")
