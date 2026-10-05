@@ -2,8 +2,6 @@
 //!
 //! See-also: https://github.com/openwch/ch32v003/blob/main/EVT/EXAM/SDI_Printf/SDI_Printf/Debug/debug.c
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
 use qingke::dm::{DATA0, DATA1};
 use qingke::riscv;
 
@@ -35,11 +33,6 @@ impl SDIPrint {
     /// fine for a core that has nothing else to do, but not for a core in a
     /// control loop (or on hart 1, which must not stall behind a console).
     pub fn write_str_lossy(s: &str) -> core::fmt::Result {
-        // Once a lossy write has given up, nothing is draining `DATA0`, so every
-        // later message would pay the same wait again — skip it outright.
-        if GAVE_UP.load(Ordering::Relaxed) {
-            return Ok(());
-        }
         write(s, Some(SPINS))
     }
 }
@@ -66,11 +59,9 @@ pub fn write_fmt_lossy(args: core::fmt::Arguments) -> core::fmt::Result {
 
 /// Iterations [`SDIPrint::write_str_lossy`] tolerates per chunk. Kept small
 /// because each iteration is a *debug-module* read, which is far slower than a
-/// normal load.
-const SPINS: u32 = 200_000;
-
-/// Set when a lossy write gives up; see [`SDIPrint::write_str_lossy`].
-static GAVE_UP: AtomicBool = AtomicBool::new(false);
+/// normal load — and deliberately *not* remembered across calls: a console that
+/// attaches later must still receive output, so each message pays its own budget.
+const SPINS: u32 = 20_000;
 
 impl core::fmt::Write for SDIPrint {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
@@ -94,7 +85,6 @@ fn write(s: &str, spins: Option<u32>) -> core::fmt::Result {
                 if let Some(limit) = spins {
                     waited += 1;
                     if waited > limit {
-                        GAVE_UP.store(true, Ordering::Relaxed);
                         return Ok(());
                     }
                 }

@@ -16,7 +16,11 @@ use qingke::dm::{DATA0, DATA1};
 
 /// How many spins `write_str_lossy` tolerates per 7-byte chunk before dropping
 /// the rest of the message.
-const SPINS: u32 = 1_000_000;
+/// Deliberately not remembered across calls: a console that attaches later must
+/// still receive output, so each message pays its own (small) budget. Each
+/// iteration is a *debug-module* read, far slower than a normal load, which is
+/// why the budget is this low.
+const SPINS: u32 = 20_000;
 
 /// The 7-byte-per-chunk SDI writer.
 pub struct SdiPrint;
