@@ -26,7 +26,7 @@ files that exist:
 | Kind | Files | Examples |
 |---|---|---|
 | **v3f-only** | `v3f/src/bin/NAME.rs` | `blinky`, `i2c_scan`, `bme280_blocking`, `sdi_print`, `launcher` |
-| **dual-core** | `v3f/src/bin/NAME.rs` + `v5f/src/bin/NAME.rs` | `cpuid`, `dualcore`, `hello`, `sdi_cpuid` |
+| **dual-core** | `v3f/src/bin/NAME.rs` + `v5f/src/bin/NAME.rs` | `cpuid`, `dualcore`, `hello`, `pingpong`, `sdi_cpuid` |
 
 In a dual-core example the V3F half brings the chip up (clocks, GPIO, SDI),
 hands over to hart 1, and reports; the V5F half is deliberately small — it runs
@@ -148,6 +148,29 @@ The same split as the WCH CSDK (`EXAM/…/Common/Ld/V3F/Link_v3f.ld` and
 Either image declares its own range, so an oversized build fails to link
 instead of overwriting the other image; `xtask merge` checks the sizes again
 while assembling the merged image.
+
+### Shared-memory ping-pong (`pingpong`)
+
+The end-to-end demo of the mechanism above: the boot core clears the mailbox and
+hands over, hart 1 probes its own CPU-ID CSRs into it, the boot core prints what
+hart 1 reported — the only thing crossing between the cores is shared memory —
+and from then on the two exchange one round per second. Hart 1 increments
+`ping`; the boot core answers by storing `pong`, and hart 1 only starts the next
+round once it has seen the answer, so the exchange cannot run away from the
+printer.
+
+```text
+cargo xtask flash --example pingpong --dual-core   # rounds run (~0.7/s, paced by delay_ms(1000))
+cargo xtask report                                  # ping/pong, plus hart 1's CPU-ID block
+cargo xtask run   --example pingpong --dual-core    # console: see hart 1's report printed
+```
+
+The two views are mutually exclusive, for the reason in the note below: with the
+console attached hart 1 is held, so the counters freeze — and the boot core's
+half prints through `try_println!` (the bounded variant) precisely so a missing
+console cannot stall the rounds. Read the counters back after a `flash`, leaving
+a gap: *any* `wlink` request halts both harts, so a burst of reads keeps them
+halted and the counters look frozen.
 
 ### Mailbox and shared region
 
