@@ -87,7 +87,13 @@ fn build_features() -> u32 {
 #[qingke_rt::entry]
 fn main() -> ! {
     let mut present_mask = 0u32;
-    unsafe { core::ptr::write_volatile(MB_V5F_PROGRESS, 0) };
+    // Invalidate the previous report first: the boot core clears the mailbox for
+    // the `cpuid` example, but a generic `launcher` does not, and a stale
+    // `DONE_MAGIC` would make `xtask report` show an old block as if it were new.
+    unsafe {
+        core::ptr::write_volatile(MB_V5F_PROGRESS, 0);
+        core::ptr::write_volatile(MB_V5F_DONE, 0);
+    }
 
     macro_rules! report {
         ($i:expr, $addr:literal) => {{
