@@ -3,31 +3,28 @@
 //! V3F: blinks LED0 (PF2) and writes a loop counter to ITCM (0x200a0000)
 //!      and to the cross-core mailbox in shared RAM (0x2017800C) for
 //!      `wlink dump` verification.
-//! V5F: see examples/ch32h417-v5f.
+//! V5F: `v5f/src/bin/dualcore.rs` marks the mailbox and idles; this core owns
+//! the console, the LEDs and the clocks.
 //!
-//! # Flash / RAM partition
-//!
-//! Both images tile one flash chip the way the WCH CSDK does
-//! (`Ld/V3F/Link_v3f.ld` + `Ld/V5F/Link_v5f.ld`): V3F owns the first 64K,
-//! the V5F image starts at 0x00010000. Either image states its own range, so
-//! an oversized build fails to link instead of overwriting the other image.
-//! Flash this image with `--no-run` first, then the V5F image (which resets
-//! and runs):
+//! # Building and flashing
 //!
 //! ```text
-//! wlink flash -R target/riscv32imafc-unknown-none-elf/release/dualcore
-//! (cd ../ch32h417-v5f && wlink flash target/riscv32imafbc-unknown-none-elf/release/v5f_probe)
+//! cargo xtask run --example dualcore
 //! ```
 //!
-//! `wlink` maps the V5F image's 0x00010000-based sections onto flash
-//! 0x08010000, so no `dd` merge is needed.
+//! `xtask` builds both cores, writes this image first with `--no-run`, then the
+//! V5F image — and that last write resets and runs the chip. The split is the
+//! WCH CSDK one (`Ld/V3F/Link_v3f.ld` + `Ld/V5F/Link_v5f.ld`): V3F owns the
+//! first 64K of flash, the V5F image starts at 0x00010000. Either image states
+//! its own range, so an oversized build fails to link instead of overwriting
+//! the other image.
 //!
 //! # Cross-core mailbox (shared RAM, same layout in both crates)
 //!
 //! ```text
 //! 0x20178000  sdi_cpuid: console token
 //! 0x20178004  sdi_cpuid: V5F tick counter
-//! 0x20178008  v5f_probe: 0xDEADBEEF liveness marker
+//! 0x20178008  dualcore:  0xDEADBEEF liveness marker (written by the V5F)
 //! 0x2017800C  dualcore:  V3F loop counter
 //! ```
 
@@ -45,7 +42,7 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-/// Must match `examples/ch32h417-v5f/memory.x` FLASH ORIGIN (1KB-aligned).
+/// Must match `v5f/memory.x` FLASH ORIGIN (1KB-aligned).
 const V5F_ENTRY: u32 = 0x0001_0000;
 
 /// Cross-core mailbox slot (see the module docs).

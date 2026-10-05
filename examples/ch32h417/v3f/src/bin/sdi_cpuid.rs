@@ -2,8 +2,8 @@
 //!
 //! Answers "which core is running this code?" on hardware: this hart reports
 //! itself as `hart=C0`, wakes the second core, and the V5F image
-//! (`examples/ch32h417-v5f/src/bin/sdi_cpuid.rs`) reports itself as
-//! `hart=C1` over the same SDI console.
+//! (`v5f/src/bin/sdi_cpuid.rs`) reports itself as `hart=C1` over the same SDI
+//! console.
 //!
 //! # One writer at a time
 //!
@@ -22,21 +22,15 @@
 //!    again — it reports liveness by bumping a counter in shared RAM instead.
 //! 4. V3F is the only SDI writer from then on, and prints both counters.
 //!
-//! # Flashing
-//!
-//! Both images tile one flash chip the way the WCH CSDK does: this one owns
-//! the first 64K (0x00000000 -> 0x08000000), the V5F image starts at
-//! 0x00010000. Flash this image with `--no-run` first, then the V5F image,
-//! which resets and runs:
+//! # Building and flashing
 //!
 //! ```text
-//! wlink flash -R target/riscv32imafc-unknown-none-elf/release/sdi_cpuid
-//! (cd ../ch32h417-v5f && wlink flash --enable-sdi-print --watch-serial \
-//!     target/riscv32imafbc-unknown-none-elf/release/sdi_cpuid)
+//! cargo xtask run --example sdi_cpuid
 //! ```
 //!
-//! `wlink` maps the V5F image's 0x00010000-based sections onto flash
-//! 0x08010000, so no `dd` merge is needed.
+//! `xtask` builds both cores and writes this image (flash 0x00000000 ->
+//! 0x08000000) before the V5F image at 0x00010000, which is the same 64K split
+//! the WCH CSDK uses.
 
 #![no_std]
 #![no_main]
@@ -45,7 +39,7 @@ use hal::println;
 use qingke::pfic::{self, HartId};
 use {ch32_hal as hal, panic_halt as _};
 
-/// Must match `examples/ch32h417-v5f/memory.x` FLASH ORIGIN (1KB-aligned).
+/// Must match `v5f/memory.x` FLASH ORIGIN (1KB-aligned).
 const V5F_ENTRY: u32 = 0x0001_0000;
 
 /// Cross-core mailbox in shared RAM (`RAM_SHARED`, declared with the same

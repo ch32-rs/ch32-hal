@@ -1,9 +1,9 @@
 //! SDI + CPU-id demo — second core (V5F, QingKe hart 1).
 //!
-//! Woken by the boot core at 0x08002000. It prints its own hart ID once
+//! Woken by the boot core at 0x00010000. It prints its own hart ID once
 //! (`hart=C1`), hands the SDI console back to the boot core, and from then on
 //! reports liveness by bumping a counter in shared SRAM that the boot core
-//! prints. See `examples/ch32h417/src/bin/sdi_cpuid.rs`.
+//! prints. See `v3f/src/bin/sdi_cpuid.rs`.
 //!
 //! # Why this file does not call `hal::init()`
 //!

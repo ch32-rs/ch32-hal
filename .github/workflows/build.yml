@@ -80,7 +80,6 @@ jobs:
       fail-fast: false
       matrix:
         example:
-          - ch32h417
           - ch32l103
           - ch32v003
           - ch32v006
@@ -92,6 +91,10 @@ jobs:
           - ch32x035
           - ch641
           - ch643
+        include:
+          # Two cores in one chip, built through that directory's own xtask.
+          - example: ch32h417
+            cmd: cargo xtask build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -108,4 +111,4 @@ jobs:
           cd ../ch32-data/build/
           git clone https://github.com/ch32-rs/ch32-metapac.git
       - name: Build
-        run: cd examples/${{ matrix.example }} && cargo build --release
+        run: cd examples/${{ matrix.example }} && ${{ matrix.cmd || 'cargo build --release' }}

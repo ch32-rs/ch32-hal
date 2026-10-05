@@ -3,4 +3,7 @@ Cargo.lock
 trash/
 .vscode/
 
+# merged firmware images produced by examples/ch32h417/xtask
+out/
+
 .DS_Store

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ch32-hal = { path = "../../", features = [
+ch32-hal = { path = "../../../", features = [
     "ch32h417qeu6-v5f",
     "memory-x",
 ] }
