@@ -18,8 +18,8 @@ ch32-metapac = { features = [
     "rt",
 ], version = "0.1.1" }
 
-qingke = { version = "0.8", features = ["critical-section-impl"] }
-qingke-rt = { version = "0.8", optional = true }
+qingke = { version = "0.8.2", features = ["critical-section-impl"] }
+qingke-rt = { version = "0.8.2", optional = true }
 
 embedded-hal = { package = "embedded-hal", version = "1.0" }
 embedded-hal-async = "1.0.0"
