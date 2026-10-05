@@ -29,10 +29,10 @@ files that exist:
 | **dual-core** | `v3f/src/bin/NAME.rs` + `v5f/src/bin/NAME.rs` | `cpuid`, `dualcore`, `hello`, `sdi_cpuid` |
 
 In a dual-core example the V3F half brings the chip up (clocks, GPIO, SDI),
-wakes hart 1, and reports; the V5F half is deliberately small — it runs from
-flash with no HAL initialisation and writes its results to the shared mailbox
-or drives a pin. A `v5f/src/bin/NAME.rs` without a `v3f` half is rejected by
-`xtask`.
+hands over to hart 1, and reports; the V5F half is deliberately small — it runs
+from flash with no HAL initialisation of its own and writes its results to the
+shared mailbox or drives a pin. A `v5f/src/bin/NAME.rs` without a `v3f` half is
+rejected by `xtask`.
 
 ## Commands
 
@@ -45,34 +45,61 @@ cargo xtask build                      # everything
 
 cargo xtask flash --example dualcore   # build + write both images, no console
 cargo xtask run   --example dualcore   # same, plus the SDI console
-cargo xtask run   --example cpuid --core v3f   # re-flash only one core
+cargo xtask flash --example launcher --v3f-only   # boot core alone
 
-cargo xtask merge --example dualcore   # out/dualcore.bin + out/dualcore.hex
+cargo xtask merge  --example dualcore  # out/dualcore.bin + out/dualcore.hex
+cargo xtask report                     # decode the mailbox the examples publish
 ```
 
-`--core` narrows a command to one core, `--no-build` skips the build step, and
-`--out DIR` moves the merged artifacts.
+There are two things to select, matching the two kinds of example: **which
+example**, and whether a dual-core example is written **whole** (both cores) or
+only on the **boot core** (`--v3f-only`, which leaves the V5F region as it is).
+There is deliberately no V5F-only mode — reset never starts hart 1, so it would
+have nothing to run. `--no-build` skips the build step and `--out DIR` moves the
+merged artifacts.
 
-Flashing writes the V3F image first with `--no-run` and the V5F image last,
-because the final write is the one that resets and runs the chip: only then are
-both images in place.
+Flashing a dual-core example writes the V3F image first with `--no-run` and the
+V5F image last, because the final write is the one that resets and runs the chip:
+only then are both images in place.
 
-### Iterating on hart 1 only
+### Reading results back
 
-`launcher` is a generic V3F image: it brings the shared blocks up, wakes hart 1
-at the address `v5f/memory.x` links it to, and parks the V3F in `wfi`. Flash it
-once and the V5F region becomes the only thing worth reflashing:
+A console cannot be used to watch a dual-core example: every `wlink` request
+pauses the cores while it is attached, and `--watch-serial` stays attached for as
+long as the console runs, so the V5F half makes no progress meanwhile. The
+examples therefore publish their results into the shared mailbox, and `report`
+reads that back:
 
 ```sh
-cargo xtask flash --example launcher          # once, leaves hart 1 running
-cargo xtask flash --example cpuid --core v5f  # each V5F rebuild
+cargo xtask flash --example cpuid
+cargo xtask report
 ```
 
-The V5F halves therefore do not need a dedicated V3F counterpart while they are
-being developed; a dual-core example adds one when the V3F has work to do too
-(reporting, clocks, mailbox bookkeeping). `launcher` is deliberately not an
-embassy application — no executor, and `hal::init()` only touches the blocks the
-V5F halves depend on.
+### Handing over to hart 1
+
+`cpuid` is the handover example: the V3F half runs the whole bring-up —
+`hal::init()` programmes the clock tree (RCC, flash latency, AFIO/GPIO, EXTI) —
+then writes hart 1's entry to the PFIC wake register and parks in `wfi`. The V5F
+half probes **its own** Machine-mode CSRs and stores them; `report` prints them,
+and `mhartid = 1` is what shows the values came from the second core rather than
+from the boot core's probe.
+
+```sh
+cargo xtask flash --example cpuid   # hand over, let hart 1 probe itself
+cargo xtask report                  # read hart 1's block back out
+```
+
+`launcher` is the same handover with nothing else: a generic V3F image that brings
+the shared blocks up, wakes hart 1 at the address `v5f/memory.x` links it to, and
+parks the V3F in `wfi`. With `--v3f-only` it starts whatever V5F payload is
+already in flash, including one built by hand:
+
+```sh
+cargo xtask flash --example launcher --v3f-only   # start the existing V5F image
+```
+
+It is deliberately not an embassy application — no executor, and `hal::init()`
+only touches the blocks the V5F halves depend on.
 
 ## Flash / RAM partition
 
@@ -98,6 +125,11 @@ while assembling the merged image.
 0x2017800C  dualcore:  V3F loop counter
 0x20178010… cpuid:     V5F CSR report block (see v3f/src/bin/cpuid.rs)
 ```
+
+`cargo xtask report` decodes all of it — the console is not usable for this, as
+the next note explains. The V3F half of `cpuid` clears the mailbox before the
+handover, so the report always describes the current run rather than whatever an
+earlier example left in shared RAM.
 
 ## Notes
 

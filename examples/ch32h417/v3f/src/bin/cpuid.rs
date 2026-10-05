@@ -1,11 +1,27 @@
-//! CPU-ID report for both cores — boot core (V3F, hart 0).
+//! Handover + CPU-ID report — boot core (V3F, hart 0).
 //!
-//! Prints its own identity/ISA CSRs, wakes hart 1, and prints hart 1's values
-//! out of the shared-RAM mailbox (`v5f/src/bin/cpuid.rs`). hart 1 only reads its
-//! CSRs and stores them: it does no formatting and no SDI, because the V5F's
-//! flash-resident execution is slow — the WCH CSDK runs V5F code from ITCM
-//! (`Link_v5f.ld` puts `.text` in `.itcm_copy >ITCM AT>FLASH`) and that model is
-//! not in place here yet.
+//! The boot core owns bring-up: `hal::init()` programs the whole clock tree
+//! (RCC, flash latency, AFIO/GPIO, EXTI), exactly as the WCH CSDK's V3F half
+//! does. It then hands the chip over by writing hart 1's entry to the PFIC wake
+//! register, and parks in `wfi`. hart 1 runs `v5f/src/bin/cpuid.rs`, reads *its
+//! own* identity/ISA CSRs and stores them in shared RAM; this half reads that
+//! block back and prints it.
+//!
+//! ```text
+//! cargo xtask flash --example cpuid     # hand over and let hart 1 probe itself
+//! cargo xtask report                    # read hart 1's block back out
+//! cargo xtask run   --example cpuid     # same, with the V3F's own console
+//! ```
+//!
+//! The handover comes *before* the first `println!`: `SDIPrint::write_str` spins
+//! until the debug module consumes `DATA0`, which only happens once wlink has
+//! armed SDI print, so printing first would strand hart 1 unscheduled on a plain
+//! `flash`. Reading the mailbox with `report` needs no console at all.
+//!
+//! hart 1 only reads CSRs and stores them: no formatting and no SDI, because
+//! every wlink observation pauses the cores, and the WCH CSDK's model of running
+//! V5F code from ITCM (`Link_v5f.ld` uses `.itcm_copy >ITCM AT>FLASH`) is not in
+//! place here yet.
 //!
 //! # Privilege
 //!
@@ -25,7 +41,8 @@
 //! # Building and flashing
 //!
 //! ```text
-//! cargo xtask run --example cpuid
+//! cargo xtask flash --example cpuid
+//! cargo xtask report
 //! ```
 
 #![no_std]
@@ -40,6 +57,19 @@ const V5F_ENTRY: u32 = 0x0001_0000;
 
 /// Number of probed CSRs (see [`CSR_NAMES`]).
 const N_CSRS: u32 = 14;
+
+/// Start of the cross-core mailbox in shared RAM, and how much of it
+/// `cargo xtask report` reads (token/ticks/marker/counter + the block below).
+const MB_BASE: u32 = 0x2017_8000;
+const MB_WORDS: u32 = 0x58 / 4;
+
+/// Clears the mailbox before the handover: shared RAM survives a reset, so
+/// without this `report` would show fields another example left behind.
+fn clear_mailbox() {
+    for i in 0..MB_WORDS {
+        unsafe { core::ptr::write_volatile((MB_BASE + i * 4) as *mut u32, 0) };
+    }
+}
 
 /// hart 1's report block in the shared-RAM mailbox (`RAM_SHARED` at
 /// 0x20178000; the full map is documented in `dualcore.rs`). Each offset is
@@ -244,6 +274,14 @@ fn main() -> ! {
     let _p = hal::init(hal::Config::default());
     hal::debug::SDIPrint::enable();
 
+    // Hand over to hart 1 before printing anything. `SDIPrint::write_str` spins
+    // until the debug module consumes DATA0, which only happens when wlink arms
+    // SDI print, so printing first would leave hart 1 unscheduled on a plain
+    // `cargo xtask flash`. Waking first means the V5F probes itself either way;
+    // `cargo xtask report` then reads its block back out of the mailbox.
+    clear_mailbox();
+    unsafe { pfic::wake_other_core(V5F_ENTRY) };
+
     println!("=== V3F (boot core) ===");
     println!("hart = {:?}  (PFIC_SCTLR.SCTLR[16])", HartId::current());
     println!("image build features = {:#04x}", build_features());
@@ -252,8 +290,7 @@ fn main() -> ! {
     let (values, present) = probe_all();
     print_csr_block(&values, present);
 
-    println!("waking hart 1 at {:#010x} ...", V5F_ENTRY);
-    unsafe { pfic::wake_other_core(V5F_ENTRY) };
+    println!("handed over to hart 1 at {:#010x}", V5F_ENTRY);
 
     // Wait for hart 1 to fill its block (bounded, so a dead hart 1 cannot
     // wedge this one).
