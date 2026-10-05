@@ -149,6 +149,30 @@ Either image declares its own range, so an oversized build fails to link
 instead of overwriting the other image; `xtask merge` checks the sizes again
 while assembling the merged image.
 
+### Watching hart 1 over SDI print
+
+`sdi_cpuid` is the SDI-print counterpart of `cpuid`: hart 1 probes its CSRs, and
+the boot core prints them over SDI (`println!`-style output on the WCH-Link's
+virtual serial port) instead of leaving you to read shared memory afterwards.
+
+The order matters, because **attaching the SDI console stops hart 1 from
+executing at all** — verified with both images written `--no-run` and read back
+byte-for-byte first, so it is not an image or flash problem; the debug module
+reports the core as running, and re-issuing the wake does not help:
+
+```text
+cargo xtask flash --example sdi_cpuid --dual-core   # no console: both cores run,
+                                                    # hart 1 publishes its block
+wlink sdi-print enable                              # attach without reset
+cat /dev/cu.usbmodem*                               # watch hart 1's CPU-ID table
+```
+
+So hart 1 publishes while nothing is attached, and the boot core prints what it
+published. Once a console is open hart 1 is held (its liveness counter freezes),
+which is why the table is repeated every few seconds rather than printed once:
+a console that attaches late still sees it. `cargo xtask run` attaches at boot
+and therefore shows only the boot core.
+
 ### Cross-core atomics (`atomics`)
 
 Both cores `fetch_add` the *same* shared word, concurrently, `CAS_INCREMENTS`

@@ -17,6 +17,10 @@
 //! I-cache is the V4J variant), which is why the boot core has to run hot code
 //! from RAM instead (see the CSDK's `RAM_CODE`).
 
+/// `ic_code_strtg` (bit 24): permit caching for `0x0000_0000-0x1fff_ffff` (flash).
+const IC_CODE_STRTG: u32 = 1 << 24;
+/// `ic_sram_strtg` (bit 25): permit caching for `0x2000_0000-0x3fff_ffff` (ITCM/SRAM).
+const IC_SRAM_STRTG: u32 = 1 << 25;
 /// `ic_disable` in `cache_strtg_ctlr` (0xBC2): 0 enables instruction caching.
 const IC_DISABLE: u32 = 1 << 1;
 
@@ -60,8 +64,12 @@ pub fn invalidate_icache() {
 /// that refuses the write cannot silently keep running uncached.
 pub fn enable_icache() {
     let current = csrr!("0xbc2");
-    if current & IC_DISABLE != 0 {
-        csrw!("0xbc2", current & !IC_DISABLE);
+    if current & IC_DISABLE != 0 || current & (IC_CODE_STRTG | IC_SRAM_STRTG) != IC_CODE_STRTG | IC_SRAM_STRTG
+    {
+        csrw!(
+            "0xbc2",
+            (current | IC_CODE_STRTG | IC_SRAM_STRTG) & !IC_DISABLE
+        );
         debug_assert!(icache_enabled(), "instruction cache did not turn on");
     }
 }
