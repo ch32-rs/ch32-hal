@@ -792,6 +792,26 @@ fn report() {
     println!("  pingpong  ping    = {}", word(at!(ping)));
     println!("  pingpong  pong    = {}", word(at!(pong)));
 
+    // `atomics`: both cores `fetch_add` the same word, so the total is the
+    // litmus test for the A extension actually performing the atomics.
+    let cas_total = word(at!(cas_total));
+    let cas_done = word(at!(cas_done));
+    let cas_expected = ch32h417_ipc::CAS_INCREMENTS * 2;
+    println!(
+        "  atomics   total   = {cas_total} (expected {cas_expected}, done mask {cas_done:#x}){}",
+        if cas_done & (ch32h417_ipc::CAS_DONE_V3F | ch32h417_ipc::CAS_DONE_V5F)
+            == (ch32h417_ipc::CAS_DONE_V3F | ch32h417_ipc::CAS_DONE_V5F)
+        {
+            if cas_total == cas_expected {
+                "  OK"
+            } else {
+                "  LOST UPDATES"
+            }
+        } else {
+            "  (not finished)"
+        }
+    );
+
     if word(at!(cpuid_done)) != ch32h417_ipc::CPUID_DONE {
         println!(
             "  cpuid: no report from hart 1 (magic missing, progress = {})",

@@ -1,7 +1,7 @@
 {
   "abi": "ilp32f",
   "arch": "riscv32",
-  "atomic-cas": false,
+  "atomic-cas": true,
   "cpu": "generic-rv32",
   "crt-objects-fallback": "false",
   "data-layout": "e-m:e-p:32:32-i64:64-n32-S128",
