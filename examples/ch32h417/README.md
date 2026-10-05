@@ -105,11 +105,25 @@ while assembling the merged image.
   what lets the V3F read `misa`, `mhartid` and friends directly. The `u-mode`
   feature restores WCH's startup behaviour (User mode), where only the `URW`
   CSRs `gintenr`/`intsyscr` remain reachable.
+- **Reading the target.** Every `wlink` request that inspects the chip (`dump`,
+  `regs`, `status`) pauses the cores while it is attached, and the SDI console
+  (`flash --enable-sdi-print --watch-serial`) keeps wlink attached for as long
+  as it runs. So a dual-core example's V5F half only makes progress while
+  nothing is observing the chip: use `cargo xtask flash` (plain write, then
+  reset and run) and read the mailbox afterwards — `cargo xtask run` opens the
+  console and therefore shows the V3F half only.
+- **Flash writes are not always complete.** `wlink flash` has been seen to
+  report success while only part of the image reached flash. `xtask` therefore
+  reads every `--no-run` image back and retries on mismatch; the final write is
+  the one that resets and runs the chip, so it cannot be checked the same way
+  without pausing it — if a dual-core example only shows V3F activity, flash it
+  again before suspecting the firmware.
 - **Merged images.** `out/NAME.bin` is the full flash image (`0xFF` padding
   between the two payloads), `out/NAME.hex` holds only the payload records.
   Prefer the two-ELF `xtask flash` path or the `.hex` — pushing the padded
   `.bin` through `wlink flash` writes tens of kilobytes of `0xFF` and is very
   slow.
-- **V5F code size.** The V5F currently executes from flash in place. The CSDK
-  copies V5F `.text` to ITCM before running; until that model is implemented
-  here, keep V5F halves small (CSR reads and mailbox stores, not `core::fmt`).
+- **V5F code placement.** The V5F currently executes from flash in place; the
+  CSDK copies V5F `.text` to ITCM before running. That model is not implemented
+  here yet, so keep V5F halves small (CSR reads and mailbox stores, not
+  `core::fmt`).

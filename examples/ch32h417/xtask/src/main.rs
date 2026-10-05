@@ -245,11 +245,10 @@ fn build(opts: &Options) {
 /// `flash` (watch = false) and `run` (watch = true) share this.
 ///
 /// The non-final cores are written with `--no-run` and read back, so nothing
-/// starts half-programmed. The final core is written by a plain `wlink flash`,
-/// which is what resets and runs the chip — and, on this part, what actually
-/// releases hart 1: a write with `--no-run` (or a later `wlink reset run`)
-/// leaves the second core held by the debug module until the board is
-/// power-cycled.
+/// starts half-programmed. The final write resets and runs the chip and carries
+/// the SDI flags — and nothing may follow it, because *every* other wlink
+/// request (`dump`, `regs`, `status`) pauses the cores: a read-back check there
+/// would measure the paused state instead of the running one.
 fn flash(opts: &Options, watch: bool) {
     let Some(example) = &opts.example else {
         fail(&format!(
@@ -268,24 +267,41 @@ fn flash(opts: &Options, watch: bool) {
         println!("flashing {} ...", core.name);
 
         if last {
-            let mut args = vec!["flash", "--enable-sdi-print"];
+            // The final write resets and runs the chip. `run` adds the SDI pair
+            // (`--enable-sdi-print --watch-serial`: the console needs the target
+            // running, which is also what keeps hart 1 alive); `flash` stays
+            // plain, because enabling SDI print without watching leaves the
+            // debug module attached and the second core paused.
+            let mut args = vec!["flash"];
             if watch {
-                args.push("--watch-serial");
+                if is_dual_core(example) {
+                    println!(
+                        "note: watching keeps wlink attached, and any wlink request pauses the\n\
+                         \x20     cores — while the console is open the V5F half cannot run.\n\
+                         \x20     Use `cargo xtask flash` and read the mailbox afterwards."
+                    );
+                }
+                args.extend(["--enable-sdi-print", "--watch-serial"]);
             }
             args.push(elf.to_str().expect("utf-8 path"));
-            // The console occupies the command, so a `run` cannot read back
-            // afterwards; `flash` retries until the image verifies.
-            program_verified(core, example, &elf, &args, !watch);
+            run("wlink", &args, &root());
         } else {
             let args = [
                 "flash",
-                "--enable-sdi-print",
                 "--no-run",
                 elf.to_str().expect("utf-8 path"),
             ];
             program_verified(core, example, &elf, &args, true);
         }
     }
+}
+
+/// Whether `example` has a V5F half, i.e. it is a dual-core example.
+fn is_dual_core(example: &str) -> bool {
+    CORES
+        .iter()
+        .filter(|core| core.name != BOOT_CORE)
+        .any(|core| example_source(core, example).exists())
 }
 
 /// Runs `wlink` with `args`, then reads the region back and compares it with the
