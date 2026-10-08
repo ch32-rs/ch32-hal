@@ -84,5 +84,8 @@ async fn echo<'d, T: Instance + 'd, const NR_EP: usize, const SIZE: usize>(
     loop {
         let n = class.read_packet(&mut buf).await?;
         class.write_packet(&buf[..n]).await?;
+        if n == buf.len() {
+            class.write_packet(&[]).await?;
+        }
     }
 }

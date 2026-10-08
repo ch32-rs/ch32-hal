@@ -67,7 +67,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointIn for Endp
         // Write buffer, txLen, and ACK
         self.data.buffer.write_volatile(buf);
         T::set_ep_tx_len(ep, buf.len() as u8);
-        T::toggle_ep_tx_response(ep, EpTxResponse::ACK);
+        T::set_ep_tx_response(ep, EpTxResponse::ACK);
 
         // Wait for TX complete
         let tx_result = poll_fn(|ctx| {
@@ -79,7 +79,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointIn for Endp
                     let token = status.mask_token();
                     let ret = match token {
                         UsbToken::IN => {
-                            T::set_ep_tx_response(ep, EpTxResponse::NAK);
+                            T::toggle_ep_tx_response(ep, EpTxResponse::NAK);
                             Poll::Ready(Ok(()))
                         }
                         token => {
@@ -115,9 +115,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
         let ep = self.info.addr.index();
         let regs = T::regs();
 
-        // Tx Ctrl should be NAK
-
-        T::toggle_ep_rx_response(ep, EpRxResponse::ACK);
+        T::set_ep_rx_response(ep, EpRxResponse::ACK);
 
         // poll for packet
         let bytes_read = poll_fn(|ctx| {
@@ -127,20 +125,22 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
                 let status = regs.int_st().read();
                 if status.mask_uis_endp() as usize == ep {
                     let ret = match status.mask_token() {
-                        UsbToken::OUT => {
+                        UsbToken::OUT if status.tog_ok() => {
                             // upper bits are reserved (0)
                             let len = T::ep_rx_len();
 
                             self.data.buffer.read_volatile(&mut buf[..len]);
+                            T::toggle_ep_rx_response(ep, EpRxResponse::NAK);
                             Poll::Ready(Ok(len))
                         }
+                        UsbToken::OUT => Poll::Pending,
                         token => {
                             error!("Unexpected USB Token {}", token.to_bits());
+                            T::set_ep_rx_response(ep, EpRxResponse::NAK);
                             Poll::Ready(Err(EndpointError::Disabled))
                         }
                     };
 
-                    T::set_ep_rx_response(ep, EpRxResponse::NAK);
                     regs.int_fg().write(|v| v.set_transfer(true));
                     ret
                 } else {

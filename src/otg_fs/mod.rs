@@ -179,11 +179,20 @@ where
         T::enable_and_reset();
 
         let allocator = EndpointBufferAllocator::new(ep_buffer);
+        #[cfg(usb_x0fs)]
+        let allocated = {
+            let mut allocated = Bitmap::new();
+            // TODO: Support EP4 dma buffer sharing with EP0
+            allocated.set(4, true);
+            allocated
+        };
+        #[cfg(not(usb_x0fs))]
+        let allocated = Bitmap::new();
 
         Self {
             phantom: PhantomData,
             allocator,
-            allocated: Bitmap::new(),
+            allocated,
         }
     }
 
@@ -312,6 +321,8 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
             w.set_dma_en(true);
             #[cfg(otg)]
             w.set_dev_pu_en(true);
+            #[cfg(usb_x0fs)]
+            w.set_sys_ctrl(0b10);
         });
 
         let ep0_buf = self.allocator.alloc_endpoint(control_max_packet_size).unwrap();
@@ -443,6 +454,12 @@ where
             ep_addr.direction(),
             enabled
         );
+        if enabled {
+            match ep_addr.direction() {
+                Direction::In => T::set_ep_tx_toggle_response(ep_addr.index(), false, EpTxResponse::NAK),
+                Direction::Out => T::set_ep_rx_toggle_response(ep_addr.index(), false, EpRxResponse::NAK),
+            }
+        }
         T::set_ep_enabled(ep_addr.index(), ep_addr.direction(), enabled);
         EP_WAKERS[ep_addr.index() as usize].wake();
     }
@@ -624,7 +641,7 @@ foreach_peripheral!(
                 match ep {
                     0..=3 => regs.uep0123_dma(ep).write_value(dma),
                     5..=7 => regs.uep567_dma(ep - 5).write_value(dma),
-                    4 => {},
+                    4 => todo!("support EP4's shared EP0 DMA buffer"),
                     _ => panic!("unsupported USBFS endpoint"),
                 }
             }
