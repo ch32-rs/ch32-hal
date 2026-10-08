@@ -493,7 +493,6 @@ pub(crate) trait SealedInstance: RccPeripheral {
     fn set_ep_rx_toggle_response(ep: usize, toggle: bool, response: EpRxResponse);
     fn toggle_ep_tx_response(ep: usize, response: EpTxResponse);
     fn toggle_ep_rx_response(ep: usize, response: EpRxResponse);
-    fn ep_rx_len() -> usize;
     fn ep_is_enabled(ep: usize, dir: Direction) -> bool;
     fn set_ep_enabled(ep: usize, dir: Direction, enabled: bool);
 }
@@ -563,10 +562,6 @@ foreach_peripheral!(
                     w.set_r_tog(!w.r_tog());
                     w.set_mask_r_res(response);
                 });
-            }
-
-            fn ep_rx_len() -> usize {
-                Self::regs().rx_len().read().0 as usize
             }
 
             fn ep_is_enabled(ep: usize, dir: Direction) -> bool {
@@ -689,10 +684,6 @@ foreach_peripheral!(
                     w.set_r_tog(!w.r_tog());
                     w.set_r_res(response);
                 });
-            }
-
-            fn ep_rx_len() -> usize {
-                Self::regs().rx_len().read().0 as usize
             }
 
             fn ep_is_enabled(ep: usize, dir: Direction) -> bool {

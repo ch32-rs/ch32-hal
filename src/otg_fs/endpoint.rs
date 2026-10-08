@@ -127,7 +127,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
                     let ret = match status.mask_token() {
                         UsbToken::OUT if status.tog_ok() => {
                             // upper bits are reserved (0)
-                            let len = T::ep_rx_len();
+                            let len = regs.rx_len().read().0 as usize;
 
                             self.data.buffer.read_volatile(&mut buf[..len]);
                             T::toggle_ep_rx_response(ep, EpRxResponse::NAK);
@@ -238,7 +238,7 @@ where
                 if status.mask_uis_endp() == 0 {
                     let res = match status.mask_token() {
                         UsbToken::OUT => {
-                            let len = T::ep_rx_len();
+                            let len = regs.rx_len().read().0 as usize;
                             self.ep0_buf.buffer.read_volatile(&mut buf[..len]);
                             T::set_ep_rx_response(0, EpRxResponse::NAK);
                             Poll::Ready(Ok(len))
@@ -325,7 +325,7 @@ where
                     if status.mask_uis_endp() == 0 {
                         let res = match status.mask_token() {
                             UsbToken::OUT => {
-                                if T::ep_rx_len() != 0 {
+                                if regs.rx_len().read().0 != 0 {
                                     error!("Expected 0 len OUT stage, found non-zero len, aborting");
                                     Poll::Ready(Err(EndpointError::BufferOverflow))
                                 } else {
