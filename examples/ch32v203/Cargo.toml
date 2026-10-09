@@ -6,7 +6,6 @@ edition = "2021"
 [[bin]]
 name = "usbd"
 path = "src/bin/usbd.rs"
-required-features = ["embassy-executor/arch-spin"]
 
 [dependencies]
 ch32-hal = { path = "../../", features = [
