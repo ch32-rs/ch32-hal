@@ -7,16 +7,19 @@
 //! Uses `embassy-net-driver-channel` to provide multi-buffer RX/TX queues,
 //! so packets are not lost while the CPU is processing.
 
+use core::future::Future;
 use core::marker::PhantomData;
 use core::sync::atomic::{fence, Ordering};
 
 use embassy_net_driver::LinkState;
 use embassy_net_driver_channel as ch;
-use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
+#[cfg(feature = "embassy")]
 use embassy_time::Timer;
 
 use crate::eth::{Instance, StationManagement, PHY};
+#[cfg(feature = "rt")]
 use crate::interrupt;
 
 const MTU: usize = 1514;
@@ -49,8 +52,17 @@ static RX_CH: Channel<CriticalSectionRawMutex, u16, 1> = Channel::new();
 static TX_CH: Channel<CriticalSectionRawMutex, (), 2> = Channel::new();
 static LINK_CH: Channel<CriticalSectionRawMutex, (), 2> = Channel::new();
 
+#[cfg(feature = "rt")]
 #[interrupt]
 unsafe fn ETH() {
+    on_interrupt();
+}
+
+/// Handle an Ethernet interrupt when supplying your own runtime.
+///
+/// # Safety
+/// Call only from the ETH interrupt handler.
+pub unsafe fn on_interrupt() {
     let mac = crate::pac::ETH;
 
     // Disable global interrupt while processing
@@ -88,7 +100,8 @@ pub enum InitError {
 
 /// The async runner that drives the ethernet hardware.
 ///
-/// Must be spawned as a separate embassy task via [`Runner::run()`].
+/// Must run as a separate async task via [`Runner::run()`] or
+/// [`Runner::run_with_link_poll()`].
 pub struct Runner<'d, P: PHY> {
     mac: crate::pac::eth::Eth,
     phy: P,
@@ -99,8 +112,29 @@ pub struct Runner<'d, P: PHY> {
 impl<'d, P: PHY> Runner<'d, P> {
     /// Run the ethernet driver forever.
     ///
-    /// This handles RX, TX, and link state monitoring concurrently.
+    /// This handles RX, TX, and link state monitoring concurrently. With the
+    /// `embassy` feature, link state is also polled every 500ms. Otherwise, link
+    /// updates are interrupt-driven; use [`Self::run_with_link_poll`] to provide
+    /// a polling timer from another runtime.
     pub async fn run(self) -> ! {
+        self.run_with_link_poll(|| async {
+            #[cfg(feature = "embassy")]
+            Timer::after_millis(500).await;
+            #[cfg(not(feature = "embassy"))]
+            core::future::pending::<()>().await;
+        })
+        .await
+    }
+
+    /// Run with a caller-provided periodic link-poll timer.
+    ///
+    /// `poll_link` must return a future that waits for the next polling interval.
+    /// Link-change interrupts still trigger immediate updates.
+    pub async fn run_with_link_poll<F, Fut>(self, mut poll_link: F) -> !
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = ()>,
+    {
         let mac = self.mac;
         let mut phy = self.phy;
         let mut station_management = self.station_management;
@@ -159,18 +193,10 @@ impl<'d, P: PHY> Runner<'d, P> {
         let link_fut = async {
             loop {
                 let up = phy.link_up(&mut station_management);
-                state_chan.set_link_state(if up {
-                    LinkState::Up
-                } else {
-                    LinkState::Down
-                });
+                state_chan.set_link_state(if up { LinkState::Up } else { LinkState::Down });
 
                 // Wait for link change interrupt or poll periodically
-                embassy_futures::select::select(
-                    LINK_CH.receive(),
-                    Timer::after_millis(500),
-                )
-                .await;
+                embassy_futures::select::select(LINK_CH.receive(), poll_link()).await;
             }
         };
 
@@ -199,7 +225,7 @@ pub fn get_mac() -> [u8; 6] {
 /// Create a CH32V208 10M MAC+PHY driver for [`embassy-net`](https://crates.io/crates/embassy-net).
 ///
 /// Returns a `(Runner, Device)` pair. The `Device` is passed to `embassy_net::new()`,
-/// and the `Runner` must be spawned as a separate embassy task.
+/// and the `Runner` must run as a separate async task.
 ///
 /// # Arguments
 /// * `mac_addr` - The MAC address for this device (6 bytes)
@@ -235,11 +261,17 @@ pub async fn new<'d, P: PHY, const N_RX: usize, const N_TX: usize>(
         w.set_rx_rst(true);
         w.set_tx_rst(true);
     });
+    #[cfg(feature = "embassy")]
     Timer::after_micros(1).await;
+    #[cfg(not(feature = "embassy"))]
+    crate::delay::Delay.delay_us(1);
 
     // Release reset
     mac.econ1().write(|_w| {});
+    #[cfg(feature = "embassy")]
     Timer::after_micros(1).await;
+    #[cfg(not(feature = "embassy"))]
+    crate::delay::Delay.delay_us(1);
 
     // Clear all interrupt flags
     mac.eir().write(|w| w.0 = 0xff);
