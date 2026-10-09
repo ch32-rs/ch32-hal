@@ -188,8 +188,10 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
     }
 
     fn find_free_ep_address(&self, _dir: Direction) -> Result<u8, EndpointAllocError> {
-        // Skip index 0 which is reserved for control endpoint
-        Ok(self.allocated.next_false_index(0).ok_or(EndpointAllocError)? as u8)
+        // Endpoint 0 is reserved for the control pipe (claimed in start()).
+        // Match the Embassy USB drivers by only auto-allocating non-control
+        // endpoints from index 1.
+        Ok(self.allocated.next_false_index(1).ok_or(EndpointAllocError)? as u8)
     }
 
     fn alloc_endpoint<D: Dir>(
@@ -208,7 +210,9 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
                 }
 
                 let ep_num = addr.index();
-                if ep_num >= MAX_NR_EP {
+                // Endpoint 0 belongs to the control pipe, which claims it in
+                // start(); class endpoint allocation must never hand it out.
+                if ep_num == 0 || ep_num >= MAX_NR_EP {
                     return Err(EndpointAllocError);
                 }
 
@@ -339,6 +343,10 @@ impl<'d, T: Instance> Bus<'d, T> {
         d.ep_config().write_value(EpConfig::default());
         d.ep_type().write_value(EpType::default());
         d.ep_buf_mod().write_value(EpBufMod::default());
+
+        for waker in EP_WAKERS.iter() {
+            waker.wake();
+        }
     }
 }
 
@@ -394,7 +402,23 @@ impl<'d, T: Instance> embassy_usb_driver::Bus for Bus<'d, T> {
                 T::dregs().ep_config().modify(|v| v.set_r_en(index - 1, enabled));
                 T::dregs().ep_rx_ctrl(index).write(|v| {
                     v.set_mask_uep_r_tog(EpTog::DATA0);
-                    v.set_mask_uep_r_res(EpRxResponse::NAK);
+                    // Make OUT endpoints ready as soon as the selected
+                    // configuration enables them. Embassy drivers such as RP2040
+                    // mark OUT buffers available in endpoint_set_enabled(), and
+                    // hosts may send the first OUT packet immediately after the
+                    // SET_CONFIGURATION status stage.
+                    //
+                    // Arming early is safe even before the class task calls
+                    // read(): with RB_UC_INT_BUSY set (see Driver::new), the
+                    // SIE auto-responds NAK while UIF_TRANSFER is pending, so
+                    // the DMA buffer cannot be overwritten until data_out()
+                    // consumes the packet and clears the flag.
+                    // See CH32FV2x_V3xRM R8_USB_CTRL.RB_UC_INT_BUSY.
+                    v.set_mask_uep_r_res(if enabled {
+                        EpRxResponse::ACK
+                    } else {
+                        EpRxResponse::NAK
+                    });
                     v.set_r_tog_auto(false);
                 });
             }

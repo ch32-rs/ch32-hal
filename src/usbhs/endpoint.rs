@@ -62,6 +62,13 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
         poll_fn(|ctx| {
             super::EP_WAKERS[index].register(ctx.waker());
 
+            // EP0 has no enable bits (CH32FV2x_V3xRM R32_UEP_CONFIG: "the
+            // transceiver enable signal of endpoint 0 is always valid"), so
+            // is_enabled() is only meaningful for index >= 1.
+            if index != 0 && !self.is_enabled() {
+                return Poll::Ready(Err(EndpointError::Disabled));
+            }
+
             let transfer = d.int_fg().read().transfer();
             let status = r.int_st().read();
             if transfer && status.endp() == index as u8 {
@@ -121,6 +128,11 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
 
         poll_fn(|ctx| {
             EP_WAKERS[index].register(ctx.waker());
+
+            // EP0 has no enable bits (see data_out), so skip the check here.
+            if index != 0 && !self.is_enabled() {
+                return Poll::Ready(Err(EndpointError::Disabled));
+            }
 
             let transfer = d.int_fg().read().transfer();
             let status = r.int_st().read();
