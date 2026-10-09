@@ -407,12 +407,11 @@ fn write_layout(jobs: &[Job]) -> PathBuf {
         .find(|job| job.core.name == BOOT_CORE)
         .expect("a boot-core job");
     let candidates: Vec<String> = if boot.example.is_empty() {
-        // `cargo xtask build` with no example: any boot-core image will do, the
-        // region is a property of the map, not of one example.
-        ["dualcore", "cpuid", "sdi_cpuid", "launcher"]
-            .iter()
-            .map(|name| name.to_string())
-            .collect()
+        // `cargo xtask build` with no example: any boot-core image will do,
+        // the region is a property of the map, not of one example. Built
+        // boot-core ELFs only — images whose sources are gone would otherwise
+        // shadow a fresh build's layout with a stale one.
+        built_boot_images()
     } else {
         vec![boot.example.clone()]
     };
@@ -447,6 +446,34 @@ layout_version {}
         "no boot-core image with a `MAILBOX` symbol found — build a boot-core example first\n\
          \x20     (all shared symbols are defined by the V3F image; the V5F consumes their address)",
     )
+}
+
+/// Built boot-core (release) ELFs, as example names.
+///
+/// A boot-core example whose source vanished but whose ELF is still in
+/// `target/` stays a candidate, because all boot-core images place the
+/// mailbox at the same address — a stale image cannot mislead the layout.
+fn built_boot_images() -> Vec<String> {
+    let boot = core_named(BOOT_CORE);
+    let release_dir = root()
+        .join(boot.name)
+        .join("target")
+        .join(boot.target)
+        .join("release");
+    let mut names: Vec<String> = fs::read_dir(&release_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            // A bare ELF: the plain built binary, not a build script, dep-info
+            // or hashed artifact.
+            (path.is_file() && path.extension().is_none())
+                .then(|| path.file_name()?.to_str().map(str::to_string))?
+        })
+        .collect();
+    names.sort();
+    names
 }
 
 /// `(address, size)` of the `MAILBOX` symbol in `elf`.
@@ -851,6 +878,9 @@ fn report() {
 }
 
 /// Converts an ELF to a flat binary with `llvm-objcopy`.
+///
+/// The temporary file is per-process so two xtasks never see each other's
+/// half-written image.
 fn flatten(elf: &Path, core: &Core) -> Vec<u8> {
     if !elf.exists() {
         fail(&format!(
@@ -890,7 +920,6 @@ fn flatten(elf: &Path, core: &Core) -> Vec<u8> {
     bytes
 }
 
-/// `llvm-objcopy` shipped with the active toolchain, falling back to `PATH`.
 /// `llvm-objcopy` shipped with the active toolchain, falling back to `PATH`.
 fn objcopy() -> String {
     tool("llvm-objcopy")
