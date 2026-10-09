@@ -11,7 +11,8 @@
 //! | [`HSI_FREQ`] / [`LSI_FREQ`] | Nominal RC oscillator rates |
 //! | [`Hse`] | External clock description when HSE is used |
 //!
-//! On CH32H4, `core_clocks()` also reports the V3F/V5F core frequencies.
+//! On CH32H4, [`clocks`] additionally reports the V3F/V5F core frequencies
+//! ([`Clocks::v3f`], [`Clocks::v5f`]); there is no separate `core_clocks()`.
 //!
 //! Pass the board HSE crystal frequency to [`refresh`] whenever SYSCLK can be sourced from HSE
 //! or PLL fed by HSE (same requirement as `HSE_VALUE` in the WCH C SDK).
@@ -80,6 +81,10 @@ static mut CLOCKS: Clocks = Clocks {
     pclk2: DEFAULT_FREQUENCY,
     pclk1_tim: DEFAULT_FREQUENCY,
     pclk2_tim: DEFAULT_FREQUENCY,
+    #[cfg(rcc_h4)]
+    v3f: DEFAULT_FREQUENCY,
+    #[cfg(rcc_h4)]
+    v5f: DEFAULT_FREQUENCY,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -91,6 +96,12 @@ pub struct Clocks {
     pub pclk2: Hertz,
     pub(crate) pclk1_tim: Hertz,
     pub(crate) pclk2_tim: Hertz,
+    /// V3F (boot core, hart 0) core frequency. H4 only.
+    #[cfg(rcc_h4)]
+    pub v3f: Hertz,
+    /// V5F (second core, hart 1) core frequency. H4 only.
+    #[cfg(rcc_h4)]
+    pub v5f: Hertz,
 }
 
 #[inline]
@@ -187,7 +198,7 @@ pub unsafe fn init(config: Config) {
     rcc_impl::init(config);
 }
 
-/// Re-measure RCC and update [`clocks`] (and H4 [`core_clocks`]).
+/// Re-measure RCC and update [`clocks`] (on H4 that includes `v3f` / `v5f`).
 ///
 /// Use after C `SystemInit`, a bootloader, or the other core has configured clocks.
 pub unsafe fn refresh(hse: Option<Hertz>) {

@@ -63,27 +63,6 @@ pub struct McoConfig {
     pub source: Mco,
 }
 
-/// Dual-core clock snapshot after [`init`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CoreClocks {
-    pub sysclk: Hertz,
-    pub hclk: Hertz,
-    pub v5f: Hertz,
-    pub v3f: Hertz,
-}
-
-static mut CORE_CLOCKS: CoreClocks = CoreClocks {
-    sysclk: HSI_FREQUENCY,
-    hclk: HSI_FREQUENCY,
-    v5f: HSI_FREQUENCY,
-    v3f: HSI_FREQUENCY,
-};
-
-#[inline]
-pub fn core_clocks() -> &'static CoreClocks {
-    unsafe { &CORE_CLOCKS }
-}
-
 /// WCH EVT-validated clock recipe (internal; use [`Config::with_*`] presets).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Recipe {
@@ -241,11 +220,10 @@ pub unsafe fn init(config: Config) {
     refresh_clocks(hse_hz);
 }
 
-/// Re-read RCC and update [`super::clocks`] / [`core_clocks`].
+/// Re-read RCC and update [`super::clocks`].
 pub(crate) unsafe fn refresh_clocks(hse: Option<Hertz>) {
-    let (bus, core) = measure::measure(hse);
-    super::set_clocks(bus);
-    CORE_CLOCKS = core;
+    let clocks = measure::measure(hse);
+    super::set_clocks(clocks);
 }
 
 fn recipe_params(config: &Config) -> (Hertz, BusPrescalers, Hertz, bool) {

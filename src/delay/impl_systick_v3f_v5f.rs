@@ -4,7 +4,7 @@
 //! / `CMP_0` / `ISR.ISR0` route to hart 0 (V3F); `CTLR_1` / `CNT_1` /
 //! `CMP_1` / `ISR.ISR1` route to hart 1 (V5F). Both harts also have
 //! their own core clock (V3F from `FPRE`, V5F from its own prescaler —
-//! see `rcc::core_clocks()`), so the per-tick period here has to come
+//! `rcc::clocks().v3f` / `.v5f`), so the per-tick period here has to come
 //! from the *current* hart's frequency, not from the global `hclk`
 //! (which is `v3f` on H4). Using `hclk` on the V5F would scale every
 //! delay by `v3f/v5f` (4x off on the 400/100 MHz EVT preset).
@@ -25,8 +25,8 @@ impl Delay {
     /// Conflicts with embassy's systick time driver — pick one.
     pub(crate) unsafe fn init() {
         let core_hz = match HartId::current() {
-            HartId::C0 => crate::rcc::core_clocks().v3f.0,
-            HartId::C1 => crate::rcc::core_clocks().v5f.0,
+            HartId::C0 => crate::rcc::clocks().v3f.0,
+            HartId::C1 => crate::rcc::clocks().v5f.0,
         };
         unsafe {
             P_US = core_hz / 1_000_000;
