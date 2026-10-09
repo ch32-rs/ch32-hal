@@ -15,6 +15,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_time_driver::{Driver, TICK_HZ};
 use embassy_time_queue_utils::Queue;
+#[cfg(feature = "rt")]
 use qingke_rt::interrupt;
 
 use crate::interrupt::typelevel::Interrupt;
@@ -324,6 +325,13 @@ impl Driver for RtcDriver {
             }
         })
     }
+}
+
+/// Handle the selected timer's update and capture/compare interrupts.
+///
+/// Call this from your interrupt handler when the `rt` feature is disabled.
+pub fn on_interrupt() {
+    DRIVER.on_interrupt();
 }
 
 pub(crate) fn init(cs: CriticalSection) {

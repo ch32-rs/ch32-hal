@@ -169,6 +169,14 @@ fn main() {
         Err(GetOneError::Multiple) => panic!("Multiple ch32xx Cargo features enabled"),
     };
 
+    let supports_time_driver = |name: &str| {
+        METADATA.peripherals.iter().any(|p| {
+            p.name == name
+                && p.registers
+                    .as_ref()
+                    .is_some_and(|r| r.kind == "timer" && matches!(r.block, "ADTM" | "GPTM" | "GPTM32"))
+        })
+    };
     let time_driver_singleton = match time_driver.as_ref().map(|x| x.as_ref()) {
         None => "",
         Some("tim1") => "TIM1",
@@ -186,13 +194,17 @@ fn main() {
                 "TIM10", "TIM9", "TIM8", "TIM1", //ADV
             ]
             .iter()
-            .find(|tim| singletons.contains(&tim.to_string()))
-            .expect("time-driver-any requested, but the chip doesn't have a TIMx for time driver")
+            .find(|tim| supports_time_driver(tim))
+            .expect("time-driver-any requested, but the chip has no supported timer")
         }
         _ => panic!("unknown time_driver {:?}", time_driver),
     };
 
     if !time_driver_singleton.is_empty() {
+        assert!(
+            supports_time_driver(time_driver_singleton),
+            "unsupported time-driver timer: {time_driver_singleton}"
+        );
         println!("cargo:rustc-cfg=time_driver_{}", time_driver_singleton.to_lowercase());
         println!("cargo:rustc-cfg=time_driver_timer");
     }
