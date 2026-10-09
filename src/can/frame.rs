@@ -56,7 +56,7 @@ impl CanFrame {
 
     /// Get reference to data
     pub fn data(&self) -> &[u8] {
-        &self.data
+        embedded_can::Frame::data(self)
     }
 }
 
