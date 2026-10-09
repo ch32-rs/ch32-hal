@@ -5,14 +5,14 @@ use crate::pac::RCC;
 use crate::time::Hertz;
 
 use super::prescale::{ahb_from_sysclk, hclk_from_ahb, pclk_from_hclk};
-use super::{CoreClocks, HSI_FREQUENCY};
+use super::HSI_FREQUENCY;
 
 const PLL_MUL_TABLE: [u8; 32] =
     [4, 6, 7, 8, 17, 9, 19, 10, 21, 11, 23, 12, 25, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 59];
 
 const SERDES_MUL_TABLE: [u8; 16] = [25, 28, 30, 32, 35, 38, 40, 45, 50, 56, 60, 64, 70, 76, 80, 90];
 
-pub(crate) fn measure(hse: Option<Hertz>) -> (super::super::Clocks, CoreClocks) {
+pub(crate) fn measure(hse: Option<Hertz>) -> super::super::Clocks {
     let sysclk = sysclk_frequency(hse);
     let cfgr = RCC.cfgr0().read();
     let ahb = ahb_from_sysclk(sysclk, cfgr.hpre());
@@ -20,21 +20,17 @@ pub(crate) fn measure(hse: Option<Hertz>) -> (super::super::Clocks, CoreClocks) 
     let (pclk1, pclk1_tim) = pclk_from_hclk(hclk, cfgr.ppre1());
     let (pclk2, pclk2_tim) = pclk_from_hclk(hclk, cfgr.ppre2());
 
-    let bus = super::super::Clocks {
+    super::super::Clocks {
         sysclk,
         hclk,
         pclk1,
         pclk2,
         pclk1_tim,
         pclk2_tim,
-    };
-    let core = CoreClocks {
-        sysclk,
-        hclk,
-        v5f: ahb,
+        // V5F runs off AHB (before FPRE); V3F is the FPRE-divided HCLK domain.
         v3f: hclk,
-    };
-    (bus, core)
+        v5f: ahb,
+    }
 }
 
 fn sysclk_frequency(hse: Option<Hertz>) -> Hertz {

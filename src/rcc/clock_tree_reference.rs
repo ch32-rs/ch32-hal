@@ -122,11 +122,12 @@ pub mod hal_common_today {
     //! Clocks {
     //!     sysclk, hclk, pclk1, pclk2,
     //!     pclk1_tim, pclk2_tim,  // pub(crate)，定时器内核时钟
+    //!     v3f, v5f,              // #[cfg(rcc_h4)] 双核各自的核时钟
     //! }
     //! HSI_FREQ, LSI_FREQ, Hse { freq, mode }, LsConfig { … }
     //! init(Config), refresh(Option<Hertz>)   // uninit 尚未实现
     //! ```
-    pub const NOTE: &str = "H4 另有 CoreClocks { sysclk, hclk, v5f, v3f } + core_clocks()";
+    pub const NOTE: &str = "H4 的 V3F/V5F 核时钟并入 Clocks 的 cfg-gated 字段（v3f/v5f）";
 }
 
 /// 各 family 的 **Config 字段 ≈ 时钟树**（现状摘要，2026-03）。
