@@ -8,7 +8,7 @@ pub(crate) unsafe fn lock() {
 pub(crate) unsafe fn unlock() {
     unimplemented!();
 }
-pub(crate) unsafe fn enable_blocking_write() -> Result<(), Error> {
+pub(crate) unsafe fn enable_blocking_write() {
     unimplemented!();
 }
 pub(crate) unsafe fn disable_blocking_write() {

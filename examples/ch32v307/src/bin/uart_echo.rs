@@ -33,10 +33,10 @@ async fn main(_spawner: Spawner) -> ! {
         }
 
         if buf[0] == b'\r' {
-            let _ = uart.blocking_write(b"\r\n").unwrap();
+            uart.blocking_write(b"\r\n").unwrap();
             led.toggle();
         } else {
-            let _ = uart.blocking_write(&buf).unwrap();
+            uart.blocking_write(&buf).unwrap();
         }
     }
 }

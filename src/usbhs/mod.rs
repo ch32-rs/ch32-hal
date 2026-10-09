@@ -158,7 +158,7 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
         });
 
         // Sleep for 10uS from WCH C code
-        embassy_time::block_for(embassy_time::Duration::from_micros(10));
+        crate::internal::delay_us(10);
 
         // Following WCH C code.... unclear why clr_all is not also cleared here
         r.ctrl().modify(|w| w.set_reset_sie(false));

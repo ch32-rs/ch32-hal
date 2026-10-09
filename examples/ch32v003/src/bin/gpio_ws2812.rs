@@ -1,17 +1,9 @@
 #![no_std]
 #![no_main]
 
-
-
 use ch32_hal as hal;
 use ch32_hal::gpio::Output;
-use ch32_hal::timer::simple_pwm::SimplePwm;
 use hal::delay::Delay;
-use hal::println;
-use hal::time::Hertz;
-use hal::timer::complementary_pwm::{ComplementaryPwm, ComplementaryPwmPin};
-use hal::timer::low_level::CountingMode;
-use hal::timer::simple_pwm::PwmPin;
 use qingke_rt::highcode;
 
 pub const RGB_UNIT_MAX: f32 = 255.0;
@@ -96,10 +88,9 @@ impl WS2812 {
         Delay.delay_us(50);
     }
 
-    // tune values to get 800kHz
-    // duty cycle 33% and 66%
+    // Tune values to get 800kHz, with 33% and 66% duty cycles.
     #[highcode]
-    pub fn test(&mut self) {
+    pub fn test(&mut self) -> ! {
         loop {
             self.pin.set_high();
             qingke::riscv::asm::delay(18);
@@ -109,7 +100,7 @@ impl WS2812 {
     }
 
     #[highcode]
-    pub fn set_color(&mut self, mut color: u32) {
+    pub fn set_color(&mut self, color: u32) {
         for i in (0..24).rev() {
             if color & (1 << i) == 0 {
                 self.pin.set_high();
@@ -141,44 +132,32 @@ fn main() -> ! {
 
     let mut ws2812 = WS2812::new(ws2812);
 
-    let mut i = 0;
+    ws2812.reset();
 
-    //  loop {
-    //      ws2812.test();
-    //  }
+    match (cfg!(feature = "ws2812-timing-test"), cfg!(feature = "ws2812-off")) {
+        // Timing-test takes precedence when both features are enabled.
+        (true, _) => ws2812.test(),
+        (false, true) => loop {
+            ws2812.set_color(0x000000);
+            hal::println!("WS2812 off");
+            Delay.delay_ms(10);
+        },
+        (false, false) => loop {
+            for h in 0..360 {
+                let rgb = hsl_to_rgb([h as f32 / 360.0, 0.900, 0.500]);
+                // to GRB
+                let color = ((rgb[1] as u32) << 16) | ((rgb[0] as u32) << 8) | (rgb[2] as u32);
 
-    loop {
-        for h in 0..360 {
-            // hsl_to_rgb([h as f32 / 360.0, 0.900, 0.500])
-            let rgb = hsl_to_rgb([h as f32 / 360.0, 0.900, 0.500]);
-            // to GRB
-            let color = ((rgb[1] as u32) << 16) | ((rgb[0] as u32) << 8) | (rgb[2] as u32);
-
-            ws2812.set_color(color);
-
-            Delay.delay_ms(20);
-        }
-    }
-
-    loop {
-        ws2812.set_color(0x000000);
-        //        ws2812.pin.set_low();
-        // ws2812.reset();
-
-        // Shift random
-
-        if i > 0xffffff {
-            i = 0;
-        }
-
-        println!("toggle! {:06x}", i);
-        Delay.delay_ms(10);
+                ws2812.set_color(color);
+                Delay.delay_ms(20);
+            }
+        },
     }
 }
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = hal::println!("\n\n\n{}", info);
+    hal::println!("\n\n\n{}", info);
 
     loop {}
 }

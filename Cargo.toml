@@ -13,11 +13,6 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# ch32-data rev = a515903589cfbc342dc6ad0d13c02b4382da5628
-ch32-metapac = { features = [
-    "rt",
-], version = "0.1.1" }
-
 qingke = { version = "0.8", features = ["critical-section-impl"] }
 qingke-rt = { version = "0.8", optional = true }
 
@@ -50,14 +45,22 @@ sdio-host = "0.5.0"
 
 embedded-storage = "0.3.1"
 
-[build-dependencies]
-# ch32-data rev = a515903589cfbc342dc6ad0d13c02b4382da5628
-ch32-metapac = { features = [
-    "metadata",
-], version = "0.1.1" }
+# WIP: catalogue exports from the metadata-cfg-catalogue branch.
+[dependencies.ch32-metapac]
+version = "0.1.1"
+git = "https://github.com/ArthurHeymans/ch32-metapac"
+rev = "7f1c480ae5fef4b3c49ff5f12a79da29f0898046"
+features = ["rt"]
 
+[build-dependencies]
 proc-macro2 = "1.0"
 quote = "1.0"
+
+[build-dependencies.ch32-metapac]
+version = "0.1.1"
+git = "https://github.com/ArthurHeymans/ch32-metapac"
+rev = "7f1c480ae5fef4b3c49ff5f12a79da29f0898046"
+features = ["metadata"]
 
 [features]
 default = ["embassy", "rt", "exti"]

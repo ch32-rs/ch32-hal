@@ -238,7 +238,7 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
             w.set_reset_sie(true);
         });
 
-        embassy_time::block_for(embassy_time::Duration::from_micros(10));
+        crate::internal::delay_us(10);
 
         // Clear all
         regs.ctrl().write(|_| {});

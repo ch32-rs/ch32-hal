@@ -25,6 +25,19 @@ Link: [OSHWHUB](https://oshwhub.com/andelf/linedog)
 
 ## Running Examples
 
+### WS2812 modes
+
+`gpio_ws2812` runs the rainbow animation by default. The timing waveform and
+LED-off diagnostic are selectable instead of being commented out or unreachable:
+
+```sh
+cargo run --release --bin gpio_ws2812
+cargo run --release --bin gpio_ws2812 --features ws2812-timing-test
+cargo run --release --bin gpio_ws2812 --features ws2812-off
+```
+
+Timing-test takes precedence if both features are enabled.
+
 ### using rust-nightly for building
 
 call `rustup install nightly` and `rustup override set nightly` to build this project with rust nightly,

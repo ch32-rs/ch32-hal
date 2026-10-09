@@ -26,13 +26,13 @@ async fn main(_spawner: Spawner) -> ! {
     let mut rng = Rng::new(p.RNG, Irqs);
 
     let mut buf = [0u8; 16];
-    let _ = rng.async_fill_bytes(&mut buf).await.unwrap();
+    rng.async_fill_bytes(&mut buf).await.unwrap();
 
     println!("random bytes: {:?}", &buf);
 
     loop {
         Timer::after_secs(1).await;
-        let _ = rng.async_fill_bytes(&mut buf).await.unwrap();
+        rng.async_fill_bytes(&mut buf).await.unwrap();
 
         println!("random bytes: {:?}", &buf);
     }
@@ -40,7 +40,7 @@ async fn main(_spawner: Spawner) -> ! {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = println!("\n\n\n{}", info);
+    println!("\n\n\n{}", info);
 
     loop {}
 }

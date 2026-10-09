@@ -1,11 +1,47 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::{env, fs};
 
-use ch32_metapac::metadata::METADATA;
+use ch32_metapac::metadata::{ALL_CHIPS, ALL_PERIPHERAL_NAMES, ALL_PERIPHERAL_VERSIONS, METADATA};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
+
+fn chip_cfgs(chip: &str) -> Vec<String> {
+    let chip = chip.to_ascii_lowercase();
+    let (base, family) = if chip.starts_with("ch32") {
+        (chip[..8].to_string(), chip[..6].to_string())
+    } else {
+        (chip[..5].to_string(), chip[..5].to_string())
+    };
+    let core = match family.as_str() {
+        "ch32v0" | "ch32m0" | "ch641" => "qingke_v2",
+        "ch32v1" => "qingke_v3",
+        _ => "qingke_v4",
+    };
+    let density = if chip.starts_with("ch32") {
+        let density = match chip.as_bytes()[9] {
+            b'6' | b'7' | b'8' => Some("d6"),
+            b'b' | b'c' => Some("d8"),
+            _ => None,
+        };
+        let subtype = match &chip[6..8] {
+            "03" => Some(""),
+            "05" | "07" => Some("c"),
+            "08" => Some("w"),
+            _ => None,
+        };
+        density
+            .zip(subtype)
+            .map(|(density, subtype)| format!("{density}{subtype}"))
+    } else {
+        None
+    };
+    [Some(base), Some(family), Some(core.into()), density]
+        .into_iter()
+        .flatten()
+        .collect()
+}
 
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -24,53 +60,51 @@ fn main() {
     .unwrap()
     .to_ascii_lowercase();
 
-    // Add chip name and family cfg flags on the fly
-    let (chip_base_name, chip_family) = if chip_name.starts_with("ch32") {
-        (chip_name[..8].to_string(), chip_name[..6].to_string())
-    } else {
-        // On of ch643, ch641
-        (chip_name[..5].to_string(), chip_name[..5].to_string())
-    };
-    println!("cargo:rustc-cfg={}", chip_base_name); // ch32v103, ch32v003, ch32x035, ch643, ch641, etc.
-    println!("cargo:rustc-cfg={}", chip_family); // On of ch32x0, ch32v0, ch32m0, ch32v1, ch32v2, ch32v3, ch32l1, ch643, ch641
-
-    // Add Qingke IP core version cfg flags on the fly
-    // qingke_v2, qingke_v3, qingke_v4
-    let qingke_ver = match &*chip_family {
-        "ch32v0" | "ch32m0" | "ch641" => "qingke_v2",
-        "ch32v1" => "qingke_v3",
-        "ch32v2" | "ch32v3" | "ch32l1" | "ch643" => "qingke_v4", // v4b, v4c, v4f
-        _ => "qingke_v4",
-    };
-    println!("cargo:rustc-cfg={}", qingke_ver);
-
-    // Add CH32 specific cfg flags: D6, D8, D8C, D8W
-    // D(Density), 6(2^6), 8(2^8)
-    // C(Connectivity / Interconnectivity)
-    // W(Wireless)
-    if chip_name.starts_with("ch32") {
-        let density = match chip_name.as_bytes()[9] {
-            b'6' | b'7' | b'8' => Some("D6"),
-            b'b' | b'c' => Some("D8"),
-            _ => None, // undocumented, leave it empty
-        };
-        let subtype = match &chip_name[6..8] {
-            "03" => Some(""),  // General purpose
-            "05" => Some("C"), // Connectivity
-            "07" => Some("C"), // Interconnectivity
-            "08" => Some("W"), // Wireless
-            _ => None,         // 35: Connectivity of USBPD
-        };
-        match (density, subtype) {
-            (Some(density), Some(subtype)) => {
-                println!(
-                    "cargo:rustc-cfg={}{}",
-                    density.to_ascii_lowercase(),
-                    subtype.to_ascii_lowercase()
-                );
-            }
-            _ => (),
-        }
+    // Use the same derivation for the complete vocabulary and the selected chip.
+    let chip_cfgs = chip_cfgs(&chip_name);
+    let chip_family = chip_cfgs[1].as_str();
+    let declared: BTreeSet<_> = ALL_CHIPS
+        .iter()
+        .flat_map(|chip| self::chip_cfgs(chip))
+        .chain(ALL_PERIPHERAL_VERSIONS.iter().flat_map(|(kind, versions)| {
+            std::iter::once(kind.to_string()).chain(versions.iter().map(move |version| format!("{kind}_{version}")))
+        }))
+        .chain(
+            ALL_PERIPHERAL_NAMES
+                .iter()
+                .map(|name| format!("peri_{}", name.to_ascii_lowercase())),
+        )
+        .chain(
+            ALL_PERIPHERAL_NAMES
+                .iter()
+                .filter(|name| name.starts_with("TIM"))
+                .map(|name| format!("time_driver_{}", name.to_ascii_lowercase())),
+        )
+        // HAL-owned selectors and inactive gates inherited from shared drivers;
+        // these are not hardware inventory and cannot come from PAC metadata.
+        .chain(
+            [
+                "time_driver_timer",
+                "time_driver_systick",
+                "armv6m",
+                "todo",
+                "ch32f2",
+                "bdma",
+                "gpdma",
+                "dac_v5",
+                "dac_v6",
+                "dac_v7",
+                "eth_v1",
+                "flash_f4",
+            ]
+            .map(String::from),
+        )
+        .collect();
+    for cfg in declared {
+        println!("cargo:rustc-check-cfg=cfg({cfg})");
+    }
+    for cfg in &chip_cfgs {
+        println!("cargo:rustc-cfg={cfg}");
     }
 
     // Add peripheral cfg flags on the fly
@@ -120,6 +154,7 @@ fn main() {
                         if pin.signal.starts_with("MCO") {
                             let name = pin.signal.replace('_', "").to_string();
                             if !singletons.contains(&name) {
+                                println!("cargo:rustc-check-cfg=cfg({})", name.to_ascii_lowercase());
                                 println!("cargo:rustc-cfg={}", name.to_ascii_lowercase());
                                 singletons.push(name);
                             }
@@ -169,6 +204,14 @@ fn main() {
         Err(GetOneError::Multiple) => panic!("Multiple ch32xx Cargo features enabled"),
     };
 
+    let supports_time_driver = |name: &str| {
+        METADATA.peripherals.iter().any(|p| {
+            p.name == name
+                && p.registers
+                    .as_ref()
+                    .is_some_and(|r| r.kind == "timer" && matches!(r.block, "ADTM" | "GPTM" | "GPTM32"))
+        })
+    };
     let time_driver_singleton = match time_driver.as_ref().map(|x| x.as_ref()) {
         None => "",
         Some("tim1") => "TIM1",
@@ -186,13 +229,17 @@ fn main() {
                 "TIM10", "TIM9", "TIM8", "TIM1", //ADV
             ]
             .iter()
-            .find(|tim| singletons.contains(&tim.to_string()))
-            .expect("time-driver-any requested, but the chip doesn't have a TIMx for time driver")
+            .find(|tim| supports_time_driver(tim))
+            .expect("time-driver-any requested, but the chip has no supported timer")
         }
         _ => panic!("unknown time_driver {:?}", time_driver),
     };
 
     if !time_driver_singleton.is_empty() {
+        assert!(
+            supports_time_driver(time_driver_singleton),
+            "unsupported time-driver timer: {time_driver_singleton}"
+        );
         println!("cargo:rustc-cfg=time_driver_{}", time_driver_singleton.to_lowercase());
         println!("cargo:rustc-cfg=time_driver_timer");
     }

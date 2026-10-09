@@ -211,7 +211,7 @@ impl<const WIDTH: u16, const HEIGHT: u16, const OFFSETX: u16, const OFFSETY: u16
         self.set_update_window(0, 0, WIDTH, HEIGHT);
 
         self.send_command(Instruction::RAMWR);
-        for _ in 0..((WIDTH as u16) * (HEIGHT as u16)) {
+        for _ in 0..(WIDTH * HEIGHT) {
             self.send_data(color.to_be_bytes().as_ref());
         }
         Ok(())
@@ -468,7 +468,7 @@ async fn main(_spawner: Spawner) -> ! {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = println!("\n\n\n{}", info);
+    println!("\n\n\n{}", info);
 
     loop {}
 }

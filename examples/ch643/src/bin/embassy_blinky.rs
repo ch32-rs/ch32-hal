@@ -1,7 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
-#![feature(impl_trait_in_assoc_type)]
 
 use ch32_hal as hal;
 use hal::Peri;
@@ -44,7 +42,7 @@ async fn main(spawner: Spawner) -> ! {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = hal::println!("\n\n\n{}", info);
+    hal::println!("\n\n\n{}", info);
 
     loop {}
 }

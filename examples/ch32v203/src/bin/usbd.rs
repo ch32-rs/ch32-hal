@@ -6,9 +6,8 @@ use embassy_futures::join::join;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::Builder;
-use hal::time::Hertz;
+use hal::bind_interrupts;
 use hal::usbd::{Driver, Instance};
-use hal::{bind_interrupts, peripherals, println, usb, Config};
 use {ch32_hal as hal, panic_halt as _};
 
 bind_interrupts!(struct Irqs {
@@ -47,7 +46,6 @@ async fn main(_spawner: Spawner) {
     // It needs some buffers for building the descriptors.
     let mut config_descriptor = [0; 256];
     let mut bos_descriptor = [0; 256];
-    let mut msos_descriptor = [0; 256];
     let mut control_buf = [0; 64];
 
     let mut state = State::new();
