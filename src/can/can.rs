@@ -11,8 +11,7 @@ use crate::can::registers::Registers;
 use crate::can::util;
 use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode, NonBlocking};
-use crate::gpio::{AfType, OutputType, Pull, Speed};
-use crate::{interrupt, pac, peripherals, Peri, RccPeripheral, Timeout};
+use crate::{interrupt, pac, peripherals, Peri, RccPeripheral, RemapPeripheral, Timeout};
 
 /// Receive interrupt handler.
 pub struct ReceiveInterruptHandler<T: Instance> {
@@ -79,10 +78,10 @@ pub enum CanInitError {
 }
 
 impl<'d, T: Instance> Can<'d, T, Async> {
-    pub fn new_async<#[cfg(not(afio_h4))] const REMAP: u8>(
+    pub fn new_async<const REMAP: u8>(
         peri: Peri<'d, T>,
-        rx: Peri<'d, if_remap!(impl RxPin<T, REMAP>)>,
-        tx: Peri<'d, if_remap!(impl TxPin<T, REMAP>)>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         _irq: impl interrupt::typelevel::Binding<T::ReceiveInterrupt, ReceiveInterruptHandler<T>>
             + interrupt::typelevel::Binding<T::TransmitInterrupt, TransmitInterruptHandler<T>>
             + 'd,
@@ -91,7 +90,6 @@ impl<'d, T: Instance> Can<'d, T, Async> {
         bitrate: u32,
         config: Config,
     ) -> Result<Self, CanInitError> {
-        apply_remap!();
         Self::new_inner(peri, rx, tx, fifo, mode, bitrate, config)
     }
 
@@ -152,16 +150,15 @@ impl<'d, T: Instance> Can<'d, T, Async> {
 }
 
 impl<'d, T: Instance> Can<'d, T, Blocking> {
-    pub fn new_blocking<#[cfg(not(afio_h4))] const REMAP: u8>(
+    pub fn new_blocking<const REMAP: u8>(
         peri: Peri<'d, T>,
-        rx: Peri<'d, if_remap!(impl RxPin<T, REMAP>)>,
-        tx: Peri<'d, if_remap!(impl TxPin<T, REMAP>)>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
         config: Config,
     ) -> Result<Self, CanInitError> {
-        apply_remap!();
         Self::new_inner(peri, rx, tx, fifo, mode, bitrate, config)
     }
 
@@ -197,16 +194,15 @@ impl<'d, T: Instance> Can<'d, T, Blocking> {
 }
 
 impl<'d, T: Instance> Can<'d, T, NonBlocking> {
-    pub fn new_nb<#[cfg(not(afio_h4))] const REMAP: u8>(
+    pub fn new_nb<const REMAP: u8>(
         peri: Peri<'d, T>,
-        rx: Peri<'d, if_remap!(impl RxPin<T, REMAP>)>,
-        tx: Peri<'d, if_remap!(impl TxPin<T, REMAP>)>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
         config: Config,
     ) -> Result<Self, CanInitError> {
-        apply_remap!();
         Self::new_inner(peri, rx, tx, fifo, mode, bitrate, config)
     }
 
@@ -248,16 +244,15 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
     /// Assumes AFIO & PORTB clocks have been enabled by HAL.
     ///
     /// CAN_RX is mapped to PB8, and CAN_TX is mapped to PB9.
-    fn new_inner<#[cfg(not(afio_h4))] const REMAP: u8>(
+    fn new_inner<const REMAP: u8>(
         peri: Peri<'d, T>,
-        rx: Peri<'d, if_remap!(impl RxPin<T, REMAP>)>,
-        tx: Peri<'d, if_remap!(impl TxPin<T, REMAP>)>,
+        rx: Peri<'d, impl RxPin<T, REMAP>>,
+        tx: Peri<'d, impl TxPin<T, REMAP>>,
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
         config: Config,
     ) -> Result<Self, CanInitError> {
-        apply_remap!();
         let this = Self {
             _peri: peri,
             fifo,
@@ -268,11 +263,19 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
         };
         T::enable_and_reset(); // Enable CAN peripheral
 
-        // RX is input-with-pull-up; TX is AF push-pull at 50MHz.
-        // `set_as_af!` writes mode/cnf and (under cfg(not(afio_h4))) the PCFR remap
-        // bit, picking up the group encoded in the pin's marker type.
-        set_as_af!(rx, AfType::input(Pull::Up));
-        set_as_af!(tx, AfType::output(OutputType::PushPull, Speed::High));
+        rx.set_mode_cnf(
+            pac::gpio::vals::Mode::INPUT,
+            pac::gpio::vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
+        );
+
+        tx.set_mode_cnf(
+            pac::gpio::vals::Mode::OUTPUT_50MHZ,
+            pac::gpio::vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
+        );
+        T::set_remap(REMAP);
+
+        // //here should remap functionality be added
+        // T::remap(0b10);
 
         unsafe {
             use crate::interrupt::typelevel::Interrupt;
@@ -428,7 +431,7 @@ impl State {
     }
 }
 
-pub trait SealedInstance: RccPeripheral {
+pub trait SealedInstance: RccPeripheral + RemapPeripheral {
     fn regs() -> pac::can::Can;
     // Either `0b00`, `0b10` or `b11` on CAN1. `0` or `1` on CAN2.
     // fn remap(rm: u8) -> ();
@@ -436,7 +439,7 @@ pub trait SealedInstance: RccPeripheral {
     fn state() -> &'static State;
 }
 
-pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + crate::peripheral::RemapBound + 'static {
+pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + 'static {
     type ReceiveInterrupt: crate::interrupt::typelevel::Interrupt;
     type TransmitInterrupt: crate::interrupt::typelevel::Interrupt;
 }
