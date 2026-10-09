@@ -177,5 +177,15 @@ ch643 = ["ch32-metapac/ch643", "qingke-rt/v4c", "qingke/v4c"]
 # 1, compute core with FP + ICache). Only the AFIO + GPIO + USART
 # scaffolding is wired up via this PR; ADC/DAC/DMA/USBPD/RCC drivers still
 # need H4-specific porting (separate follow-up PRs).
-ch32h417qeu6-v3f = ["ch32-metapac/ch32h417qeu6-qingke-v3f", "qingke-rt/v3f", "qingke/v3f"]
-ch32h417qeu6-v5f = ["ch32-metapac/ch32h417qeu6-qingke-v5f", "qingke-rt/v5f", "qingke/v5f"]
+ch32h417qeu6-v3f = [
+    "ch32-metapac/ch32h417qeu6-qingke-v3f",
+    "qingke-rt/v3f",
+    "qingke/v3f",
+    "qingke/dual-core",
+]
+ch32h417qeu6-v5f = [
+    "ch32-metapac/ch32h417qeu6-qingke-v5f",
+    "qingke-rt/v5f",
+    "qingke/v5f",
+    "qingke/dual-core",
+]

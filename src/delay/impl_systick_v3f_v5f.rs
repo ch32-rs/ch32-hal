@@ -2,13 +2,15 @@
 //!
 //! H4 ships two independent 32-bit Systick counters — `CTLR_0` / `CNT_0`
 //! / `CMP_0` / `ISR.ISR0` route to hart 0 (V3F); `CTLR_1` / `CNT_1` /
-//! `CMP_1` / `ISR.ISR1` route to hart 1 (V5F). We hardcode counter 0
-//! here; if running on V5F, instantiate `Delay` from V5F-side code and
-//! it'll still hit counter 0 unless the user explicitly wants counter
-//! 1 (TODO: parameterise by `qingke::pfic::HartId` once both harts
-//! actually run different code).
+//! `CMP_1` / `ISR.ISR1` route to hart 1 (V5F). Both harts also have
+//! their own core clock (V3F from `FPRE`, V5F from its own prescaler —
+//! see `rcc::core_clocks()`), so the per-tick period here has to come
+//! from the *current* hart's frequency, not from the global `hclk`
+//! (which is `v3f` on H4). Using `hclk` on the V5F would scale every
+//! delay by `v3f/v5f` (4x off on the 400/100 MHz EVT preset).
 
 use pac::systick::vals;
+use qingke::pfic::HartId;
 
 use crate::pac;
 use crate::pac::SYSTICK;
@@ -22,30 +24,49 @@ impl Delay {
     /// # Safety
     /// Conflicts with embassy's systick time driver — pick one.
     pub(crate) unsafe fn init() {
-        let sysclk = crate::rcc::clocks().hclk.0;
+        let core_hz = match HartId::current() {
+            HartId::C0 => crate::rcc::core_clocks().v3f.0,
+            HartId::C1 => crate::rcc::core_clocks().v5f.0,
+        };
         unsafe {
-            P_US = sysclk / 1_000_000;
-            P_MS = sysclk / 1_000;
+            P_US = core_hz / 1_000_000;
+            P_MS = core_hz / 1_000;
         }
     }
 
     pub fn delay_us(&mut self, us: u32) {
-        // Clear pending interrupt flag for counter 0 (write-1-to-clear isn't
-        // used here; the H4 ISR field is plain RW so write `false` to clear).
-        SYSTICK.isr().modify(|w| w.set_isr0(false));
+        let hart = HartId::current();
+        let on_v5f = matches!(hart, HartId::C1);
+
+        // Clear this counter's pending flag (ISR is plain RW; writing false
+        // to one bit leaves the other counter's flag alone).
+        SYSTICK
+            .isr()
+            .modify(|w| if on_v5f { w.set_isr1(false) } else { w.set_isr0(false) });
 
         let cycles = us * unsafe { P_US };
 
-        SYSTICK.cmp_0().write(|w| w.set_cmp(cycles));
-        SYSTICK.cnt_0().write(|w| w.set_cnt(0));
-        SYSTICK.ctlr_0().modify(|w| {
-            w.set_no_rtc(vals::Stclk::HCLK);
-            w.set_down_mode(vals::Mode::UPCOUNT);
-            w.set_en(true);
-        });
-
-        while !SYSTICK.isr().read().isr0() {}
-        SYSTICK.ctlr_0().modify(|w| w.set_en(false));
+        if on_v5f {
+            SYSTICK.cmp_1().write(|w| w.set_cmp(cycles));
+            SYSTICK.cnt_1().write(|w| w.set_cnt(0));
+            SYSTICK.ctlr_1().modify(|w| {
+                w.set_no_rtc(vals::Stclk::HCLK);
+                w.set_down_mode(vals::Mode::UPCOUNT);
+                w.set_en(true);
+            });
+            while !SYSTICK.isr().read().isr1() {}
+            SYSTICK.ctlr_1().modify(|w| w.set_en(false));
+        } else {
+            SYSTICK.cmp_0().write(|w| w.set_cmp(cycles));
+            SYSTICK.cnt_0().write(|w| w.set_cnt(0));
+            SYSTICK.ctlr_0().modify(|w| {
+                w.set_no_rtc(vals::Stclk::HCLK);
+                w.set_down_mode(vals::Mode::UPCOUNT);
+                w.set_en(true);
+            });
+            while !SYSTICK.isr().read().isr0() {}
+            SYSTICK.ctlr_0().modify(|w| w.set_en(false));
+        }
     }
 
     #[inline]
