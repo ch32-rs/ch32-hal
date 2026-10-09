@@ -1,6 +1,7 @@
 use embassy_usb_driver::EndpointAllocError;
 
-pub(crate) struct EndpointBufferAllocator<'d, const NR_EP: usize, const SIZE: usize> {
+/// Allocates endpoint buffers from a caller-provided pool.
+pub struct EndpointBufferAllocator<'d, const NR_EP: usize, const SIZE: usize> {
     ep_buffer: &'d mut [EndpointDataBuffer<SIZE>; NR_EP],
     ep_next: usize,
 }
@@ -70,6 +71,7 @@ impl<const SIZE: usize> Default for EndpointDataBuffer<SIZE> {
 }
 
 impl<const SIZE: usize> EndpointDataBuffer<SIZE> {
+    #[cfg(any(otg, usbhs_v3))]
     pub(crate) fn read_volatile(&self, buf: &mut [u8]) {
         assert!(buf.len() <= self.data.len());
         let len = buf.len();
@@ -79,6 +81,7 @@ impl<const SIZE: usize> EndpointDataBuffer<SIZE> {
         }
     }
 
+    #[cfg(any(otg, usbhs_v3))]
     pub(crate) fn write_volatile(&mut self, buf: &[u8]) {
         assert!(buf.len() <= self.data.len());
         let len = buf.len();

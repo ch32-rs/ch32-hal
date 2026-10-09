@@ -253,7 +253,7 @@ impl<'d, T: Instance> Driver<'d, T> {
             w.set_fres(true);
         });
 
-        embassy_time::block_for(embassy_time::Duration::from_millis(100));
+        crate::internal::delay_us(100_000);
 
         regs.btable().write(|w| w.set_btable(0));
 
