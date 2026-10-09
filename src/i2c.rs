@@ -7,6 +7,7 @@ use core::task::Poll;
 use embassy_futures::select::{select, Either};
 use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::i2c::Operation;
+use mode::{Master, OperatingMode, Slave};
 
 use crate::dma::ChannelAndRequest;
 use crate::gpio::{AFType, Speed};
@@ -15,6 +16,26 @@ use crate::mode::{Async, Blocking, Mode};
 // use crate::interrupt::Interrupt;
 use crate::time::Hertz;
 use crate::{interrupt, peripherals, Peri, Timeout};
+
+/// I2C modes
+pub mod mode {
+    trait SealedMode {}
+
+    /// Trait for I2C master operations.
+    #[allow(private_bounds)]
+    pub trait OperatingMode: SealedMode {}
+
+    /// Mode allowing for I2C master operations.
+    pub struct Master;
+    /// Mode allowing for I2C slave operations.
+    pub struct Slave;
+
+    impl SealedMode for Master {}
+    impl OperatingMode for Master {}
+
+    impl SealedMode for Slave {}
+    impl OperatingMode for Slave {}
+}
 
 /// Event interrupt handler.
 pub struct EventInterruptHandler<T: Instance> {
@@ -88,6 +109,34 @@ pub struct Config {
     pub duty: Duty,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum SlaveAddress {
+    SevenBit(u8),
+    TenBit(u16),
+}
+
+/// I2C config for slave mode operation
+///
+/// Configure the address the I2C device will consider its address. 10- and 7-Bit addresses are supported.
+/// It is also possible to configure responsding to detecting a general call.
+///
+/// Note: ch32 devices support dual addressing mode. This mode of operation has not been implemented!
+#[derive(Copy, Clone)]
+pub struct SlaveConfig {
+    pub address: SlaveAddress,
+    pub general_call: bool,
+}
+
+#[derive(Debug)]
+pub enum SlaveCommand {
+    /// received general call addresse, can process incoming data
+    GeneralCall,
+    /// received read command, will enter transmitter mode to respond with data
+    ReadCommand,
+    /// received write command, should read incoming data
+    WriteCommand,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -99,15 +148,15 @@ impl Default for Config {
 }
 
 /// I2C driver.
-pub struct I2c<'d, T: Instance, M: Mode> {
+pub struct I2c<'d, T: Instance, M: Mode, O: OperatingMode> {
     tx_dma: Option<ChannelAndRequest<'d>>,
     rx_dma: Option<ChannelAndRequest<'d>>,
     #[cfg(feature = "embassy")]
     timeout: embassy_time::Duration,
-    _phantom: PhantomData<(&'d mut T, M)>,
+    _phantom: PhantomData<(&'d mut T, M, O)>,
 }
 
-impl<'d, T: Instance> I2c<'d, T, Async> {
+impl<'d, T: Instance> I2c<'d, T, Async, Master> {
     /// Create a new I2C driver.
     pub fn new<const REMAP: u8>(
         peri: Peri<'d, T>,
@@ -125,7 +174,7 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
     }
 }
 
-impl<'d, T: Instance> I2c<'d, T, Blocking> {
+impl<'d, T: Instance> I2c<'d, T, Blocking, Master> {
     /// Create a new blocking I2C driver.
     pub fn new_blocking<const REMAP: u8>(
         peri: Peri<'d, T>,
@@ -138,7 +187,7 @@ impl<'d, T: Instance> I2c<'d, T, Blocking> {
     }
 }
 
-impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
+impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Master> {
     /// Create a new I2C driver.
     fn new_inner<const REMAP: u8>(
         _peri: Peri<'d, T>,
@@ -174,22 +223,13 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
             _phantom: PhantomData,
         };
 
-        this.init(freq, config);
+        this.init_master(freq, config);
 
         this
     }
 
-    fn timeout(&self) -> Timeout {
-        Timeout {
-            #[cfg(feature = "embassy")]
-            deadline: embassy_time::Instant::now() + self.timeout,
-        }
-    }
-}
-
-impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     // init as master mode
-    fn init(&mut self, freq: Hertz, config: Config) {
+    fn init_master(&mut self, freq: Hertz, config: Config) {
         let regs = T::regs();
 
         regs.ctlr1().modify(|w| w.set_pe(false)); // disale i2c
@@ -237,6 +277,438 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         regs.ctlr1().modify(|w| w.set_pe(true));
     }
 
+    /// configure device for slave mode operation using supplied i2c addresses
+    pub fn into_slave(mut self, slave_config: SlaveConfig) -> I2c<'d, T, M, Slave> {
+        T::regs().ctlr1().modify(|w| w.set_pe(false));
+        T::regs().ctlr1().modify(|w| w.set_engc(slave_config.general_call));
+        match slave_config.address {
+            SlaveAddress::SevenBit(addr) => T::regs().oaddr1().modify(|w| {
+                w.set_addmode(false);
+                // not documentet in every version of the reference manual
+                // specific bit needs to be 1, no further utility
+                w.set_must1(true);
+                w.set_add7_1(addr);
+            }),
+            SlaveAddress::TenBit(addr) => T::regs().oaddr1().modify(|w| {
+                w.set_addmode(true);
+                // not documentet in every version of the reference manual
+                // specific bit needs to be 1, no further utility
+                w.set_must1(true);
+                w.set_add9_8((addr >> 8) as u8);
+                w.set_add7_1((addr >> 1) as u8);
+                w.set_add0(addr & 0x0001 == 0x0001);
+            }),
+        }
+        T::regs().ctlr1().modify(|w| w.set_pe(true));
+
+        I2c::<'d, T, M, Slave> {
+            tx_dma: self.tx_dma.take(),
+            rx_dma: self.rx_dma.take(),
+            #[cfg(feature = "embassy")]
+            timeout: self.timeout,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+enum TransmissionState {
+    Continue,
+    Finished,
+}
+
+impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Slave> {
+    pub fn listen_blocking(&mut self) -> Result<SlaveCommand, Error> {
+        #[cfg(feature = "embassy")]
+        let timout = self.timeout();
+
+        T::regs().ctlr1().modify(|w| w.set_pe(true));
+        // clear status to remove and dirty state before starting listen if ack has not been enabled yet
+        if !T::regs().ctlr1().read().ack() {
+            let _ = Self::check_and_clear_error_flags();
+            // enable ACK to let master now the device is alive
+            T::regs().ctlr1().modify(|w| w.set_ack(true));
+        }
+
+        // blocking wait for addresse receive
+        while !T::regs().star1().read().addr() {
+            #[cfg(feature = "embassy")]
+            timout.check().ok_or(Error::Timeout)?;
+        }
+
+        let star2 = T::regs().star2().read();
+
+        if star2.gencall() {
+            Ok(SlaveCommand::GeneralCall)
+        } else {
+            if star2.tra() {
+                Ok(SlaveCommand::ReadCommand)
+            } else {
+                Ok(SlaveCommand::WriteCommand)
+            }
+        }
+    }
+
+    /// call this after receiving [`SlaveCommand::WriteCommand`] to receive data from master
+    pub fn blocking_read(&mut self, recv_buf: &mut [u8]) -> Result<usize, (usize, Error)> {
+        //clear addr status to start receiving bytes
+        T::regs().star1().modify(|w| w.set_addr(false));
+
+        let mut received_bytes = 0;
+        while received_bytes <= recv_buf.len() {
+            let star1 = T::regs().star1().read();
+            // received data \o/
+            if star1.rx_ne() && received_bytes == recv_buf.len() {
+                //received more data than fits in buffer
+                T::regs().ctlr1().modify(|w| w.set_stop(true));
+                T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                return Err((received_bytes, Error::Overrun));
+            } else if star1.rx_ne() && received_bytes < recv_buf.len() {
+                recv_buf[received_bytes] = T::regs().datar().read().datar();
+                received_bytes += 1;
+
+                if received_bytes == recv_buf.len() {
+                    // the last byte that fits the buffer was just received
+                    // so any further byte can not be processed
+                    T::regs().ctlr1().modify(|w| w.set_ack(false));
+                }
+            } else if star1.stopf() {
+                // master stopped sending data, return early
+                T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                return Ok(received_bytes);
+            } else {
+                // check for any error states
+                Self::check_and_clear_error_flags().map_err(|err| (received_bytes, err))?;
+            }
+        }
+        // this should no be reachable, earlier exits in the loop are expected
+        // using unreachable would be possible! but returning is probably better for
+        // stability reasons
+        Ok(received_bytes)
+    }
+
+    fn check_transmission_state(&mut self) -> Result<TransmissionState, Error> {
+        match Self::check_and_clear_error_flags() {
+            Err(err) => Err(err),
+            Ok(star1) => {
+                if star1.stopf() {
+                    T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                    Ok(TransmissionState::Finished)
+                } else {
+                    Ok(TransmissionState::Continue)
+                }
+            }
+        }
+    }
+
+    /// call this after receiving [`SlaveCommand::ReadCommand`] to send data to master
+    pub fn blocking_write(&mut self, trans_buf: &[u8]) -> Result<(), Error> {
+        // disable ack in send mode the slave does not send ack
+        T::regs().ctlr1().modify(|w| w.set_ack(false));
+
+        //clear addr status to start transmission
+        T::regs().star1().modify(|w| w.set_addr(false));
+
+        for (i, b) in trans_buf.iter().enumerate() {
+            // wait for current byte transfer to be finished
+            let mut tx_e = T::regs().star1().read().tx_e();
+            while !tx_e {
+                tx_e = T::regs().star1().read().tx_e();
+                // theoretically the following check should be done after
+                // a small timeout at the position of this comment. Master nack is
+                // delayed to tx_e state change, so if the master sends a nack
+                // the slave might already try to send the next byte and can not
+                // detect that it was not received by the master
+                // (in case master expects less data) than slave sends
+                // so slave can only detect nack errors on send to expected byte differences
+                // bigger than 1 byte. This is quite an edge case and introducing a timer requirement
+                // for accurate delay seems like more hassle that it's worth to fix the case.
+                // Especially since in the general case master know how many bytes to receive
+                match self.check_transmission_state() {
+                    Err(err) => {
+                        T::regs().ctlr1().modify(|w| w.set_stop(true));
+                        T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                        return Err(err);
+                    }
+                    Ok(TransmissionState::Finished) => {
+                        // last byte was not sent yet
+                        T::regs().ctlr1().modify(|w| w.set_stop(true));
+                        T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                        return Err(Error::Nack);
+                    }
+                    Ok(TransmissionState::Continue) => {}
+                }
+            }
+
+            T::regs().datar().write(|w| w.set_datar(*b));
+        }
+
+        // wait for stop event to occur
+        while !T::regs().star1().read().tx_e() {
+            match self.check_transmission_state() {
+                Err(Error::Nack) => {
+                    // all bytes where already sent, last nack is expected
+                    break;
+                }
+                Err(err) => {
+                    T::regs().ctlr1().modify(|w| w.set_stop(true));
+                    T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                    return Err(err);
+                }
+                _ => {}
+            }
+        }
+        // according to the ref manual, when this is set in slave mode
+        // te slave device will release SDA and SLC after the pending transfer
+        T::regs().ctlr1().modify(|w| w.set_stop(true));
+
+        // all bytes sent and stop bit received
+        Ok(())
+    }
+}
+
+impl<'d, T: Instance> I2c<'d, T, Async, Slave> {
+    #[inline]
+    fn enable_interrupts() {
+        T::regs().ctlr2().modify(|w| {
+            w.set_itevten(true);
+            w.set_iterren(true);
+        });
+    }
+
+    /// Async wait for master to address us and return the command type.
+    ///
+    /// This is the async version of [`Self::listen_blocking`].
+    pub async fn listen(&mut self) -> Result<SlaveCommand, Error> {
+        T::regs().ctlr1().modify(|w| w.set_pe(true));
+
+        if !T::regs().ctlr1().read().ack() {
+            let _ = Self::check_and_clear_error_flags();
+            T::regs().ctlr1().modify(|w| w.set_ack(true));
+        }
+
+        let state = T::state();
+
+        poll_fn(|cx| {
+            state.waker.register(cx.waker());
+
+            let star1 = T::regs().star1().read();
+
+            if star1.addr() {
+                let star2 = T::regs().star2().read();
+
+                if star2.gencall() {
+                    Poll::Ready(Ok(SlaveCommand::GeneralCall))
+                } else if star2.tra() {
+                    Poll::Ready(Ok(SlaveCommand::ReadCommand))
+                } else {
+                    Poll::Ready(Ok(SlaveCommand::WriteCommand))
+                }
+            } else {
+                match Self::check_and_clear_error_flags() {
+                    Err(e) => {
+                        T::regs().ctlr1().modify(|w| w.set_swrst(true));
+                        T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                        Poll::Ready(Err(e))
+                    }
+                    Ok(_) => {
+                        // with some bus error states, the i2c peripheral might reset and unset acknoledge
+                        // if this happens without triggering a different error state we might never poll again
+                        // leading to the listen never returing, force setting ack here prevents the likelyhood
+                        // of this happeing signifcantly
+                        T::regs().ctlr1().modify(|w| w.set_ack(true));
+                        Self::enable_interrupts();
+                        Poll::Pending
+                    }
+                }
+            }
+        })
+        .await
+    }
+
+    /// Async receive bytes from master after [`SlaveCommand::WriteCommand`].
+    ///
+    /// Uses DMA to transfer data from I2C data register to buffer.
+    /// Returns actual number of bytes received or error with partial count.
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, (usize, Error)> {
+        T::regs().ctlr2().modify(|w| {
+            // ifbufen needs to be disabled with dma
+            w.set_itbufen(false);
+            w.set_dmaen(true);
+            w.set_last(false); // only relevant for master mode, just keep it off
+        });
+
+        let on_drop = OnDrop::new(|| {
+            T::regs().ctlr2().modify(|w| {
+                w.set_dmaen(false);
+                w.set_iterren(false);
+                w.set_itevten(false);
+            });
+        });
+
+        let state = T::state();
+
+        let dma_transfer = unsafe {
+            let dst = T::regs().datar().as_ptr() as *mut u8;
+            self.rx_dma.as_mut().unwrap().read(dst, buf, Default::default())
+        };
+
+        // release clock stretch and start transfer from master to slave
+        T::regs().star1().modify(|w| w.set_addr(false));
+
+        let poll_events = poll_fn(|cx| {
+            state.waker.register(cx.waker());
+
+            match Self::check_and_clear_error_flags() {
+                Err(e) => {
+                    // on error soft reset
+                    T::regs().ctlr1().modify(|w| w.set_swrst(true));
+                    T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                    Poll::Ready(Err(e))
+                }
+                Ok(star1) => {
+                    if star1.stopf() {
+                        T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                        Poll::Ready(Ok::<(), Error>(()))
+                    } else {
+                        Self::enable_interrupts();
+                        Poll::Pending
+                    }
+                }
+            }
+        });
+
+        let result = match select(dma_transfer, poll_events).await {
+            Either::Second(Err(e)) => Err(e),
+            Either::Second(Ok(_)) => Ok(()),
+            Either::First(_) => {
+                // dma transfer finished no more bytes will be received
+                // if master tries to send more a nack should be triggered
+                T::regs().ctlr1().modify(|w| w.set_ack(false));
+                T::regs().ctlr2().modify(|w| w.set_dmaen(false));
+
+                Ok(())
+            }
+        };
+
+        let remaining = self.rx_dma.as_ref().unwrap().remaining_bytes();
+        let received = buf.len() - remaining;
+
+        drop(on_drop);
+        match result {
+            Ok(_) => Ok(received),
+            Err(err) => Err((received, err)),
+        }
+    }
+
+    /// Async send bytes to master after [`SlaveCommand::ReadCommand`].
+    ///
+    /// Uses DMA to transfer data from buffer to I2C data register.
+    /// Returns Ok when master stops reading or NACKs.
+    pub async fn write(&mut self, data: &[u8]) -> Result<(), Error> {
+        // acking is the masters job on slave response
+        T::regs().ctlr1().modify(|w| w.set_ack(false));
+
+        let on_drop = OnDrop::new(|| {
+            T::regs().ctlr2().modify(|w| {
+                w.set_dmaen(false);
+                w.set_iterren(false);
+                w.set_itevten(false);
+            });
+        });
+
+        let state = T::state();
+
+        T::regs().ctlr2().modify(|w| {
+            w.set_itbufen(false);
+            w.set_dmaen(true);
+            w.set_last(false);
+        });
+
+        let dma_transfer = unsafe {
+            let dst = T::regs().datar().as_ptr() as *mut u8;
+            self.tx_dma.as_mut().unwrap().write(data, dst, Default::default())
+        };
+
+        // clearing address flag starts response
+        T::regs().star1().modify(|w| w.set_addr(false));
+
+        let poll_events = poll_fn(|cx| {
+            state.waker.register(cx.waker());
+
+            let star1 = T::regs().star1().read();
+
+            if star1.stopf() {
+                Poll::Ready(Ok::<(), Error>(()))
+            } else {
+                match Self::check_and_clear_error_flags() {
+                    Err(e) => {
+                        T::regs().ctlr1().modify(|w| w.set_swrst(true));
+                        T::regs().ctlr1().modify(|w| w.set_swrst(false));
+                        Poll::Ready(Err(e))
+                    }
+                    Ok(_) => {
+                        Self::enable_interrupts();
+                        Poll::Pending
+                    }
+                }
+            }
+        });
+
+        let result = match select(dma_transfer, poll_events).await {
+            Either::Second(Err(e)) => Err(e),
+            Either::First(_) => {
+                // when dma tranfer is finished, disable dma interrupt
+                // enable normal buffer events to wait for last transmission
+                // to finish
+                T::regs().ctlr2().modify(|w| {
+                    w.set_itbufen(true);
+                    w.set_dmaen(false);
+                });
+                // wait for last transfer to complete
+                let _ = poll_fn(|cx| {
+                    state.waker.register(cx.waker());
+
+                    let star1 = T::regs().star1().read();
+                    if star1.tx_e() {
+                        Poll::Ready(())
+                    } else {
+                        Self::enable_interrupts();
+                        Poll::Pending
+                    }
+                })
+                .await;
+                // if the master expects more bytes than the transfer
+                // was configured to send, this releases the SCL and
+                // SDA line as the slave, otherwise the bus might be locked
+                // up indefinitly
+                T::regs().ctlr1().modify(|w| w.set_stop(true));
+                Ok(())
+            }
+            _ => Ok(()),
+        };
+
+        let star1 = T::regs().star1().read();
+        if star1.af() {
+            T::regs().star1().modify(|w| w.set_af(false));
+        } else if star1.stopf() {
+            T::regs().ctlr1().modify(|w| w.set_swrst(false));
+        }
+
+        drop(on_drop);
+
+        // Fallthrough is success
+        Ok(())
+    }
+}
+
+impl<'d, T: Instance, M: Mode, O: OperatingMode> I2c<'d, T, M, O> {
+    fn timeout(&self) -> Timeout {
+        Timeout {
+            #[cfg(feature = "embassy")]
+            deadline: embassy_time::Instant::now() + self.timeout,
+        }
+    }
+
     fn check_and_clear_error_flags() -> Result<crate::pac::i2c::regs::Star1, Error> {
         // Note that flags should only be cleared once they have been registered. If flags are
         // cleared otherwise, there may be an inherent race condition and flags may be missed.
@@ -276,7 +748,9 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
         Ok(star1)
     }
+}
 
+impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Master> {
     fn write_bytes(&mut self, addr: u8, bytes: &[u8], timeout: Timeout, frame: FrameOptions) -> Result<(), Error> {
         if frame.send_start() {
             // Send a START condition
@@ -485,7 +959,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
 // ======== Async
 
-impl<'d, T: Instance> I2c<'d, T, Async> {
+impl<'d, T: Instance> I2c<'d, T, Async, Master> {
     async fn write_frame(&mut self, address: u8, write: &[u8], frame: FrameOptions) -> Result<(), Error> {
         T::regs().ctlr2().modify(|w| {
             // Note: Do not enable the ITBUFEN bit in the I2C_CR2 register if DMA is used for
@@ -837,7 +1311,7 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
 
 // ======== Common
 
-impl<'d, T: Instance, M: Mode> Drop for I2c<'d, T, M> {
+impl<'d, T: Instance, M: Mode, O: OperatingMode> Drop for I2c<'d, T, M, O> {
     fn drop(&mut self) {
         T::regs().ctlr1().modify(|w| w.set_pe(false));
     }
@@ -910,11 +1384,11 @@ impl embedded_hal::i2c::Error for Error {
     }
 }
 
-impl<'d, T: Instance, M: Mode> embedded_hal::i2c::ErrorType for I2c<'d, T, M> {
+impl<'d, T: Instance, M: Mode> embedded_hal::i2c::ErrorType for I2c<'d, T, M, Master> {
     type Error = Error;
 }
 
-impl<'d, T: Instance, M: Mode> embedded_hal::i2c::I2c for I2c<'d, T, M> {
+impl<'d, T: Instance, M: Mode> embedded_hal::i2c::I2c for I2c<'d, T, M, Master> {
     fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
         self.blocking_read(address, read)
     }
@@ -927,6 +1401,7 @@ impl<'d, T: Instance, M: Mode> embedded_hal::i2c::I2c for I2c<'d, T, M> {
         self.blocking_write_read(address, write, read)
     }
 
+    /// not implemented!
     fn transaction(
         &mut self,
         address: u8,
@@ -938,7 +1413,7 @@ impl<'d, T: Instance, M: Mode> embedded_hal::i2c::I2c for I2c<'d, T, M> {
     }
 }
 
-impl<'d, T: Instance> embedded_hal_async::i2c::I2c for I2c<'d, T, Async> {
+impl<'d, T: Instance> embedded_hal_async::i2c::I2c for I2c<'d, T, Async, Master> {
     async fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
         self.read(address, read).await
     }
@@ -951,6 +1426,7 @@ impl<'d, T: Instance> embedded_hal_async::i2c::I2c for I2c<'d, T, Async> {
         self.write_read(address, write, read).await
     }
 
+    /// not yet implemented!
     async fn transaction(
         &mut self,
         address: u8,
