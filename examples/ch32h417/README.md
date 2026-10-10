@@ -25,7 +25,7 @@ files that exist:
 
 | Kind | Files | Examples |
 |---|---|---|
-| **v3f-only** | `v3f/src/bin/NAME.rs` | `blinky`, `i2c_scan`, `bme280_blocking`, `sdi_print`, `launcher` |
+| **v3f-only** | `v3f/src/bin/NAME.rs` | `blinky`, `i2c_scan`, `bme280_blocking`, `sdi_print`, `launcher`, `rcc_delay_check` |
 | **dual-core** | `v3f/src/bin/NAME.rs` + `v5f/src/bin/NAME.rs` | `atomics`, `cpuid`, `dualcore`, `hello`, `pingpong`, `sdi_cpuid` |
 
 In a dual-core example the V3F half brings the chip up (clocks, GPIO, SDI),
@@ -83,6 +83,32 @@ reads that back:
 cargo xtask flash --example cpuid
 cargo xtask report
 ```
+
+### Default-HSE RCC and delay regression check
+
+```sh
+cargo xtask flash --example rcc_delay_check
+sleep 5
+cargo xtask report
+```
+
+This V3F-only check uses the default 25 MHz HSE with the 400 MHz preset,
+checks the cached V3F/V5F frequencies and RCC refresh, and verifies SysTick
+compare values for rounded-up nanosecond delays, zero delay, and exact
+microsecond/millisecond delays. It does not wake hart 1 or print over SDI.
+The existing mailbox fields are reused without changing its ABI:
+
+- `dualcore marker`: 1 = init entered, 2 = init returned, 3 = checks passed.
+- `atomics total`: failed check count (**0** means success; ignore the generic
+  report's expected-2000000 annotation for this example).
+- `pingpong ping/pong`: cached V3F/V5F Hz (**100000000 / 400000000**).
+- `dualcore counter`: one-second heartbeat.
+
+Read once per fresh flash. During validation, a second `report` after detach
+caused the program to re-enter initialization and fail the CMP checks; this
+probe/attach interaction is not resolved here. Separate fresh runs with a
+5-second and a 10-second quiet window reported counters 5 and 10 respectively.
+CMP checks verify programmed cycles, not physical nanosecond pulse widths.
 
 ### Handing over to hart 1
 

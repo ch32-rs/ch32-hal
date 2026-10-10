@@ -216,7 +216,14 @@ pub unsafe fn init(config: Config) {
         }
     }
 
-    let hse_hz = config.hse.map(|h| h.freq);
+    // HSE recipes use the default crystal when no override was supplied.
+    // Measure with the same frequency that was used to configure the PLL.
+    let hse_hz = config.hse.map(|h| h.freq).or_else(|| match config.recipe {
+        Recipe::M400V5f400V3f100 { osc: Oscillator::Hse }
+        | Recipe::M480V5f240V3f120 { osc: Oscillator::Hse }
+        | Recipe::M480V5f480V3f120 { osc: Oscillator::Hse } => Some(HSE_FREQUENCY_25M),
+        _ => None,
+    });
     refresh_clocks(hse_hz);
 }
 
