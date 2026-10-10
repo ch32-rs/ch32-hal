@@ -136,8 +136,8 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
         _irqs: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>
             + interrupt::typelevel::Binding<T::WakeupInterrupt, WakeupInterruptHandler<T>>
             + 'd,
-        dp: Peri<'d, impl DpPin<T, 0>>,
-        dm: Peri<'d, impl DmPin<T, 0>>,
+        dp: Peri<'d, impl DpPin<T>>,
+        dm: Peri<'d, impl DmPin<T>>,
         ep_buffer: &'d mut [EndpointDataBuffer<SIZE>; NR_EP],
     ) -> Self {
         assert!(ep_buffer.len() > 0);
