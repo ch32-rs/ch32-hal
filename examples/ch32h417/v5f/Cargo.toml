@@ -1,0 +1,40 @@
+[package]
+name = "ch32h417-v5f"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Hart 1 is written against metapac only — no `ch32-hal`, no embassy. The boot
+# core owns bring-up (there is one shared RCC block, and the HAL's
+# `Peripherals::take()` singleton plus its PLL re-init cannot run twice on the
+# same chip), so this core drives registers through `ch32-metapac` and reaches
+# printf through `src/sdi.rs`. `src/lib.rs` documents the same rule.
+# `memory-x` supplies the linker scripts (`memory.x`/`device.x`) that qingke-rt's
+# `link.x` includes; the HAL used to forward it. It pulls no code.
+ch32-metapac = { version = "0.1.1", features = [
+    "ch32h417qeu6-qingke-v5f",
+    "memory-x",
+] }
+# Selecting the leaf core is now this crate's job: the HAL's `ch32h417qeu6-v5f`
+# feature used to do it. Enabling `qingke-rt/v5f` also enables `qingke/v5f`.
+# The cross-core mailbox ABI. Note: no `define` feature here — this image does
+# not contain the mailbox, it only consumes the address the boot core exported.
+ch32h417-ipc = { path = "../ipc" }
+
+# `dual-core` gates `qingke::pfic::HartId` (read from PFIC_SCTLR), which the
+# sdi_cpuid demo uses to report which hart is executing.
+# `unsafe-trust-wch-atomics`: the AtomicU32 CAS operations are needed for real
+# cross-core atomics (both target JSONs now say `atomic-cas: true`, which compiles
+# them to the A-extension `amoadd.w`/`lr.w`+`sc.w`). Without this feature qingke
+# refuses to build a target that advertises atomics, because its critical-section
+# implementation only masks *this* hart's interrupts (`SingleHartCriticalSection`)
+# and therefore cannot serialise the two cores.
+qingke = { version = "0.8.2", features = ["v5f", "dual-core", "unsafe-trust-wch-atomics"] }
+qingke-rt = { version = "0.8.2", features = ["v5f"] }
+panic-halt = "1.0"
+
+[profile.release]
+debug = 2
+strip = false
+lto = false
+opt-level = 3

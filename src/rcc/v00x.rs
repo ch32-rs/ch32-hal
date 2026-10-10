@@ -6,26 +6,10 @@ pub const HSI_FREQUENCY: Hertz = Hertz(24_000_000);
 
 pub const LSI_FREQUENCY: Hertz = Hertz(128_000);
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum HseMode {
-    /// crystal/ceramic oscillator (HSEBYP=0)
-    Oscillator,
-    /// external analog clock (low swing) (HSEBYP=1)
-    Bypass,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Hse {
-    /// HSE frequency.
-    pub freq: Hertz,
-    /// HSE mode.
-    pub mode: HseMode,
-}
-
 pub struct Config {
     // won't close hsi
     // pub hsi: bool,
-    pub hse: Option<Hse>,
+    pub hse: Option<super::Hse>,
     pub sys: Sysclk,
 
     pub pll_src: PllSource,
@@ -49,9 +33,9 @@ impl Config {
     };
 
     pub const SYSCLK_FREQ_24MHZ_HSE: Config = Config {
-        hse: Some(Hse {
+        hse: Some(super::Hse {
             freq: Hertz(24_000_000),
-            mode: HseMode::Oscillator,
+            mode: super::HseMode::Oscillator,
         }),
         sys: Sysclk::HSE,
         pll_src: PllSource::HSE,
@@ -59,9 +43,9 @@ impl Config {
     };
 
     pub const SYSCLK_FREQ_48MHZ_HSE: Config = Config {
-        hse: Some(Hse {
+        hse: Some(super::Hse {
             freq: Hertz(24_000_000),
-            mode: HseMode::Oscillator,
+            mode: super::HseMode::Oscillator,
         }),
         sys: Sysclk::PLL,
         pll_src: PllSource::HSE,
@@ -90,7 +74,7 @@ pub(crate) unsafe fn init(config: Config) {
 
         // enable HSE
         RCC.ctlr().modify(|w| {
-            w.set_hsebyp(config.hse.unwrap().mode == HseMode::Bypass);
+            w.set_hsebyp(config.hse.unwrap().mode == super::HseMode::Bypass);
             w.set_hseon(true);
         });
         while !RCC.ctlr().read().hserdy() {}
@@ -151,11 +135,52 @@ pub(crate) unsafe fn init(config: Config) {
         _ => panic!(),
     };
 
-    super::CLOCKS.sysclk = Hertz(sysclk);
-    super::CLOCKS.hclk = Hertz(hclk);
-    super::CLOCKS.pclk1 = Hertz(hclk);
-    super::CLOCKS.pclk2 = Hertz(hclk);
+    refresh_clocks(config.hse.map(|h| h.freq));
+}
 
-    super::CLOCKS.pclk1_tim = Hertz(sysclk);
-    super::CLOCKS.pclk2_tim = Hertz(sysclk);
+pub(crate) unsafe fn refresh_clocks(hse: Option<Hertz>) {
+    super::set_clocks(clocks_from_registers(hse));
+}
+
+fn clocks_from_registers(hse: Option<Hertz>) -> super::Clocks {
+    use crate::pac::rcc::vals::Sw as Sysclk;
+
+    let cfgr = RCC.cfgr0().read();
+    let sysclk = match cfgr.sws() {
+        Sysclk::HSI => HSI_FREQUENCY.0,
+        Sysclk::HSE => hse.expect("RCC: HSE frequency required").0,
+        Sysclk::PLL => match cfgr.pllsrc() {
+            PllSource::HSI => HSI_FREQUENCY.0 * 2,
+            PllSource::HSE => hse.expect("RCC: HSE frequency required").0 * 2,
+        },
+        _ => HSI_FREQUENCY.0,
+    };
+    let hclk = hclk_hz(sysclk, cfgr.hpre());
+    super::Clocks {
+        sysclk: Hertz(sysclk),
+        hclk: Hertz(hclk),
+        pclk1: Hertz(hclk),
+        pclk2: Hertz(hclk),
+        pclk1_tim: Hertz(sysclk),
+        pclk2_tim: Hertz(sysclk),
+    }
+}
+
+fn hclk_hz(sysclk: u32, hpre: HBPrescaler) -> u32 {
+    match hpre {
+        HBPrescaler::DIV1 => sysclk,
+        HBPrescaler::DIV2 => sysclk / 2,
+        HBPrescaler::DIV3 => sysclk / 3,
+        HBPrescaler::DIV4 => sysclk / 4,
+        HBPrescaler::DIV5 => sysclk / 5,
+        HBPrescaler::DIV6 => sysclk / 6,
+        HBPrescaler::DIV7 => sysclk / 7,
+        HBPrescaler::DIV8 => sysclk / 8,
+        HBPrescaler::DIV16 => sysclk / 16,
+        HBPrescaler::DIV32 => sysclk / 32,
+        HBPrescaler::DIV64 => sysclk / 64,
+        HBPrescaler::DIV128 => sysclk / 128,
+        HBPrescaler::DIV256 => sysclk / 256,
+        _ => sysclk,
+    }
 }

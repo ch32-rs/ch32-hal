@@ -1,0 +1,15 @@
+[package]
+name = "ch32h417-ipc"
+version = "0.1.0"
+edition = "2021"
+description = "Shared mailbox for the CH32H417 dual-core examples: one layout, used by both cores and by xtask report."
+
+[features]
+# Turn on the *defining* side: the `MAILBOX` static placed in `.shared`. Only the
+# boot core's image enables this, so the second core's image contains no
+# `.shared` section at all — it consumes the address the boot core exported.
+define = []
+
+[dependencies]
+# Deliberately empty: this crate must build for both RISC-V harts and for the
+# host (the xtask links it to learn the field offsets).

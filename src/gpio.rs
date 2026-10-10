@@ -33,23 +33,29 @@ pub enum Speed {
     High = 0b11,
 }
 
-#[cfg(any(gpio_v3, gpio_v0))]
-impl From<Speed> for vals::Mode {
-    fn from(value: Speed) -> Self {
-        use Speed::*;
-
-        match value {
-            Medium => vals::Mode::OUTPUT_10MHZ,
-            Low => vals::Mode::OUTPUT_2MHZ,
-            High => vals::Mode::OUTPUT_50MHZ,
+impl Speed {
+    /// Compile-time conversion to the `MODEy` field value, family-aware.
+    /// gpio_x0 collapses every speed to OUTPUT_50MHZ — its GPIO doesn't
+    /// expose the slower modes.
+    #[cfg(any(gpio_v3, gpio_v0))]
+    pub const fn to_mode(self) -> vals::Mode {
+        match self {
+            Speed::Medium => vals::Mode::OUTPUT_10MHZ,
+            Speed::Low => vals::Mode::OUTPUT_2MHZ,
+            Speed::High => vals::Mode::OUTPUT_50MHZ,
         }
+    }
+
+    #[cfg(gpio_x0)]
+    pub const fn to_mode(self) -> vals::Mode {
+        vals::Mode::OUTPUT_50MHZ
     }
 }
 
-#[cfg(gpio_x0)]
 impl From<Speed> for vals::Mode {
-    fn from(_value: Speed) -> Self {
-        vals::Mode::OUTPUT_50MHZ
+    #[inline]
+    fn from(value: Speed) -> Self {
+        value.to_mode()
     }
 }
 
@@ -460,6 +466,45 @@ impl From<AFType> for vals::Cnf {
     }
 }
 
+/// Bundle of mode/cnf/pull settings for an alternate-function pin.
+///
+/// Mirrors embassy-stm32's `gpio_v1::AfType`. Drivers pass a single
+/// `AfType` per pin to `Pin::set_as_af()` (via the `new_pin!` /
+/// `set_as_af!` macros) instead of juggling separate `set_as_af_output` /
+/// `set_as_input` calls. On qingke V0/V3 GPIO the AF concept is the same
+/// regardless of direction: input pins set MODE=Input + CNF=Floating/Pull,
+/// output pins set MODE=2/10/50MHz + CNF=AF_PushPull/AF_OpenDrain.
+#[derive(Copy, Clone)]
+pub struct AfType {
+    mode: vals::Mode,
+    cnf: vals::Cnf,
+    pull: Pull,
+}
+
+impl AfType {
+    /// Input AF pin (e.g. UART RX, SPI MISO).
+    pub const fn input(pull: Pull) -> Self {
+        let cnf = match pull {
+            Pull::None => vals::Cnf::FLOATING_IN__OPEN_DRAIN_OUT,
+            // PULL_IN and AF_PUSH_PULL_OUT share the same CNF encoding (0b10);
+            // for input mode this means "input with pull-up/down" and pull
+            // direction comes from ODR via `set_pull` below.
+            _ => vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
+        };
+        Self { mode: vals::Mode::INPUT, cnf, pull }
+    }
+
+    /// Output AF pin (e.g. UART TX, SPI MOSI/SCK, I2C SCL/SDA).
+    pub const fn output(output_type: OutputType, speed: Speed) -> Self {
+        let cnf = match output_type {
+            OutputType::PushPull => vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
+            #[cfg(not(gpio_x0))]
+            OutputType::OpenDrain => vals::Cnf::AF_OPEN_DRAIN_OUT,
+        };
+        Self { mode: speed.to_mode(), cnf, pull: Pull::None }
+    }
+}
+
 /// Alternate function type settings, CNF, when MODE>0b00
 
 pub(crate) trait SealedPin {
@@ -570,6 +615,32 @@ pub(crate) trait SealedPin {
         self.set_mode_cnf(speed.into(), af_type.into());
     }
 
+    /// Unified AF configuration — preferred by `new_pin!` / `set_as_af!`.
+    ///
+    /// On every ch32 family the basic GPIO mode/cnf is still V3-style
+    /// (the legacy AF push-pull / open-drain CNF values), so the function
+    /// signature stays the same. On CH32H4 an additional 4-bit AF number
+    /// has to be written to `AFIO.GPIO_AFR[n]` to pick which peripheral
+    /// signal connects to the pin — that's the `#[cfg(afio_h4)]` arm. On
+    /// every other chip the function selection is done indirectly via the
+    /// `AFIO.PCFR{1,2}` central remap registers (handled separately by
+    /// `pin.afio_remap()`).
+    #[inline]
+    fn set_as_af(&self, #[cfg(afio_h4)] af_num: u8, af_type: AfType) {
+        self.set_mode_cnf(af_type.mode, af_type.cnf);
+        self.set_pull(af_type.pull);
+        #[cfg(afio_h4)]
+        {
+            // AFIO.gpio_afr is a 12-element array: index = port_idx * 2 +
+            // (pin / 8), inner AFR field = pin % 8. port_idx maps A=0..F=5.
+            let port = self._port() as usize;
+            let pin = self._pin() as usize;
+            crate::pac::AFIO
+                .gpio_afr(port * 2 + (pin / 8))
+                .modify(|w| w.set_afr(pin % 8, af_num));
+        }
+    }
+
     /// Analog mode, both input and output
     #[inline]
     fn set_as_analog(&self) {
@@ -666,6 +737,11 @@ foreach_pin!(
 /// Enable the GPIO peripheral clock.
 
 pub(crate) unsafe fn init(_cs: CriticalSection) {
+    // Gated on "the chip has an AFIO peripheral", like embassy-stm32's
+    // `gpio::init`. CH32H4 needs it too: its pin mux lives in
+    // `AFIO.GPIO_AFR`, which `set_as_af` writes for every AF pin. With the
+    // AFIO clock off those writes are silently dropped and every pin stays
+    // on AF0.
     #[cfg(afio)]
     <crate::peripherals::AFIO as crate::peripheral::SealedRccPeripheral>::enable_and_reset_with_cs(_cs);
 
@@ -800,3 +876,4 @@ impl<'d> embedded_hal::digital::StatefulOutputPin for Flex<'d> {
         Ok((*self).is_set_low())
     }
 }
+

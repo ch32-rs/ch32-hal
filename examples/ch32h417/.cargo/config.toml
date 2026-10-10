@@ -1,0 +1,8 @@
+# `cargo xtask …` from this directory drives the two core crates below.
+#
+# It has to run the xtask for the host target, which is why this file carries no
+# `[build] target`: the per-core configuration lives in `v3f/.cargo/config.toml`
+# and `v5f/.cargo/config.toml`, and the xtask sets the working directory to a
+# core crate before invoking cargo so that configuration applies.
+[alias]
+xtask = "run --quiet --manifest-path xtask/Cargo.toml --"
