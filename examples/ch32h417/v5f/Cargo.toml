@@ -33,6 +33,11 @@ qingke = { version = "0.8.2", features = ["v5f", "dual-core", "unsafe-trust-wch-
 qingke-rt = { version = "0.8.2", features = ["v5f"] }
 panic-halt = "1.0"
 
+# The BME280/BMP280 driver, used by `src/bin/bme280.rs`. Pulled in here rather
+# than through the HAL: hart 1 drives I2C1 itself (`src/i2c.rs`).
+edrv-bme280 = "0.1.1"
+embedded-hal = "1.0.0"
+
 [profile.release]
 debug = 2
 strip = false

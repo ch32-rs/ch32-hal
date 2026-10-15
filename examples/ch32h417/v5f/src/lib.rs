@@ -27,6 +27,7 @@ pub use ch32_metapac as pac;
 
 pub mod cache;
 pub mod cpuid;
+pub mod i2c;
 pub mod sdi;
 
 /// Layout of the shared region, as exported by the boot core's ELF.

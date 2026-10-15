@@ -37,7 +37,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Bumped whenever the field layout below changes. Both images are flashed
 /// independently, so a stale half must be able to notice it does not match.
-pub const LAYOUT_VERSION: u32 = 3;
+pub const LAYOUT_VERSION: u32 = 4;
 
 /// Number of probed CSRs in [`Mailbox::cpuid_values`].
 pub const CPUID_CSRS: usize = 14;
@@ -80,6 +80,20 @@ pub const CAS_INCREMENTS: u32 = 1_000_000;
 pub const CAS_DONE_V3F: u32 = 1 << 0;
 pub const CAS_DONE_V5F: u32 = 1 << 1;
 
+/// `bme280`: hart 1 has not started the sensor yet.
+pub const BME280_IDLE: u32 = 0;
+/// `bme280`: hart 1 is bringing the sensor up.
+pub const BME280_INIT: u32 = 1;
+/// `bme280`: the sensor answered and is a BME280 (humidity present).
+pub const BME280_OK: u32 = 2;
+/// `bme280`: the sensor answered but is a BMP280 (no humidity).
+pub const BME280_BMP: u32 = 3;
+/// `bme280`: the sensor did not answer, or init failed.
+pub const BME280_FAIL: u32 = 4;
+
+/// `bme280_seq` with no sample published yet.
+pub const BME280_NO_SAMPLE: u32 = 0;
+
 /// The shared structure. Field order is the ABI — append new fields at the end
 /// and bump [`LAYOUT_VERSION`].
 #[repr(C)]
@@ -117,6 +131,17 @@ pub struct Mailbox {
     /// `pingpong`: the boot core's echo — equal to [`Self::ping`] once it has
     /// answered that round, so `ping != pong` means "a round is outstanding".
     pub pong: AtomicU32,
+    /// `bme280`: hart 1's sensor state, one of the `BME280_*` constants.
+    pub bme280_status: AtomicU32,
+    /// `bme280`: hart 1's sample counter. [`BME280_NO_SAMPLE`] until the first
+    /// reading is published; the boot core prints a sample when this changes.
+    pub bme280_seq: AtomicU32,
+    /// `bme280`: temperature in 1/100 °C, as `edrv_bme280` reports it.
+    pub bme280_temperature: AtomicU32,
+    /// `bme280`: pressure in 1/100 Pa.
+    pub bme280_pressure: AtomicU32,
+    /// `bme280`: relative humidity in 1/100 %RH (0 on a BMP280).
+    pub bme280_humidity: AtomicU32,
 }
 
 impl Mailbox {
@@ -140,6 +165,11 @@ impl Mailbox {
             cas_done: AtomicU32::new(0),
             ping: AtomicU32::new(0),
             pong: AtomicU32::new(0),
+            bme280_status: AtomicU32::new(0),
+            bme280_seq: AtomicU32::new(0),
+            bme280_temperature: AtomicU32::new(0),
+            bme280_pressure: AtomicU32::new(0),
+            bme280_humidity: AtomicU32::new(0),
         }
     }
 
@@ -163,6 +193,11 @@ impl Mailbox {
         self.cas_done.store(0, Ordering::Relaxed);
         self.ping.store(0, Ordering::Relaxed);
         self.pong.store(0, Ordering::Relaxed);
+        self.bme280_status.store(0, Ordering::Relaxed);
+        self.bme280_seq.store(0, Ordering::Relaxed);
+        self.bme280_temperature.store(0, Ordering::Relaxed);
+        self.bme280_pressure.store(0, Ordering::Relaxed);
+        self.bme280_humidity.store(0, Ordering::Relaxed);
         self.layout_version.store(LAYOUT_VERSION, Ordering::Relaxed);
     }
 
