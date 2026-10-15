@@ -819,6 +819,31 @@ fn report() {
     println!("  pingpong  ping    = {}", word(at!(ping)));
     println!("  pingpong  pong    = {}", word(at!(pong)));
 
+    // `bme280`: hart 1 reads the sensor, this prints the last sample it stored.
+    // Temperature is 1/100 °C, pressure 1/100 Pa, humidity 1/100 %RH.
+    let bme_status = word(at!(bme280_status));
+    let bme_seq = word(at!(bme280_seq));
+    let bme_state = match bme_status {
+        ch32h417_ipc::BME280_IDLE => "idle",
+        ch32h417_ipc::BME280_INIT => "init",
+        ch32h417_ipc::BME280_OK => "ok",
+        ch32h417_ipc::BME280_BMP => "bmp280",
+        ch32h417_ipc::BME280_FAIL => "FAILED",
+        _ => "unknown",
+    };
+    println!("  bme280    status  = {bme_status} ({bme_state}), sample {bme_seq}");
+    if bme_seq != ch32h417_ipc::BME280_NO_SAMPLE {
+        let temperature = word(at!(bme280_temperature)) as i32;
+        let pressure = word(at!(bme280_pressure));
+        let humidity = word(at!(bme280_humidity));
+        println!(
+            "  bme280    reading = {:.2} C, {:.2} hPa, {:.2} %RH",
+            temperature as f32 / 100.0,
+            pressure as f32 / 10_000.0,
+            humidity as f32 / 100.0
+        );
+    }
+
     // `atomics`: both cores `fetch_add` the same word, so the total is the
     // litmus test for the A extension actually performing the atomics.
     let cas_total = word(at!(cas_total));
