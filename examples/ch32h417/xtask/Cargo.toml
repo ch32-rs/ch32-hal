@@ -1,0 +1,10 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The shared mailbox definition: the tool computes its field offsets from the
+# same struct both cores use, so the layout cannot drift from what it decodes.
+ch32h417-ipc = { path = "../ipc" }

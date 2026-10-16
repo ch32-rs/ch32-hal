@@ -17,22 +17,6 @@ use crate::time::Hertz;
 pub const HSI_FREQUENCY: Hertz = Hertz(8_000_000);
 pub const LSI_FREQUENCY: Hertz = Hertz(40_000);
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum HseMode {
-    /// crystal/ceramic oscillator (HSEBYP=0)
-    Oscillator,
-    /// external analog clock (low swing) (HSEBYP=1)
-    Bypass,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Hse {
-    /// HSE frequency.
-    pub freq: Hertz,
-    /// HSE mode.
-    pub mode: HseMode,
-}
-
 #[derive(Clone, Copy)]
 pub enum PllPreDiv {
     DIV1 = 1,
@@ -51,7 +35,7 @@ pub struct Pll {
 pub struct Config {
     // won't close hsi
     // pub hsi: bool,
-    pub hse: Option<Hse>,
+    pub hse: Option<super::Hse>,
     pub sys: Sysclk,
 
     pub pll_src: PllSource,
@@ -64,9 +48,9 @@ pub struct Config {
 
 impl Config {
     pub const SYSCLK_FREQ_48MHZ_HSE: Config = Self {
-        hse: Some(Hse {
+        hse: Some(super::Hse {
             freq: Hertz(8_000_000),
-            mode: HseMode::Oscillator,
+            mode: super::HseMode::Oscillator,
         }),
         sys: Sysclk::PLL,
         pll_src: PllSource::HSE,
@@ -79,9 +63,9 @@ impl Config {
         apb2_pre: APBPrescaler::DIV1,
     };
     pub const SYSCLK_FREQ_72MHZ_HSE: Config = Self {
-        hse: Some(Hse {
+        hse: Some(super::Hse {
             freq: Hertz(8_000_000),
-            mode: HseMode::Oscillator,
+            mode: super::HseMode::Oscillator,
         }),
         sys: Sysclk::PLL,
         pll_src: PllSource::HSE,
@@ -94,9 +78,9 @@ impl Config {
         apb2_pre: APBPrescaler::DIV2,
     };
     pub const SYSCLK_FREQ_96MHZ_HSE: Config = Self {
-        hse: Some(Hse {
+        hse: Some(super::Hse {
             freq: Hertz(8_000_000),
-            mode: HseMode::Oscillator,
+            mode: super::HseMode::Oscillator,
         }),
         sys: Sysclk::PLL,
         pll_src: PllSource::HSE,
@@ -174,7 +158,7 @@ pub(crate) unsafe fn init(config: Config) {
             None
         }
         Some(hse) => {
-            RCC.ctlr().modify(|w| w.set_hsebyp(hse.mode != HseMode::Oscillator));
+            RCC.ctlr().modify(|w| w.set_hsebyp(hse.mode != super::HseMode::Oscillator));
             RCC.ctlr().modify(|w| w.set_hseon(true));
             while !RCC.ctlr().read().hserdy() {}
             Some(hse.freq)
@@ -263,13 +247,56 @@ pub(crate) unsafe fn init(config: Config) {
     });
     while RCC.cfgr0().read().sws() != config.sys {}
 
-    super::CLOCKS.sysclk = sys;
-    super::CLOCKS.hclk = hclk;
-    super::CLOCKS.pclk1 = pclk1;
-    super::CLOCKS.pclk2 = pclk2;
+    refresh_clocks(config.hse.map(|h| h.freq));
+}
 
-    super::CLOCKS.pclk1_tim = pclk1_tim;
-    super::CLOCKS.pclk2_tim = pclk2_tim;
+pub(crate) unsafe fn refresh_clocks(hse: Option<Hertz>) {
+    super::set_clocks(clocks_from_registers(hse));
+}
+
+fn clocks_from_registers(hse: Option<Hertz>) -> super::Clocks {
+    let cfgr = RCC.cfgr0().read();
+    let sys = sysclk_hz(cfgr.sws(), &cfgr, hse);
+    let hclk = sys / cfgr.hpre();
+    let (pclk1, pclk1_tim) = calc_pclk(hclk, cfgr.ppre1());
+    let (pclk2, pclk2_tim) = calc_pclk(hclk, cfgr.ppre2());
+    super::Clocks {
+        sysclk: sys,
+        hclk,
+        pclk1,
+        pclk2,
+        pclk1_tim,
+        pclk2_tim,
+    }
+}
+
+fn sysclk_hz(sw: Sysclk, cfgr: &crate::pac::rcc::regs::Cfgr0, hse: Option<Hertz>) -> Hertz {
+    match sw {
+        Sysclk::HSI => HSI_FREQUENCY,
+        Sysclk::HSE => hse.expect("RCC: HSE frequency required"),
+        Sysclk::PLL => {
+            let src = match cfgr.pllsrc() {
+                PllSource::HSI => {
+                    let div2 = !EXTEND.ctr().read().hsipre();
+                    if div2 {
+                        HSI_FREQUENCY / 2u32
+                    } else {
+                        HSI_FREQUENCY
+                    }
+                }
+                PllSource::HSE => {
+                    let hse = hse.expect("RCC: HSE frequency required");
+                    if cfgr.pllxtpre() {
+                        hse / 2u32
+                    } else {
+                        hse
+                    }
+                }
+            };
+            src * cfgr.pllmul()
+        }
+        _ => HSI_FREQUENCY,
+    }
 }
 
 fn calc_pclk<D>(hclk: Hertz, ppre: D) -> (Hertz, Hertz)
@@ -277,7 +304,7 @@ where
     Hertz: ops::Div<D, Output = Hertz>,
 {
     let pclk = hclk / ppre;
-    let pclk_tim = if hclk == pclk { pclk } else { pclk * 2u32 };
+    let pclk_tim = super::apb_timer_clk(hclk, pclk, true);
     (pclk, pclk_tim)
 }
 

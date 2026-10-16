@@ -2,7 +2,7 @@ use crate::pac::rcc::vals::Hpre as AHBPrescaler;
 use crate::pac::{FLASH, RCC};
 use crate::time::Hertz;
 
-const HSI_FREQUENCY: Hertz = Hertz(48_000_000);
+pub const HSI_FREQUENCY: Hertz = Hertz(48_000_000);
 
 // const DEFAULT_FREQUENCY: Hertz = Hertz(8_000_000);
 
@@ -74,13 +74,42 @@ pub(crate) unsafe fn init(config: Config) {
         w.set_hpre(config.ahb_pre);
     });
 
-    super::CLOCKS.sysclk = HSI_FREQUENCY;
-    super::CLOCKS.hclk = hclk;
-    super::CLOCKS.pclk1 = hclk;
-    super::CLOCKS.pclk2 = hclk;
+    refresh_clocks(None);
+}
 
-    super::CLOCKS.pclk1_tim = hclk;
-    super::CLOCKS.pclk2_tim = hclk;
+pub(crate) unsafe fn refresh_clocks(_hse: Option<Hertz>) {
+    super::set_clocks(clocks_from_registers());
+}
+
+fn clocks_from_registers() -> super::Clocks {
+    let hpre = RCC.cfgr0().read().hpre();
+    let hclk = hclk_from_hsi(hpre);
+    super::Clocks {
+        sysclk: HSI_FREQUENCY,
+        hclk,
+        pclk1: hclk,
+        pclk2: hclk,
+        pclk1_tim: hclk,
+        pclk2_tim: hclk,
+    }
+}
+
+fn hclk_from_hsi(hpre: AHBPrescaler) -> Hertz {
+    match hpre {
+        AHBPrescaler::DIV1 => HSI_FREQUENCY,
+        AHBPrescaler::DIV2 | AHBPrescaler::DIV2_ALT => HSI_FREQUENCY / 2_u32,
+        AHBPrescaler::DIV3 => HSI_FREQUENCY / 3_u32,
+        AHBPrescaler::DIV4 | AHBPrescaler::DIV4_ALT => HSI_FREQUENCY / 4_u32,
+        AHBPrescaler::DIV5 => HSI_FREQUENCY / 5_u32,
+        AHBPrescaler::DIV6 => HSI_FREQUENCY / 6_u32,
+        AHBPrescaler::DIV7 => HSI_FREQUENCY / 7_u32,
+        AHBPrescaler::DIV8 | AHBPrescaler::DIV8_ALT => HSI_FREQUENCY / 8_u32,
+        AHBPrescaler::DIV16 => HSI_FREQUENCY / 16_u32,
+        AHBPrescaler::DIV32 => HSI_FREQUENCY / 32_u32,
+        AHBPrescaler::DIV64 => HSI_FREQUENCY / 64_u32,
+        AHBPrescaler::DIV128 => HSI_FREQUENCY / 128_u32,
+        AHBPrescaler::DIV256 => HSI_FREQUENCY / 256_u32,
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

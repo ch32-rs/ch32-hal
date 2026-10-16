@@ -7,7 +7,7 @@
     "data-layout": "e-m:e-p:32:32-i64:64-n32-S32",
     "eh-frame-header": false,
     "emit-debug-gdb-scripts": false,
-    "features": "+e,+zmmul,+c,+forced-atomics",
+    "features": "+e,+zmmul,+c,+forced-atomics,+xwchc",
     "linker": "rust-lld",
     "linker-flavor": "gnu-lld",
     "llvm-target": "riscv32",

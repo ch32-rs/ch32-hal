@@ -18,8 +18,8 @@ ch32-metapac = { features = [
     "rt",
 ], version = "0.1.1" }
 
-qingke = { version = "0.8", features = ["critical-section-impl"] }
-qingke-rt = { version = "0.8", optional = true }
+qingke = { version = "0.8.2", features = ["critical-section-impl"] }
+qingke-rt = { version = "0.8.2", optional = true }
 
 embedded-hal = { package = "embedded-hal", version = "1.0" }
 embedded-hal-async = "1.0.0"
@@ -171,3 +171,21 @@ ch32x035g8u6 = ["ch32-metapac/ch32x035g8u6", "qingke-rt/v4c", "qingke/v4c"]
 ch32x035r8t6 = ["ch32-metapac/ch32x035r8t6", "qingke-rt/v4c", "qingke/v4c"]
 ch641 = ["ch32-metapac/ch641", "qingke-rt/v2a", "qingke/v2a"]
 ch643 = ["ch32-metapac/ch643", "qingke-rt/v4c", "qingke/v4c"]
+
+# H4 chip features — paired with ch32-data's CH32H4 family definitions.
+# Cores: V3F (qingke-v3f, hart 0, control core) and V5F (qingke-v5f, hart
+# 1, compute core with FP + ICache). Only the AFIO + GPIO + USART
+# scaffolding is wired up via this PR; ADC/DAC/DMA/USBPD/RCC drivers still
+# need H4-specific porting (separate follow-up PRs).
+ch32h417qeu6-v3f = [
+    "ch32-metapac/ch32h417qeu6-qingke-v3f",
+    "qingke-rt/v3f",
+    "qingke/v3f",
+    "qingke/dual-core",
+]
+ch32h417qeu6-v5f = [
+    "ch32-metapac/ch32h417qeu6-qingke-v5f",
+    "qingke-rt/v5f",
+    "qingke/v5f",
+    "qingke/dual-core",
+]

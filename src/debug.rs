@@ -2,19 +2,11 @@
 //!
 //! See-also: https://github.com/openwch/ch32v003/blob/main/EVT/EXAM/SDI_Printf/SDI_Printf/Debug/debug.c
 
+use qingke::dm::{DATA0, DATA1};
 use qingke::riscv;
 
-#[cfg(any(qingke_v3, qingke_v4))]
-mod regs {
-    pub const DEBUG_DATA0_ADDRESS: *mut u32 = 0xE000_0380 as *mut u32;
-    pub const DEBUG_DATA1_ADDRESS: *mut u32 = 0xE000_0384 as *mut u32;
-}
-
-#[cfg(qingke_v2)]
-mod regs {
-    pub const DEBUG_DATA0_ADDRESS: *mut u32 = 0xE00000F4 as *mut u32;
-    pub const DEBUG_DATA1_ADDRESS: *mut u32 = 0xE00000F8 as *mut u32;
-}
+const DEBUG_DATA0_ADDRESS: *mut u32 = DATA0 as *mut u32;
+const DEBUG_DATA1_ADDRESS: *mut u32 = DATA1 as *mut u32;
 
 pub struct SDIPrint;
 
@@ -22,19 +14,63 @@ impl SDIPrint {
     pub fn enable() {
         unsafe {
             // Enable SDI print
-            core::ptr::write_volatile(regs::DEBUG_DATA0_ADDRESS, 0);
+            core::ptr::write_volatile(DEBUG_DATA0_ADDRESS, 0);
             riscv::asm::delay(100000);
         }
     }
 
     #[inline]
-    fn is_busy() -> bool {
-        unsafe { core::ptr::read_volatile(regs::DEBUG_DATA0_ADDRESS) != 0 }
+    pub fn is_busy() -> bool {
+        unsafe { core::ptr::read_volatile(DEBUG_DATA0_ADDRESS) != 0 }
+    }
+
+    /// Write, giving up (and dropping the rest of the message) once a chunk
+    /// waits longer than [`SPINS`] iterations.
+    ///
+    /// SDI print is only drained while the debugger has it armed
+    /// (`wlink --enable-sdi-print`). With it disarmed the blocking
+    /// [`core::fmt::Write`] impl spins forever on the second chunk — which is
+    /// fine for a core that has nothing else to do, but not for a core in a
+    /// control loop (or on hart 1, which must not stall behind a console).
+    pub fn write_str_lossy(s: &str) -> core::fmt::Result {
+        write(s, Some(SPINS))
     }
 }
 
+/// Writer that routes formatting through [`SDIPrint::write_str_lossy`], so a
+/// `try_println!` never blocks even though `SDIPrint`'s own [`core::fmt::Write`]
+/// impl does.
+struct LossyWriter;
+
+impl core::fmt::Write for LossyWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        SDIPrint::write_str_lossy(s)
+    }
+}
+
+/// Format `args` into the lossy writer and terminate the line.
+pub fn write_fmt_lossy(args: core::fmt::Arguments) -> core::fmt::Result {
+    use core::fmt::Write as _;
+
+    let mut writer = LossyWriter;
+    core::fmt::write(&mut writer, args)?;
+    writer.write_str("\n")
+}
+
+/// Iterations [`SDIPrint::write_str_lossy`] tolerates per chunk. Kept small
+/// because each iteration is a *debug-module* read, which is far slower than a
+/// normal load — and deliberately *not* remembered across calls: a console that
+/// attaches later must still receive output, so each message pays its own budget.
+const SPINS: u32 = 20_000;
+
 impl core::fmt::Write for SDIPrint {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        write(s, None)
+    }
+}
+
+fn write(s: &str, spins: Option<u32>) -> core::fmt::Result {
+    {
         let mut data = [0u8; 8];
         for chunk in s.as_bytes().chunks(7) {
             data[1..chunk.len() + 1].copy_from_slice(chunk);
@@ -44,16 +80,38 @@ impl core::fmt::Write for SDIPrint {
             let data1 = u32::from_le_bytes(data[4..].try_into().unwrap());
             let data0 = u32::from_le_bytes(data[..4].try_into().unwrap());
 
-            while SDIPrint::is_busy() {}
+            let mut waited = 0u32;
+            while SDIPrint::is_busy() {
+                if let Some(limit) = spins {
+                    waited += 1;
+                    if waited > limit {
+                        return Ok(());
+                    }
+                }
+            }
 
             unsafe {
-                core::ptr::write_volatile(regs::DEBUG_DATA1_ADDRESS, data1);
-                core::ptr::write_volatile(regs::DEBUG_DATA0_ADDRESS, data0);
+                core::ptr::write_volatile(DEBUG_DATA1_ADDRESS, data1);
+                core::ptr::write_volatile(DEBUG_DATA0_ADDRESS, data0);
             }
         }
 
         Ok(())
     }
+}
+
+/// `println!` over SDI that drops the message rather than spinning when the
+/// console is not armed. Use it in control loops; use [`println!`] when the
+/// console is known to be attached.
+#[macro_export]
+macro_rules! try_println {
+    ($($arg:tt)*) => {
+        {
+            // Not `writeln!(&mut SDIPrint, ..)`: that goes through the *blocking*
+            // `Write` impl, which is exactly what this variant exists to avoid.
+            let _ = $crate::debug::write_fmt_lossy(format_args!($($arg)*));
+        }
+    };
 }
 
 #[macro_export]

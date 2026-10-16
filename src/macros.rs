@@ -13,15 +13,102 @@ macro_rules! dma_trait {
     };
 }
 
+// Two pin-trait shapes, selected per chip. They never coexist in one build.
+//
+// - cfg(not(afio_h4)): PCFR remap. `trait Signal<T, const REMAP: u8 = 0>`.
+//   TX and RX share one const, same as the published API. `apply_remap!()`
+//   writes the group via `RemapPeripheral::set_remap` (patches cover split
+//   fields). Every pin entry is its own impl, so one pin can implement
+//   several signals and several groups.
+// - cfg(afio_h4): per-pin AF in `AFIO.GPIO_AFR`. The trait has no remap
+//   parameter; `af_num()` is the value `build.rs` read from `pin.af`.
+//
+// `if_remap!(impl TxPin<T, REMAP>)` keeps the const in the signature on
+// remap chips and drops it on H4.
 macro_rules! pin_trait {
     ($signal:ident, $instance:path) => {
+        #[cfg(not(afio_h4))]
         pub trait $signal<T: $instance, const REMAP: u8 = 0>: crate::gpio::Pin {}
+
+        #[cfg(afio_h4)]
+        pub trait $signal<T: $instance>: crate::gpio::Pin {
+            #[doc = concat!("AF number for `", stringify!($signal), "`.")]
+            fn af_num(&self) -> u8;
+        }
     };
 }
+
 macro_rules! pin_trait_impl {
-    (crate::$mod:ident::$trait:ident, $instance:ident, $pin:ident, $remap:expr) => {
-        impl crate::$mod::$trait<crate::peripherals::$instance, $remap> for crate::peripherals::$pin {}
+    (crate::$mod:ident::$trait:ident, $instance:ident, $pin:ident, $n:expr) => {
+        #[cfg(not(afio_h4))]
+        impl crate::$mod::$trait<crate::peripherals::$instance, $n> for crate::peripherals::$pin {}
+
+        #[cfg(afio_h4)]
+        impl crate::$mod::$trait<crate::peripherals::$instance> for crate::peripherals::$pin {
+            fn af_num(&self) -> u8 {
+                $n
+            }
+        }
     };
+}
+
+#[cfg(not(afio_h4))]
+macro_rules! if_remap {
+    ($($t:tt)*) => {
+        $($t)*
+    };
+}
+
+#[cfg(afio_h4)]
+macro_rules! if_remap {
+    (impl $trait:ident<$a:ty, REMAP>) => {
+        impl $trait<$a>
+    };
+    (impl $trait:ident<$a:ty, $b:ty, REMAP>) => {
+        impl $trait<$a, $b>
+    };
+}
+
+/// Write `AFIO.PCFR*` for the `REMAP` const in scope. No-op on CH32H4,
+/// where the mux is the per-pin AF number instead.
+macro_rules! apply_remap {
+    () => {
+        #[cfg(not(afio_h4))]
+        {
+            fn apply<P: crate::peripheral::RemapPeripheral, const R: u8>() {
+                P::set_remap(R);
+            }
+            apply::<T, REMAP>();
+        }
+    };
+}
+
+/// Configure a pin for AF use and consume it into `Option<Peri<'d, AnyPin>>`.
+///
+/// Mode/cnf is written on every family. On CH32H4 the AF number is also
+/// written to `AFIO.GPIO_AFR`. PCFR remap is `apply_remap!()`, not this macro,
+/// because the group is a property of the peripheral, not of one pin.
+macro_rules! new_pin {
+    ($name:ident, $af_type:expr) => {{
+        let pin = $name;
+        pin.set_as_af(
+            #[cfg(afio_h4)]
+            pin.af_num(),
+            $af_type,
+        );
+        Some(pin.into())
+    }};
+}
+
+/// Like `new_pin!` but leaves the typed pin in place.
+macro_rules! set_as_af {
+    ($pin:expr, $af_type:expr) => {{
+        $pin.set_as_af(
+            #[cfg(afio_h4)]
+            $pin.af_num(),
+            $af_type,
+        );
+    }};
 }
 
 #[allow(unused)]

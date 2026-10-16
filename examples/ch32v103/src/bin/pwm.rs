@@ -15,6 +15,7 @@ fn main() -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
 
+    // PA8 is TIM1_CH1 in multiple remap groups — pick group 0 (default).
     let ch1 = PwmPin::new_ch1::<0>(p.PA8);
     let mut pwm = SimplePwm::new(
         p.TIM1,
