@@ -72,6 +72,11 @@ jobs:
           cd ../ch32-data/build/
           git clone https://github.com/ch32-rs/ch32-metapac.git
       - name: Build
+        # Every QingKe core implements Xwchc (WCH's extra compressed byte and
+        # halfword loads/stores). The built-in targets have no way to name it,
+        # so it is added here; the example crates carry it in their JSON specs.
+        env:
+          RUSTFLAGS: -C target-feature=+xwchc
         run: cargo build --features ${{ matrix.chip }},embassy,rt,memory-x,defmt --no-default-features --target ${{ matrix.target }}
 
   build-examples:
