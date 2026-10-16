@@ -43,26 +43,33 @@ impl Delay {
         /// Divide takes a meaningful number of cycles and thus ns
         /// Remove the number of cycles a divide takes from the ns counter (assuming V4B)
         /// Can't go faster than 300ns, and it needs a lot of fudging
-
-        let mut i = 0;
         
-        if (ns > 300) {
-            i = ((ns-300) / unsafe { P_NS });
-        }
-        else {
-            i = (10 / unsafe { P_NS });
-
-        }
-
-        SYSTICK.cmpl().write_value(i);
-        SYSTICK.cntl().write_value(0);
-        SYSTICK.ctlr().modify(|w| {
+        if (ns >= 400) {
+            let i = ((ns-400) / unsafe { P_NS });
+            SYSTICK.cmpl().write_value(i);
+            SYSTICK.cntl().write_value(0);
+            SYSTICK.ctlr().modify(|w| {
             w.set_stclk(vals::Stclk::HCLK);
             w.set_ste(true);
-        });
+            });
 
-        while SYSTICK.sr().read().cntif() == false {}
-        SYSTICK.ctlr().modify(|w| w.set_ste(false));
+            while SYSTICK.sr().read().cntif() == false {}
+            SYSTICK.ctlr().modify(|w| w.set_ste(false));
+        }
+        else {
+            // It can't realy go this fast but we cheat
+            if ns >= 300 {
+                let i = (((ns/2)/2)/ (unsafe { P_NS }));
+            }
+            // 200ns is the fastest it really goes
+            else {
+                let i = 0;
+            }
+            
+            
+        }
+
+
     }
 
     pub fn delay_us(&mut self, ns: u32) {
