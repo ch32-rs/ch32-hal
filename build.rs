@@ -357,69 +357,75 @@ fn main() {
 
     // ========
     // Generate pin_trait_impl!
-    // (kind, signal) → trait. Entries are skipped on H4 when the
-    // corresponding driver hasn't been ported yet — otherwise build.rs
-    // would emit `pin_trait_impl!(crate::timer::Channel1Pin, ...)` etc.
-    // referencing modules that are cfg-gated out of the H4 build.
-    let mut signals: HashMap<(&str, &str), TokenStream> = HashMap::new();
+    //
+    // One row per (kind, signal). The whole table is built unconditionally and
+    // the entries whose driver module this chip does not compile are removed
+    // afterwards, so the list of modules is written once instead of wrapping
+    // half the table in `if`.
     let h4 = chip_family == "ch32h4";
+    let mut pin_signals: HashMap<(&str, &str), TokenStream> = [
+        // Compiled on every family, H4 included: `pub mod usart` is ungated
+        // (H4's block is `usart_h4`), and the timer and I2C drivers were brought
+        // back onto H4 once their register layouts checked out (`i2c` is
+        // `version: v3` there).
+        (("usart", "TX"), quote!(crate::usart::TxPin)),
+        (("usart", "RX"), quote!(crate::usart::RxPin)),
+        (("usart", "CTS"), quote!(crate::usart::CtsPin)),
+        (("usart", "RTS"), quote!(crate::usart::RtsPin)),
+        (("usart", "CK"), quote!(crate::usart::CkPin)),
+        (("timer", "CH1"), quote!(crate::timer::Channel1Pin)),
+        (("timer", "CH1N"), quote!(crate::timer::Channel1ComplementaryPin)),
+        (("timer", "CH2"), quote!(crate::timer::Channel2Pin)),
+        (("timer", "CH2N"), quote!(crate::timer::Channel2ComplementaryPin)),
+        (("timer", "CH3"), quote!(crate::timer::Channel3Pin)),
+        (("timer", "CH3N"), quote!(crate::timer::Channel3ComplementaryPin)),
+        (("timer", "CH4"), quote!(crate::timer::Channel4Pin)),
+        (("timer", "CH4N"), quote!(crate::timer::Channel4ComplementaryPin)),
+        (("timer", "ETR"), quote!(crate::timer::ExternalTriggerPin)),
+        (("timer", "BKIN"), quote!(crate::timer::BreakInputPin)),
+        // I2C on CH32H4 is `version: v3` (same register layout as V2/V3), so
+        // the V3 driver applies as-is — keep its pin trait impls.
+        (("i2c", "SDA"), quote!(crate::i2c::SdaPin)),
+        (("i2c", "SCL"), quote!(crate::i2c::SclPin)),
+        // No H4 peripheral has these kinds, so the rows match nothing there and
+        // the modules they name are never pulled in. The day one grows an
+        // `sdio` block, the module gate in lib.rs has to grow with it.
+        (("sdio", "CK"), quote!(crate::sdio::CkPin)),
+        (("sdio", "CMD"), quote!(crate::sdio::CmdPin)),
+        (("sdio", "D0"), quote!(crate::sdio::D0Pin)),
+        (("sdio", "D1"), quote!(crate::sdio::D1Pin)),
+        (("sdio", "D2"), quote!(crate::sdio::D2Pin)),
+        (("sdio", "D3"), quote!(crate::sdio::D3Pin)),
+        (("sdio", "D4"), quote!(crate::sdio::D4Pin)),
+        (("sdio", "D5"), quote!(crate::sdio::D5Pin)),
+        (("sdio", "D6"), quote!(crate::sdio::D6Pin)),
+        (("sdio", "D7"), quote!(crate::sdio::D7Pin)),
+        (("sdio", "D8"), quote!(crate::sdio::D8Pin)),
+        (("otg", "DP"), quote!(crate::otg_fs::DpPin)),
+        (("otg", "DM"), quote!(crate::otg_fs::DmPin)),
+        (("usbd", "DP"), quote!(crate::usbd::DpPin)),
+        (("usbd", "DM"), quote!(crate::usbd::DmPin)),
+        (("spi", "MISO"), quote!(crate::spi::MisoPin)),
+        (("spi", "SCK"), quote!(crate::spi::SckPin)),
+        (("spi", "MOSI"), quote!(crate::spi::MosiPin)),
+        (("spi", "NSS"), quote!(crate::spi::CsPin)),
+        (("can", "TX"), quote!(crate::can::TxPin)),
+        (("can", "RX"), quote!(crate::can::RxPin)),
+        // H4 does have USBHS pins, but its block is `usbhs_h4` while the module
+        // is `#[cfg(usbhs_v3)]`, so the rows are removed below on that family.
+        (("usbhs", "DP"), quote!(crate::usbhs::DpPin)),
+        (("usbhs", "DM"), quote!(crate::usbhs::DmPin)),
+    ]
+    .into();
 
-    // Drivers that have been verified to compile against H4's register
-    // layout (USART_common is byte-identical to V3; the timer driver
-    // works after a small TRG_COM interrupt fix-up).
-    signals.insert(("usart", "TX"), quote!(crate::usart::TxPin));
-    signals.insert(("usart", "RX"), quote!(crate::usart::RxPin));
-    signals.insert(("usart", "CTS"), quote!(crate::usart::CtsPin));
-    signals.insert(("usart", "RTS"), quote!(crate::usart::RtsPin));
-    signals.insert(("usart", "CK"), quote!(crate::usart::CkPin));
-    signals.insert(("timer", "CH1"), quote!(crate::timer::Channel1Pin));
-    signals.insert(("timer", "CH1N"), quote!(crate::timer::Channel1ComplementaryPin));
-    signals.insert(("timer", "CH2"), quote!(crate::timer::Channel2Pin));
-    signals.insert(("timer", "CH2N"), quote!(crate::timer::Channel2ComplementaryPin));
-    signals.insert(("timer", "CH3"), quote!(crate::timer::Channel3Pin));
-    signals.insert(("timer", "CH3N"), quote!(crate::timer::Channel3ComplementaryPin));
-    signals.insert(("timer", "CH4"), quote!(crate::timer::Channel4Pin));
-    signals.insert(("timer", "CH4N"), quote!(crate::timer::Channel4ComplementaryPin));
-    signals.insert(("timer", "ETR"), quote!(crate::timer::ExternalTriggerPin));
-    signals.insert(("timer", "BKIN"), quote!(crate::timer::BreakInputPin));
-    // I2C on CH32H4 is `version: v3` (same register layout as V2/V3), so
-    // the V3 driver applies as-is — keep its pin trait impls.
-    signals.insert(("i2c", "SDA"), quote!(crate::i2c::SdaPin));
-    signals.insert(("i2c", "SCL"), quote!(crate::i2c::SclPin));
-
-    if !h4 {
-        // SPI / CAN drivers reach into V3-specific register fields
-        // (CAN.fr(), SPI's V3-style hscr/rxen2 etc.) that don't exist on
-        // `*_h4`-versioned peripherals. Their pin trait surface is the
-        // same shape, but emitting impls here would force the gated-out
-        // driver modules back into scope.
-        signals.insert(("spi", "MISO"), quote!(crate::spi::MisoPin));
-        signals.insert(("spi", "SCK"), quote!(crate::spi::SckPin));
-        signals.insert(("spi", "MOSI"), quote!(crate::spi::MosiPin));
-        signals.insert(("spi", "NSS"), quote!(crate::spi::CsPin));
-        signals.insert(("can", "TX"), quote!(crate::can::TxPin));
-        signals.insert(("can", "RX"), quote!(crate::can::RxPin));
-
-        // sdio / usbhs / usbd / otg drivers are V3-shaped and don't
-        // build for H4 today; their `mod` declarations in lib.rs are gated
-        // out, so skip emitting pin_trait_impls referencing them.
-        signals.insert(("sdio", "CK"), quote!(crate::sdio::CkPin));
-        signals.insert(("sdio", "CMD"), quote!(crate::sdio::CmdPin));
-        signals.insert(("sdio", "D0"), quote!(crate::sdio::D0Pin));
-        signals.insert(("sdio", "D1"), quote!(crate::sdio::D1Pin));
-        signals.insert(("sdio", "D2"), quote!(crate::sdio::D2Pin));
-        signals.insert(("sdio", "D3"), quote!(crate::sdio::D3Pin));
-        signals.insert(("sdio", "D4"), quote!(crate::sdio::D4Pin));
-        signals.insert(("sdio", "D5"), quote!(crate::sdio::D5Pin));
-        signals.insert(("sdio", "D6"), quote!(crate::sdio::D6Pin));
-        signals.insert(("sdio", "D7"), quote!(crate::sdio::D7Pin));
-        signals.insert(("sdio", "D8"), quote!(crate::sdio::D8Pin));
-        signals.insert(("otg", "DP"), quote!(crate::otg_fs::DpPin));
-        signals.insert(("otg", "DM"), quote!(crate::otg_fs::DmPin));
-        signals.insert(("usbd", "DP"), quote!(crate::usbd::DpPin));
-        signals.insert(("usbd", "DM"), quote!(crate::usbd::DmPin));
-        signals.insert(("usbhs", "DP"), quote!(crate::usbhs::DpPin));
-        signals.insert(("usbhs", "DM"), quote!(crate::usbhs::DmPin));
+    // Modules `lib.rs` compiles out on CH32H4 while the chip still has pins of
+    // that kind, so a row naming one would not resolve. SPI and CAN are
+    // `version: h4` and those drivers reach into V3 register fields; USBHS is
+    // `usbhs_h4` while the module is `#[cfg(usbhs_v3)]`. ADC and DAC are not in
+    // this table: their pin macros live inside the gated modules and are
+    // emitted below.
+    if h4 {
+        pin_signals.retain(|key, _| !matches!(key.0, "spi" | "can" | "usbhs"));
     }
 
     for p in METADATA.peripherals {
@@ -427,7 +433,7 @@ fn main() {
             for pin in p.pins {
                 let key = (regs.kind, pin.signal);
 
-                if let Some(tr) = signals.get(&key) {
+                if let Some(tr) = pin_signals.get(&key) {
                     let peri = format_ident!("{}", p.name);
                     let pin_name = format_ident!("{}", pin.pin);
                     // H4 pins carry `af` (AFR index). Every other family carries
@@ -446,12 +452,10 @@ fn main() {
 
                 // ADC / DAC pin impls reference the `impl_adc_pin!` /
                 // `impl_dac_pin!` macros defined inside src/adc.rs and
-                // src/dac.rs. Those modules are gated out on CH32H4
-                // (their V3-style register layout doesn't match H4) so
-                // the macros aren't in scope — skip the emission too.
-                let skip_adc_dac = chip_family == "ch32h4";
-
-                if regs.kind == "adc" && !skip_adc_dac {
+                // src/dac.rs. Those modules are `not(ch32h4)` (their V3-style
+                // register layout doesn't match H4) so the macros aren't in
+                // scope — skip the emission too.
+                if regs.kind == "adc" && !h4 {
                     if p.rcc.is_none() {
                         continue;
                     }
@@ -471,7 +475,7 @@ fn main() {
                     }
                 }
 
-                if regs.kind == "dac" && !skip_adc_dac {
+                if regs.kind == "dac" && !h4 {
                     let peri = format_ident!("{}", p.name);
                     let pin_name = format_ident!("{}", pin.pin);
                     let ch: u8 = pin.signal.strip_prefix("OUT").unwrap().parse().unwrap();
@@ -487,7 +491,7 @@ fn main() {
     // ========
     // Generate dma_trait_impl!
 
-    let signals: HashMap<_, _> = [
+    let mut dma_signals: HashMap<_, _> = [
         // (kind, signal) => trait
         (("usart", "RX"), quote!(crate::usart::RxDma)),
         (("usart", "TX"), quote!(crate::usart::TxDma)),
@@ -505,15 +509,15 @@ fn main() {
     ]
     .into();
 
-    // Drivers that are cfg-gated out of the H4 build. Emitting a trait impl
-    // for them would reference a module that does not exist.
-    let skip_kinds: &[&str] = if h4 { &["spi", "dac", "sdio"] } else { &[] };
+    // Same rule as the pin table: drop the rows whose driver module `lib.rs`
+    // compiles out on CH32H4. `sdio` stays — no H4 peripheral has that kind, so
+    // the row matches nothing and the module is never named.
+    if h4 {
+        dma_signals.retain(|key, _| !matches!(key.0, "spi" | "dac"));
+    }
 
     for p in METADATA.peripherals {
         if let Some(regs) = &p.registers {
-            if skip_kinds.contains(&regs.kind) {
-                continue;
-            }
             let mut dupe = HashSet::new();
             for ch in p.dma_channels {
                 // Some chips have multiple request numbers for the same (peri, signal, channel) combos.
@@ -523,7 +527,7 @@ fn main() {
                     continue;
                 }
 
-                if let Some(tr) = signals.get(&(regs.kind, ch.signal)) {
+                if let Some(tr) = dma_signals.get(&(regs.kind, ch.signal)) {
                     let peri = format_ident!("{}", p.name);
 
                     let (channel, request) = if let Some(channel) = &ch.channel {
