@@ -18,7 +18,14 @@ ch32-metapac = { features = [
     "rt",
 ], version = "0.1.2" }
 
-qingke = { version = "0.8.2", features = ["critical-section-impl"] }
+# `unsafe-trust-wch-atomics`: qingke 0.8.2 refuses to build whenever the target
+# claims byte atomics unless this is set, and every A-extension target does.
+# Verified on the CH32H417, where both cores `fetch_add` one word a million
+# times each and the total comes out exact (`examples/ch32h417` `atomics`).
+qingke = { version = "0.8.2", features = [
+    "critical-section-impl",
+    "unsafe-trust-wch-atomics",
+] }
 qingke-rt = { version = "0.8.2", optional = true }
 
 embedded-hal = { package = "embedded-hal", version = "1.0" }
