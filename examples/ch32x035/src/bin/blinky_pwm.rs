@@ -5,15 +5,14 @@
 
 use ch32_hal as hal;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
-use hal::gpio::{AnyPin, Level, Output, Pin};
+use embassy_time::Timer;
 use hal::println;
 use hal::time::Hertz;
 use hal::timer::low_level::CountingMode;
 use hal::timer::simple_pwm::{PwmPin, SimplePwm};
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
-async fn main(spawner: Spawner) -> ! {
+async fn main(_spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let p = hal::init(Default::default());
 

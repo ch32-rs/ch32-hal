@@ -5,17 +5,16 @@
 
 use ch32_hal as hal;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
-use hal::gpio::{AnyPin, Level, Output, Pin};
+use hal::gpio::{Level, Output};
 use hal::println;
-use hal::usart::{UartRx, UartTx};
+use hal::usart::UartRx;
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
-async fn main(spawner: Spawner) -> ! {
+async fn main(_spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
-    let p = hal::init(Default::default());
+    let p = hal::init(config);
 
     // Connector pinout:
     // GND, VCC, PC17, PC16

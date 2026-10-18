@@ -31,7 +31,7 @@ use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = println!("\n\n\n{}", info);
+    println!("\n\n\n{}", info);
     loop {}
 }
 

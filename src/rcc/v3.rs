@@ -306,8 +306,8 @@ pub(crate) unsafe fn init(config: Config) {
                         w.set_prediv1(pll.prediv);
                     });
                 }
-                // FV203/V303
-                #[cfg(any(d6, d8))]
+                // CH32V20x_D6 and CH32V30x_D8: HSE/1 or HSE/2.
+                #[cfg(any(d6, all(d8, not(ch32v2))))]
                 PllSource::HSE => {
                     RCC.cfgr0().modify(|w| w.set_pllsrc(true));
                     match pll.prediv {
@@ -316,7 +316,7 @@ pub(crate) unsafe fn init(config: Config) {
                         _ => panic!(),
                     }
                 }
-                // CH32V20x_D8
+                // CH32V20x_D8: RCC_CFGR0.PLLXTPRE selects HSE/4 or HSE/8.
                 #[cfg(all(ch32v2, d8))]
                 PllSource::HSE => {
                     RCC.cfgr0().modify(|w| w.set_pllsrc(true));

@@ -20,6 +20,7 @@ impl<'d> ChannelAndRequest<'d> {
         Transfer::new_read(self.channel.reborrow(), self.request, peri_addr, buf, options)
     }
 
+    #[cfg(spi)]
     pub unsafe fn read_raw<'a, W: Word>(
         &'a mut self,
         peri_addr: *mut W,
@@ -38,6 +39,7 @@ impl<'d> ChannelAndRequest<'d> {
         Transfer::new_write(self.channel.reborrow(), self.request, buf, peri_addr, options)
     }
 
+    #[cfg(spi)]
     pub unsafe fn write_raw<'a, W: Word>(
         &'a mut self,
         buf: *const [W],
@@ -47,6 +49,7 @@ impl<'d> ChannelAndRequest<'d> {
         Transfer::new_write_raw(self.channel.reborrow(), self.request, buf, peri_addr, options)
     }
 
+    #[cfg(spi)]
     pub unsafe fn write_repeated<'a, W: Word>(
         &'a mut self,
         repeated: &'a W,

@@ -1,5 +1,5 @@
 #![no_std]
-#![allow(static_mut_refs, unexpected_cfgs)]
+#![allow(static_mut_refs)]
 
 use core::future::Future;
 

@@ -45,7 +45,7 @@ async fn main(spawner: Spawner) -> ! {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = hal::println!("\n\n\n{}", info);
+    hal::println!("\n\n\n{}", info);
 
     loop {}
 }

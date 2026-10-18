@@ -5,7 +5,16 @@ use embedded_storage::nor_flash::{NorFlashError, NorFlashErrorKind};
 mod common;
 pub use common::*;
 
-pub use crate::pac::{FLASH_SIZE, WRITE_SIZE};
+const FLASH_REGION: &crate::pac::mem_layout::MemoryRegion = crate::pac::MEMORY_LAYOUT
+    .find_by_role(crate::pac::mem_layout::MemoryRole::Application)
+    .expect("application flash region missing from PAC metadata");
+
+/// Application flash size in bytes, using the PAC's default memory split.
+pub const FLASH_SIZE: usize = FLASH_REGION.size as usize;
+/// Fast programming page size in bytes.
+pub const WRITE_SIZE: usize = FLASH_REGION
+    .page_program_size()
+    .expect("flash programming page size missing from PAC metadata") as usize;
 
 /// Read size (always 1)
 pub const READ_SIZE: usize = 1;

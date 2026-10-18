@@ -3,6 +3,11 @@ name = "ch32v003-examples"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Optional modes for the GPIO-driven WS2812 example; rainbow is the default.
+ws2812-timing-test = []
+ws2812-off = []
+
 [dependencies]
 ch32-hal = { path = "../../", features = [
     "ch32v003f4u6",

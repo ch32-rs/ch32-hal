@@ -15,9 +15,7 @@ fn main() -> ! {
     loop {
         led.toggle();
 
-        unsafe {
-            riscv::asm::delay(1000000);
-        }
+        riscv::asm::delay(1000000);
     }
 }
 

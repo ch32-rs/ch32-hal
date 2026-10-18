@@ -36,6 +36,6 @@ async fn main(spawner: Spawner) -> ! {
     loop {
         Timer::after_millis(2000).await;
 
-        let _ = uart.blocking_write(b"hello world from embassy main\r\n").unwrap();
+        uart.blocking_write(b"hello world from embassy main\r\n").unwrap();
     }
 }

@@ -19,7 +19,7 @@ bind_interrupts!(struct Irqs {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = println!("\n\n\n{}", info);
+    println!("\n\n\n{}", info);
     loop {}
 }
 

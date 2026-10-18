@@ -245,8 +245,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
             if status.if_rx_reset() {
                 break Err(Error::HardReset);
             }
-            #[cfg(feature = "embassy")]
-            embassy_futures::yield_now();
+            core::hint::spin_loop();
         };
 
         unsafe {
@@ -270,8 +269,7 @@ impl<'d, T: Instance + PeripheralType> UsbPdPhy<'d, T, Blocking> {
             if status.if_tx_end() {
                 break Ok(());
             }
-            #[cfg(feature = "embassy")]
-            embassy_futures::yield_now();
+            core::hint::spin_loop();
         };
 
         T::port_cc_reg(vals::CcSel::CC1).modify(|w| w.set_cc_lve(false));
@@ -462,8 +460,6 @@ impl<'d, T: Instance + PeripheralType, M: Mode> UsbPdPhy<'d, T, M> {
 
 struct State {
     waker: AtomicWaker,
-    // Inverted logic for a default state of 0 so that the data goes into the .bss section.
-    drop_not_ready: AtomicBool,
     // Set by the ISR on BUF_ERR; cleared at the start of each transfer.
     buf_err: AtomicBool,
 }
@@ -472,7 +468,6 @@ impl State {
     pub const fn new() -> Self {
         Self {
             waker: AtomicWaker::new(),
-            drop_not_ready: AtomicBool::new(false),
             buf_err: AtomicBool::new(false),
         }
     }

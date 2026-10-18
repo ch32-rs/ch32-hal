@@ -3,16 +3,13 @@
 
 
 
-use core::arch::asm;
-
 use ch32_hal as hal;
 use hal::Peri;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use hal::dma::Priority;
-use hal::gpio::{AnyPin, Level, Output, Pin};
+use hal::gpio::{AnyPin, Level, Output};
 use hal::usart::UartTx;
-use hal::{interrupt, println};
+use hal::println;
 
 //bind_interrupts!(struct Irqs {
 //    USART4 => usart::InterruptHandler<peripherals::USART4>;
@@ -40,8 +37,7 @@ async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI;
-    config.dma_interrupt_priority = interrupt::Priority::P0;
-    config = Default::default();
+    config.dma_interrupt_priority = hal::interrupt::Priority::P0;
     let p = hal::init(config);
 
     // Connector pinout:

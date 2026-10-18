@@ -251,14 +251,14 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
         fifo: CanFifo,
         mode: CanMode,
         bitrate: u32,
-        config: Config,
+        _config: Config,
     ) -> Result<Self, CanInitError> {
         let this = Self {
             _peri: peri,
             fifo,
             last_mailbox_used: usize::MAX,
             #[cfg(feature = "embassy")]
-            timeout: config.timeout,
+            timeout: _config.timeout,
             _phantom: PhantomData,
         };
         T::enable_and_reset(); // Enable CAN peripheral
@@ -416,7 +416,7 @@ where
     }
 }
 
-struct State {
+pub(crate) struct State {
     #[allow(unused)]
     rx_waker: AtomicWaker,
     tx_waker: AtomicWaker,
@@ -431,7 +431,7 @@ impl State {
     }
 }
 
-pub trait SealedInstance: RccPeripheral + RemapPeripheral {
+pub(crate) trait SealedInstance: RccPeripheral + RemapPeripheral {
     fn regs() -> pac::can::Can;
     // Either `0b00`, `0b10` or `b11` on CAN1. `0` or `1` on CAN2.
     // fn remap(rm: u8) -> ();
@@ -439,6 +439,7 @@ pub trait SealedInstance: RccPeripheral + RemapPeripheral {
     fn state() -> &'static State;
 }
 
+#[allow(private_bounds)]
 pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + 'static {
     type ReceiveInterrupt: crate::interrupt::typelevel::Interrupt;
     type TransmitInterrupt: crate::interrupt::typelevel::Interrupt;
