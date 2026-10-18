@@ -211,6 +211,8 @@ const DMA_TRANSFER_OPTIONS: crate::dma::TransferOptions = crate::dma::TransferOp
     circular: false,
     half_transfer_ir: false,
     complete_transfer_ir: true,
+    peripheral_increment: false,
+    memory_to_memory: false,
 };
 
 /// SDMMC configuration

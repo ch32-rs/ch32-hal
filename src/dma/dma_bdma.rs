@@ -38,6 +38,18 @@ pub struct TransferOptions {
     pub half_transfer_ir: bool,
     /// Enable transfer complete interrupt
     pub complete_transfer_ir: bool,
+    /// Increment the peripheral address after each transfer.
+    ///
+    /// Off by default: a peripheral's data register sits at a fixed address.
+    /// Turn it on together with `memory_to_memory` for a memory-to-memory copy,
+    /// where both ends are real addresses.
+    pub peripheral_increment: bool,
+    /// Memory-to-memory mode.
+    ///
+    /// The controller then reads from the peripheral address and writes to the
+    /// memory address on its own, without waiting for a peripheral request.
+    /// Off by default, which is what every peripheral driver needs.
+    pub memory_to_memory: bool,
 }
 
 impl Default for TransferOptions {
@@ -47,6 +59,8 @@ impl Default for TransferOptions {
             circular: false,
             half_transfer_ir: false,
             complete_transfer_ir: true,
+            peripheral_increment: false,
+            memory_to_memory: false,
         }
     }
 }
@@ -65,40 +79,124 @@ pub enum Priority {
     VeryHigh,
 }
 
-impl From<Priority> for pac::dma::vals::Pl {
-    fn from(value: Priority) -> Self {
-        match value {
-            Priority::Low => pac::dma::vals::Pl::LOW,
-            Priority::Medium => pac::dma::vals::Pl::MEDIUM,
-            Priority::High => pac::dma::vals::Pl::HIGH,
-            Priority::VeryHigh => pac::dma::vals::Pl::VERYHIGH,
-        }
+/// Register encoding of a [`Priority`].
+///
+/// V1-style PACs expose this as `pac::dma::vals::Pl`; the H4 block has the
+/// same two bits but no value enum, so both sides go through this.
+fn priority_bits(priority: Priority) -> u8 {
+    match priority {
+        Priority::Low => 0,
+        Priority::Medium => 1,
+        Priority::High => 2,
+        Priority::VeryHigh => 3,
     }
 }
 
-mod bdma_only {
-    use pac::dma::vals;
-
-    use super::*;
-
-    impl From<WordSize> for vals::Size {
-        fn from(raw: WordSize) -> Self {
-            match raw {
-                WordSize::OneByte => Self::BITS8,
-                WordSize::TwoBytes => Self::BITS16,
-                WordSize::FourBytes => Self::BITS32,
-            }
-        }
+/// Register encoding of a [`WordSize`]: 0 = byte, 1 = half-word, 2 = word.
+fn size_bits(size: WordSize) -> u8 {
+    match size {
+        WordSize::OneByte => 0,
+        WordSize::TwoBytes => 1,
+        WordSize::FourBytes => 2,
     }
+}
 
-    impl From<Dir> for vals::Dir {
-        fn from(raw: Dir) -> Self {
-            match raw {
-                Dir::MemoryToPeripheral => Self::FROMMEMORY,
-                Dir::PeripheralToMemory => Self::FROMPERIPHERAL,
-            }
-        }
-    }
+/// `DIR` bit: set when the peripheral is written, clear when it is read.
+fn dir_bit(dir: Dir) -> bool {
+    matches!(dir, Dir::MemoryToPeripheral)
+}
+
+/// DMAMUX slot for a channel. DMA1 CH1..CH8 occupy slots 0..8 and DMA2
+/// CH1..CH8 occupy slots 8..16, so the slot is the controller base address
+/// offset from DMA1 divided by the 0x400 stride, times 8, plus the channel.
+#[cfg(ch32h4)]
+fn mux_slot(info: &ChannelInfo) -> usize {
+    let DmaInfo::Dma(r) = info.dma;
+    (r.as_ptr() as usize - pac::DMA1.as_ptr() as usize) / 0x400 * 8 + info.num
+}
+
+/// Program one channel's address, count and configuration registers.
+///
+/// The two PACs describe the same layout, but the V1 block names the
+/// registers `CR`/`NDTR`/`PAR`/`MAR` and types the fields as enums, while H4
+/// names them `CFGR`/`CNTR`/`PADDR`/`MADDR` and types them as raw values.
+#[cfg(not(ch32h4))]
+fn write_channel(
+    ch: pac::dma::Ch,
+    peri_addr: *const u32,
+    mem_addr: *mut u32,
+    mem_len: usize,
+    incr_mem: bool,
+    data_size: WordSize,
+    dir: Dir,
+    options: &TransferOptions,
+) {
+    use pac::dma::vals::{Dir as DirVal, Pl, Size};
+
+    ch.par().write_value(peri_addr as u32); // PADDR
+    ch.mar().write_value(mem_addr as u32); // MADDR
+    ch.ndtr().write(|w| w.set_ndt(mem_len as u16)); // CNTR
+    ch.cr().write(|w| {
+        w.set_psize(match size_bits(data_size) {
+            0 => Size::BITS8,
+            1 => Size::BITS16,
+            _ => Size::BITS32,
+        });
+        w.set_msize(match size_bits(data_size) {
+            0 => Size::BITS8,
+            1 => Size::BITS16,
+            _ => Size::BITS32,
+        });
+        w.set_pinc(options.peripheral_increment);
+        w.set_mem2mem(options.memory_to_memory);
+        w.set_minc(incr_mem);
+        w.set_dir(if dir_bit(dir) {
+            DirVal::FROMMEMORY
+        } else {
+            DirVal::FROMPERIPHERAL
+        });
+        w.set_teie(true); // error
+        w.set_tcie(options.complete_transfer_ir); // tx complete
+        w.set_htie(options.half_transfer_ir); // half
+        w.set_circ(options.circular); // circular
+        w.set_pl(match priority_bits(options.priority) {
+            0 => Pl::LOW,
+            1 => Pl::MEDIUM,
+            2 => Pl::HIGH,
+            _ => Pl::VERYHIGH,
+        });
+        w.set_en(false); // don't start yet
+    });
+}
+
+#[cfg(ch32h4)]
+fn write_channel(
+    ch: pac::dma::Ch,
+    peri_addr: *const u32,
+    mem_addr: *mut u32,
+    mem_len: usize,
+    incr_mem: bool,
+    data_size: WordSize,
+    dir: Dir,
+    options: &TransferOptions,
+) {
+    ch.paddr().write_value(peri_addr as u32);
+    ch.maddr().write_value(mem_addr as u32);
+    ch.cntr().write(|w| w.set_ndt(mem_len as u16));
+    ch.cfgr().write(|w| {
+        w.set_psize(size_bits(data_size));
+        w.set_msize(size_bits(data_size));
+        w.set_pinc(options.peripheral_increment);
+        w.set_mem2mem(options.memory_to_memory);
+        w.set_minc(incr_mem);
+        w.set_dir(dir_bit(dir));
+        w.set_teie(true);
+        w.set_tcie(options.complete_transfer_ir);
+        w.set_htie(options.half_transfer_ir);
+        w.set_circ(options.circular);
+        w.set_pl(priority_bits(options.priority));
+        w.set_en(false);
+    });
 }
 
 pub(crate) struct ChannelState {
@@ -131,19 +229,38 @@ impl AnyChannel {
         let state = &STATE[self.id as usize];
         match self.info().dma {
             DmaInfo::Dma(r) => {
-                let isr = r.isr().read();
-                let cr = r.ch(info.num).cr();
+                // V1 calls the flag registers ISR/IFCR and the channel
+                // configuration CR; H4 calls them INTFR/INTFCR and CFGR. The
+                // bit positions are identical.
+                #[cfg(not(ch32h4))]
+                let (teif, htif, htie, tcif, tcie) = {
+                    let isr = r.isr().read();
+                    let cr = r.ch(info.num).cr().read();
+                    (isr.teif(info.num), isr.htif(info.num), cr.htie(), isr.tcif(info.num), cr.tcie())
+                };
+                #[cfg(ch32h4)]
+                let (teif, htif, htie, tcif, tcie) = {
+                    let isr = r.intfr().read();
+                    let cr = r.ch(info.num).cfgr().read();
+                    (isr.teif(info.num), isr.htif(info.num), cr.htie(), isr.tcif(info.num), cr.tcie())
+                };
 
-                if isr.teif(info.num) {
-                    panic!("DMA: error on BDMA@{:08x} channel {}", r.as_ptr() as u32, info.num);
+                if teif {
+                    panic!("DMA: error on DMA@{:08x} channel {}", r.as_ptr() as u32, info.num);
                 }
 
-                if isr.htif(info.num) && cr.read().htie() {
+                if htif && htie {
                     // Acknowledge half transfer complete interrupt
+                    #[cfg(not(ch32h4))]
                     r.ifcr().write(|w| w.set_htif(info.num, true));
-                } else if isr.tcif(info.num) && cr.read().tcie() {
+                    #[cfg(ch32h4)]
+                    r.intfcr().write(|w| w.set_chtif(info.num, true));
+                } else if tcif && tcie {
                     // Acknowledge transfer complete interrupt
+                    #[cfg(not(ch32h4))]
                     r.ifcr().write(|w| w.set_tcif(info.num, true));
+                    #[cfg(ch32h4)]
+                    r.intfcr().write(|w| w.set_ctcif(info.num, true));
                     critical_section::with(|_| {
                         // #safty this is okay because critical section ensures
                         // no interruption
@@ -161,7 +278,7 @@ impl AnyChannel {
 
     unsafe fn configure(
         &self,
-        _request: Request,
+        request: Request,
         dir: Dir,
         peri_addr: *const u32,
         mem_addr: *mut u32,
@@ -174,6 +291,20 @@ impl AnyChannel {
 
         assert!(mem_len > 0 && mem_len <= 0xFFFF);
 
+        // On CH32H4 the request number selects the peripheral inside the
+        // DMAMUX. The mux has one 7-bit slot per channel: DMA1 CH1..CH8 are
+        // slots 0..8, DMA2 CH1..CH8 are slots 8..16, packed four per CFGR.
+        // Fixed-wiring chips pass `()` and never reach this.
+        #[cfg(ch32h4)]
+        {
+            let slot = mux_slot(info);
+            pac::DMAMUX.cfgr(slot / 4).modify(|w| {
+                w.set_channel_mux(slot % 4, request);
+            });
+        }
+        #[cfg(not(ch32h4))]
+        let _ = request;
+
         match self.info().dma {
             DmaInfo::Dma(r) => {
                 let state: &ChannelState = &STATE[self.id as usize];
@@ -182,21 +313,9 @@ impl AnyChannel {
                 state.complete_count.store(0, Ordering::Release);
                 self.clear_irqs();
 
-                ch.par().write_value(peri_addr as u32); // PADDR
-                ch.mar().write_value(mem_addr as u32); // MADDR
-                ch.ndtr().write(|w| w.set_ndt(mem_len as u16)); // CNTR
-                ch.cr().write(|w| {
-                    w.set_psize(data_size.into());
-                    w.set_msize(data_size.into());
-                    w.set_minc(incr_mem);
-                    w.set_dir(dir.into());
-                    w.set_teie(true); // error
-                    w.set_tcie(options.complete_transfer_ir); // tx complete
-                    w.set_htie(options.half_transfer_ir); // half
-                    w.set_circ(options.circular); // circular
-                    w.set_pl(options.priority.into()); // priority
-                    w.set_en(false); // don't start yet
-                });
+                write_channel(
+                    ch, peri_addr, mem_addr, mem_len, incr_mem, data_size, dir, &options,
+                );
             }
         }
     }
@@ -206,7 +325,10 @@ impl AnyChannel {
         match self.info().dma {
             DmaInfo::Dma(r) => {
                 let ch = r.ch(info.num);
+                #[cfg(not(ch32h4))]
                 ch.cr().modify(|w| w.set_en(true));
+                #[cfg(ch32h4)]
+                ch.cfgr().modify(|w| w.set_en(true));
             }
         }
     }
@@ -215,10 +337,17 @@ impl AnyChannel {
         let info = self.info();
         match self.info().dma {
             DmaInfo::Dma(r) => {
+                #[cfg(not(ch32h4))]
                 r.ifcr().write(|w| {
                     w.set_htif(info.num, true);
                     w.set_tcif(info.num, true);
                     w.set_teif(info.num, true);
+                });
+                #[cfg(ch32h4)]
+                r.intfcr().write(|w| {
+                    w.set_chtif(info.num, true);
+                    w.set_ctcif(info.num, true);
+                    w.set_cteif(info.num, true);
                 });
             }
         }
@@ -229,7 +358,13 @@ impl AnyChannel {
         match self.info().dma {
             DmaInfo::Dma(r) => {
                 // Disable the channel. Keep the IEs enabled so the irqs still fire.
+                #[cfg(not(ch32h4))]
                 r.ch(info.num).cr().write(|w| {
+                    w.set_teie(true);
+                    w.set_tcie(true);
+                });
+                #[cfg(ch32h4)]
+                r.ch(info.num).cfgr().write(|w| {
                     w.set_teie(true);
                     w.set_tcie(true);
                 });
@@ -243,8 +378,16 @@ impl AnyChannel {
             DmaInfo::Dma(r) => {
                 let state: &ChannelState = &STATE[self.id as usize];
                 let ch = r.ch(info.num);
-                let en = ch.cr().read().en();
-                let circular = ch.cr().read().circ();
+                #[cfg(not(ch32h4))]
+                let (en, circular) = {
+                    let cr = ch.cr().read();
+                    (cr.en(), cr.circ())
+                };
+                #[cfg(ch32h4)]
+                let (en, circular) = {
+                    let cr = ch.cfgr().read();
+                    (cr.en(), cr.circ())
+                };
                 let tcif = state.complete_count.load(Ordering::Acquire) != 0;
                 en && (circular || !tcif)
             }
@@ -254,16 +397,22 @@ impl AnyChannel {
     fn get_remaining_transfers(&self) -> u16 {
         let info = self.info();
         match self.info().dma {
+            #[cfg(not(ch32h4))]
             DmaInfo::Dma(r) => r.ch(info.num).ndtr().read().ndt(),
+            #[cfg(ch32h4)]
+            DmaInfo::Dma(r) => r.ch(info.num).cntr().read().ndt(),
         }
     }
 
     fn disable_circular_mode(&self) {
         let info = self.info();
         match self.info().dma {
-            DmaInfo::Dma(regs) => regs.ch(info.num).cr().modify(|w| {
-                w.set_circ(false);
-            }),
+            DmaInfo::Dma(regs) => {
+                #[cfg(not(ch32h4))]
+                regs.ch(info.num).cr().modify(|w| w.set_circ(false));
+                #[cfg(ch32h4)]
+                regs.ch(info.num).cfgr().modify(|w| w.set_circ(false));
+            }
         }
     }
 

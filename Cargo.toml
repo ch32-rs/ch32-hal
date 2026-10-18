@@ -13,10 +13,10 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# ch32-data rev = a515903589cfbc342dc6ad0d13c02b4382da5628
+# ch32-data rev = 3a947aa (ch32-metapac 0.1.2)
 ch32-metapac = { features = [
     "rt",
-], version = "0.1.1" }
+], version = "0.1.2" }
 
 qingke = { version = "0.8.2", features = ["critical-section-impl"] }
 qingke-rt = { version = "0.8.2", optional = true }
@@ -51,10 +51,10 @@ sdio-host = "0.5.0"
 embedded-storage = "0.3.1"
 
 [build-dependencies]
-# ch32-data rev = a515903589cfbc342dc6ad0d13c02b4382da5628
+# ch32-data rev = 3a947aa (ch32-metapac 0.1.2)
 ch32-metapac = { features = [
     "metadata",
-], version = "0.1.1" }
+], version = "0.1.2" }
 
 proc-macro2 = "1.0"
 quote = "1.0"

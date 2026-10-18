@@ -505,8 +505,15 @@ fn main() {
     ]
     .into();
 
+    // Drivers that are cfg-gated out of the H4 build. Emitting a trait impl
+    // for them would reference a module that does not exist.
+    let skip_kinds: &[&str] = if h4 { &["spi", "dac", "sdio"] } else { &[] };
+
     for p in METADATA.peripherals {
         if let Some(regs) = &p.registers {
+            if skip_kinds.contains(&regs.kind) {
+                continue;
+            }
             let mut dupe = HashSet::new();
             for ch in p.dma_channels {
                 // Some chips have multiple request numbers for the same (peri, signal, channel) combos.
@@ -519,15 +526,19 @@ fn main() {
                 if let Some(tr) = signals.get(&(regs.kind, ch.signal)) {
                     let peri = format_ident!("{}", p.name);
 
-                    let channel = if let Some(channel) = &ch.channel {
-                        // Chip with DMA/BDMA, without DMAMUX
+                    let (channel, request) = if let Some(channel) = &ch.channel {
+                        // Chip with DMA/BDMA, without DMAMUX: the channel is
+                        // hard-wired to the signal, so the request is empty.
                         let channel = format_ident!("{}", channel);
-                        quote!({channel: #channel})
+                        (quote!({channel: #channel}), quote!(()))
+                    } else if ch.dmamux.is_some() {
+                        // CH32H4: any of the 16 mux channels can carry it, and
+                        // the request number selects the source.
+                        let request = ch.request.expect("DMAMUX signal without a request number") as u8;
+                        (quote!({dmamux: DMAMUX}), quote!(#request))
                     } else {
-                        unreachable!();
+                        panic!("DMA channel for {} {} has neither a channel nor a DMAMUX", p.name, ch.signal);
                     };
-
-                    let request = quote!(());
 
                     g.extend(quote! {
                         dma_trait_impl!(#tr, #peri, #channel, #request);
@@ -599,16 +610,25 @@ fn main() {
         }
     }
 
-    // DMA — gated out on CH32H4 because `src/dma/dma_bdma.rs` (which
-    // defines `ChannelInfo`, `DmaInfo`, `ChannelInterrupt`) is itself
-    // cfg-gated out: its V3-style register layout doesn't match `dma_h4`.
-    // The H4 DMA driver port is a separate followup.
-    if !h4 {
+    // DMA channel table and per-channel interrupt handlers. H4 uses the same
+    // `ChannelInfo` as the other families; its `dma_h4` register block is the
+    // same layout under different accessor names, which the driver accounts for.
+    {
         let mut dmas = TokenStream::new();
         for (ch_idx, ch) in METADATA.dma_channels.iter().enumerate() {
             let name = format_ident!("{}", ch.name);
             let idx = ch_idx as u8;
             g.extend(quote!(dma_channel_impl!(#name, #idx);));
+
+            // H4 routes every channel through the one DMAMUX, so each channel
+            // type is a mux channel. The marker only bounds the signal-trait
+            // blanket impls; the mux slot is computed from the controller.
+            if h4 {
+                g.extend(quote! {
+                    impl crate::dma::SealedMuxChannel for crate::peripherals::#name {}
+                    impl crate::dma::MuxChannel for crate::peripherals::#name {}
+                });
+            }
 
             let dma = format_ident!("{}", ch.dma);
             let ch_num = ch.channel as usize;

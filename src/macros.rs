@@ -113,9 +113,25 @@ macro_rules! set_as_af {
 
 #[allow(unused)]
 macro_rules! dma_trait_impl {
-    // DMA/GPDMA, without DMAMUX
+    // DMA/GPDMA, without DMAMUX. The channel is hard-wired to the signal, so
+    // the request carries no number.
     (crate::$mod:ident::$trait:ident$(<$mode:ident>)?, $instance:ident, {channel: $channel:ident}, $request:expr) => {
         impl crate::$mod::$trait<crate::peripherals::$instance $(, crate::$mod::$mode)?> for crate::peripherals::$channel {
+            fn request(&self) -> crate::dma::Request {
+                $request
+            }
+        }
+    };
+    // DMAMUX (CH32H4). Every mux channel can carry the signal; the request
+    // number is a property of the signal, so it is the same for all 16
+    // channels. The `MuxChannel` bound is what limits the blanket impl to
+    // those channels — H4 has one mux, so there is no per-channel choice to
+    // make beyond that.
+    (crate::$mod:ident::$trait:ident$(<$mode:ident>)?, $instance:ident, {dmamux: $dmamux:ident}, $request:expr) => {
+        impl<C> crate::$mod::$trait<crate::peripherals::$instance $(, crate::$mod::$mode)?> for C
+        where
+            C: crate::dma::MuxChannel + crate::dma::Channel,
+        {
             fn request(&self) -> crate::dma::Request {
                 $request
             }
