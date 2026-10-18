@@ -33,45 +33,30 @@ jobs:
           - ch641
           - ch643
         include:
-          # `xwchc` is WCH's extra compressed byte/halfword loads and stores.
-          # QingKe V3A does not implement it (QingKe V3 manual, table 1-1), so the
-          # CH32V103 row leaves it off; every other core this matrix builds does.
           - chip: ch32l103f8u6
             target: riscv32imc-unknown-none-elf
-            xwchc: -C target-feature=+xwchc
           - chip: ch32v003f4u6
             target: riscv32i-unknown-none-elf
-            xwchc: -C target-feature=+xwchc
           - chip: ch32v006k8u6
             target: riscv32i-unknown-none-elf
-            xwchc: -C target-feature=+xwchc
           - chip: ch32v103c8t6
             target: riscv32imc-unknown-none-elf
-            xwchc: ""
           - chip: ch32v203f8u6
             target: riscv32imc-unknown-none-elf
-            xwchc: -C target-feature=+xwchc
           - chip: ch32v208wbu6
             target: riscv32imc-unknown-none-elf
-            xwchc: -C target-feature=+xwchc
           - chip: ch32v303cbt6
             target: riscv32imc-unknown-none-elf
-            xwchc: -C target-feature=+xwchc
           - chip: ch32v305fbp6
             target: riscv32imc-unknown-none-elf
-            xwchc: -C target-feature=+xwchc
           - chip: ch32v307vct6
             target: riscv32imc-unknown-none-elf
-            xwchc: -C target-feature=+xwchc
           - chip: ch32x035f7p6
             target: riscv32imc-unknown-none-elf
-            xwchc: -C target-feature=+xwchc
           - chip: ch641
             target: riscv32i-unknown-none-elf
-            xwchc: -C target-feature=+xwchc
           - chip: ch643
             target: riscv32imc-unknown-none-elf
-            xwchc: -C target-feature=+xwchc
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,11 +72,9 @@ jobs:
           cd ../ch32-data/build/
           git clone https://github.com/ch32-rs/ch32-metapac.git
       - name: Build
-        # The built-in targets cannot name Xwchc, so the matrix adds it per chip
-        # (empty for QingKe V3A, which has no such extension). The example crates
-        # that ship a JSON spec name it there instead.
-        env:
-          RUSTFLAGS: ${{ matrix.xwchc }}
+        # Built against the stock targets. Xwchc (WCH's compressed byte/halfword
+        # loads and stores) only changes codegen, so it is exercised by the
+        # example crates that ship a target spec naming it, not here.
         run: cargo build --features ${{ matrix.chip }},embassy,rt,memory-x,defmt --no-default-features --target ${{ matrix.target }}
 
   build-examples:
