@@ -72,9 +72,6 @@ jobs:
           cd ../ch32-data/build/
           git clone https://github.com/ch32-rs/ch32-metapac.git
       - name: Build
-        # Built against the stock targets. Xwchc (WCH's compressed byte/halfword
-        # loads and stores) only changes codegen, so it is exercised by the
-        # example crates that ship a target spec naming it, not here.
         run: cargo build --features ${{ matrix.chip }},embassy,rt,memory-x,defmt --no-default-features --target ${{ matrix.target }}
 
   build-examples:
