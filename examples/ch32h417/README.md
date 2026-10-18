@@ -186,6 +186,11 @@ independently flashed halves can notice they disagree about it.
   between the two payloads); `out/NAME.hex` is the same image as records, which
   only cover the payloads. Use the merged image to publish and the two-ELF
   `xtask flash` path to iterate.
+- **`xwchc`.** Both target specs (`v3f/riscv32imafc-unknown-none-elf.json`,
+  `v5f/riscv32imafbc-unknown-none-elf.json`) enable it: WCH's compressed byte and
+  halfword loads and stores, which QingKe V3F and V5F both implement (QingKe V3
+  manual, table 1-1). It only changes codegen, so the HAL's CI builds against the
+  stock targets and leaves it to the examples.
 - **Hart 1's instruction cache is off out of reset** (`cache_strtg_ctlr`, CSR
   `0xBC2`, `ic_disable = 1`), so every V5F half starts with
   `ch32h417_v5f::cache::enable_icache()`. Hart 0 has no usable instruction cache;

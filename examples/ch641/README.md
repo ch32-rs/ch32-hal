@@ -22,3 +22,7 @@ Link: <https://oshwhub.com/andelf/dino-board>
 - CH1N: PA2, TIM1_CH1N, TIM1_CH3
 - CH2P: PB4, TIM1_CH3, TIM1_CH1N, TIM2_CH2N
 - CH2N: PA4, TIM1_CH3N, TIM2_CH2
+
+## Target
+
+[`riscv32ec-unknown-none-elf.json`](riscv32ec-unknown-none-elf.json) enables `xwchc`, WCH's compressed byte and halfword loads and stores. QingKe V2A implements the extension (QingKe V3 manual, table 1-1).
