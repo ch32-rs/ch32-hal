@@ -13,6 +13,7 @@
 #![no_std]
 #![no_main]
 
+use ch32h417_ipc::protocols::DelaySystick;
 use ch32h417_v5f::{cache, mailbox};
 use panic_halt as _;
 
@@ -29,13 +30,16 @@ const LOOPS_PER_SEC: u32 = V5F_HZ / 3;
 fn main() -> ! {
     cache::enable_icache();
 
-    let mailbox = mailbox();
+    let mailbox = mailbox::<DelaySystick>();
     let mut ticks = 0u32;
     loop {
         for _ in 0..LOOPS_PER_SEC {
             unsafe { core::arch::asm!("nop") };
         }
         ticks = ticks.wrapping_add(1);
-        mailbox.ping.store(ticks, core::sync::atomic::Ordering::Relaxed);
+        mailbox
+            .payload
+            .v5f_ticks
+            .store(ticks, core::sync::atomic::Ordering::Relaxed);
     }
 }

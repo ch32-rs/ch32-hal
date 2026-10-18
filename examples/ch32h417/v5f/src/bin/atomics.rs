@@ -16,27 +16,25 @@
 #![no_std]
 #![no_main]
 
-use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::{Atomics, CAS_DONE_V5F, CAS_INCREMENTS};
 use ch32h417_v5f::{cache, mailbox};
 use core::sync::atomic::Ordering;
 use panic_halt as _;
 
 #[qingke_rt::entry]
 fn main() -> ! {
-    let mailbox = mailbox();
+    let mailbox = mailbox::<Atomics>();
 
     // The I-cache resets to disabled; without this every fetch of this
     // flash-resident image goes to flash.
     cache::enable_icache();
 
-    for _ in 0..ipc::CAS_INCREMENTS {
-        mailbox.cas_total.fetch_add(1, Ordering::Relaxed);
+    for _ in 0..CAS_INCREMENTS {
+        mailbox.payload.total.fetch_add(1, Ordering::Relaxed);
     }
     // Release: everything above is visible to the boot core once it observes
     // this bit with an acquire load.
-    mailbox
-        .cas_done
-        .fetch_or(ipc::CAS_DONE_V5F, Ordering::Release);
+    mailbox.payload.done.fetch_or(CAS_DONE_V5F, Ordering::Release);
 
     loop {}
 }

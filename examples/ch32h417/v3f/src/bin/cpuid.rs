@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! cargo xtask flash --example cpuid     # hand over and let hart 1 probe itself
-//! cargo xtask report                    # read hart 1's block back out
+//! cargo xtask report --example cpuid                    # read hart 1's block back out
 //! cargo xtask run   --example cpuid     # same, with the V3F's own console
 //! ```
 //!
@@ -42,14 +42,17 @@
 //!
 //! ```text
 //! cargo xtask flash --example cpuid
-//! cargo xtask report
+//! cargo xtask report --example cpuid
 //! ```
 
 #![no_std]
 #![no_main]
 
 use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::{Cpuid, CPUID_CSR_NAMES, CPUID_CSRS, CPUID_DONE, CPUID_MISA_INDEX};
 use hal::{print, println};
+
+ipc::mailbox!(Cpuid);
 use qingke::pfic::{self, HartId};
 use {ch32_hal as hal, panic_halt as _};
 
@@ -62,16 +65,16 @@ const N_CSRS: u32 = 14;
 
 
 /// The probed CSRs must match the mailbox's value block.
-const _: () = assert!(N_CSRS as usize == ipc::CPUID_CSRS);
+const _: () = assert!(N_CSRS as usize == CPUID_CSRS);
 
 /// The probed CSRs, in report order, come from the shared crate so the examples
 /// and `xtask report` cannot disagree about them. Index `i` corresponds to bit
 /// `i` of the present mask and slot `i` of the value block; `csrr` takes an
 /// immediate, so the matching addresses live in [`probe_all`].
-const CSR_NAMES: [&str; N_CSRS as usize] = ipc::CPUID_CSR_NAMES;
+const CSR_NAMES: [&str; N_CSRS as usize] = CPUID_CSR_NAMES;
 
 /// Index of `misa` in [`CSR_NAMES`]; it is decoded after the table.
-const MISA_INDEX: usize = ipc::CPUID_MISA_INDEX;
+const MISA_INDEX: usize = CPUID_MISA_INDEX;
 
 /// Set by [`ExceptionHandler`] when a probed read faulted.
 static mut TRAP_HIT: u32 = 0;
@@ -208,19 +211,19 @@ fn print_csr_block(values: &[u32; N_CSRS as usize], present: u32) {
 /// is kept alive whether or not hart 1 reported.
 fn report_v5f() -> ! {
     println!("=== V5F (hart 1) ===");
-    let mailbox = ipc::mailbox();
-    if mailbox.cpuid_done.load(core::sync::atomic::Ordering::Relaxed) != ipc::CPUID_DONE {
+    let cpuid = &mailbox().payload.cpuid;
+    if cpuid.done.load(core::sync::atomic::Ordering::Relaxed) != CPUID_DONE {
         println!(
             "no report from hart 1 (magic missing; its progress marker = {})",
-            mailbox.cpuid_progress.load(core::sync::atomic::Ordering::Relaxed)
+            cpuid.progress.load(core::sync::atomic::Ordering::Relaxed)
         );
     } else {
-        let values = mailbox.cpuid_snapshot();
+        let values = cpuid.snapshot();
         println!(
             "image build features = {:#04x}",
-            mailbox.cpuid_buildcfg.load(core::sync::atomic::Ordering::Relaxed)
+            cpuid.buildcfg.load(core::sync::atomic::Ordering::Relaxed)
         );
-        print_csr_block(&values, mailbox.cpuid_present.load(core::sync::atomic::Ordering::Relaxed));
+        print_csr_block(&values, cpuid.present.load(core::sync::atomic::Ordering::Relaxed));
     }
 
     loop {
@@ -239,8 +242,8 @@ fn main() -> ! {
     // until the debug module consumes DATA0, which only happens when wlink arms
     // SDI print, so printing first would leave hart 1 unscheduled on a plain
     // `cargo xtask flash`. Waking first means the V5F probes itself either way;
-    // `cargo xtask report` then reads its block back out of the mailbox.
-    ipc::mailbox().clear();
+    // `cargo xtask report --example cpuid` then reads its block back out of the mailbox.
+    mailbox().clear();
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
 
     println!("=== V3F (boot core) ===");
@@ -256,7 +259,7 @@ fn main() -> ! {
     // Wait for hart 1 to fill its block (bounded, so a dead hart 1 cannot
     // wedge this one).
     let mut spins = 0u32;
-    while ipc::mailbox().cpuid_done.load(core::sync::atomic::Ordering::Relaxed) != ipc::CPUID_DONE {
+    while mailbox().payload.cpuid.done.load(core::sync::atomic::Ordering::Relaxed) != CPUID_DONE {
         spins += 1;
         if spins > 20_000_000 {
             break;

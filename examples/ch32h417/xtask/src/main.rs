@@ -33,6 +33,7 @@
 //! target JSON and `build-std`) apply. Running `cargo --manifest-path v3f/…`
 //! from here would silently fall back to the host target.
 
+use ch32h417_ipc::protocols as ipc;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -103,7 +104,7 @@ commands:
                                             like flash, plus the SDI console
   merge --example NAME [--dual-core | --jump-v5f] [--out DIR]
                                             merge the images into .bin + .hex
-  report                                    read the mailbox back as a report
+  report --example NAME                    read that example's mailbox back
 
 what gets programmed:
   (default)      the boot core alone (same as --v3f-only); the V5F region keeps
@@ -127,7 +128,7 @@ fn main() {
         "flash" => flash(&opts, false),
         "run" => flash(&opts, true),
         "merge" => merge(&opts),
-        "report" => report(),
+        "report" => report(&opts),
         "help" | "--help" | "-h" => println!("{USAGE}"),
         other => fail(&format!("unknown command `{other}`\n\n{USAGE}")),
     }
@@ -280,16 +281,10 @@ fn example_elf(core: &Core, example: &str) -> PathBuf {
 
 /// Runs a program from `dir`, failing the xtask if it does.
 fn run(program: &str, args: &[&str], dir: &Path) {
-    run_env(program, args, dir, &[])
-}
-
-/// Like [`run`], with extra environment variables for the child.
-fn run_env(program: &str, args: &[&str], dir: &Path, env: &[(&str, &str)]) {
     println!("  {} {}", program, args.join(" "));
     let status = Command::new(program)
         .args(args)
         .current_dir(dir)
-        .envs(env.iter().copied())
         .status()
         .unwrap_or_else(|e| fail(&format!("failed to run `{program}`: {e}")));
     if !status.success() {
@@ -365,122 +360,52 @@ fn recover(attempt: u32) {
 }
 
 fn build(opts: &Options) {
-    let jobs = opts.jobs();
-    // The boot core owns the shared region, so it is built first; its ELF is then
-    // post-processed into the layout the other cores consume.
-    let mut layout: Option<PathBuf> = None;
-
-    for job in &jobs {
-        if job.core.name != BOOT_CORE && layout.is_none() {
-            layout = Some(write_layout(&jobs));
-        }
-
-        let dir = root().join(job.core.name);
-        let mut args = vec!["build", "--release"];
-        if !job.example.is_empty() {
-            args.extend(["--bin", &job.example]);
-        }
-        println!("building {} ...", job.core.name);
-
-        match (&layout, job.core.name != BOOT_CORE) {
-            (Some(path), true) => run_env(
-                "cargo",
-                &args,
-                &dir,
-                &[("H417_LAYOUT", path.to_str().expect("utf-8 path"))],
-            ),
-            _ => run("cargo", &args, &dir),
-        }
+    // The boot core owns the shared region and brings the chip up, so it is built
+    // first; nothing it produces feeds the other core's build. The mailbox address
+    // is fixed by the linker scripts (see `ch32h417_ipc::MAILBOX_ADDR`), so there
+    // is no layout file to hand across.
+    for job in &opts.jobs() {
+        build_core(job);
     }
     if opts.example.is_some() {
-        println!("built: {}", describe(&jobs));
+        println!("built: {}", describe(&opts.jobs()));
     }
 }
 
-/// Post-processes the boot core's ELF into the shared layout the other cores
-/// consume: the address and size its linker gave to the mailbox, plus the layout
-/// version. Written as plain `key 0xvalue` lines so `v5f/build.rs` can turn it
-/// into constants and `report` can read it back.
-fn write_layout(jobs: &[Job]) -> PathBuf {
-    let boot = jobs
-        .iter()
-        .find(|job| job.core.name == BOOT_CORE)
-        .expect("a boot-core job");
-    let candidates: Vec<String> = if boot.example.is_empty() {
-        // `cargo xtask build` with no example: any boot-core image will do,
-        // the region is a property of the map, not of one example. Built
-        // boot-core ELFs only — images whose sources are gone would otherwise
-        // shadow a fresh build's layout with a stale one.
-        built_boot_images()
-    } else {
-        vec![boot.example.clone()]
+/// Builds one core's image.
+fn build_core(job: &Job) {
+    let dir = root().join(job.core.name);
+    let mut args = vec!["build", "--release"];
+    if !job.example.is_empty() {
+        args.extend(["--bin", &job.example]);
+    }
+    println!("building {} ...", job.core.name);
+    run("cargo", &args, &dir);
+}
+
+/// Warns when `example`'s boot-core image places its mailbox somewhere other
+/// than [`ch32h417_ipc::MAILBOX_ADDR`].
+///
+/// The address is fixed by the linker scripts, so this only catches the two
+/// having drifted apart. It says nothing when the image was never built, or when
+/// the example places no mailbox.
+fn check_mailbox_address(example: &str) {
+    let elf = example_elf(core_named(BOOT_CORE), example);
+    let Some((address, _)) = elf.exists().then(|| mailbox_symbol(&elf)).flatten() else {
+        return;
     };
-
-    for example in candidates {
-        let elf = example_elf(core_named(BOOT_CORE), &example);
-        if !elf.exists() {
-            continue;
-        }
-        if let Some((address, size)) = mailbox_symbol(&elf) {
-            let out_dir = root().join("out");
-            fs::create_dir_all(&out_dir)
-                .unwrap_or_else(|e| fail(&format!("cannot create {}: {e}", out_dir.display())));
-            let path = out_dir.join("layout.txt");
-            let text = format!(
-                "mailbox_addr {address:#010x}
-mailbox_size {size:#x}
-layout_version {}
-",
-                ch32h417_ipc::LAYOUT_VERSION
-            );
-            fs::write(&path, text)
-                .unwrap_or_else(|e| fail(&format!("cannot write {}: {e}", path.display())));
-            println!(
-                "layout: {} -> {address:#010x} ({size} bytes)",
-                path.display()
-            );
-            return path;
-        }
+    if address as usize != ch32h417_ipc::MAILBOX_ADDR {
+        println!(
+            "note: `{example}` places its mailbox at {address:#010x}, not {:#010x} — the linker \n\
+             \x20     scripts and `ch32h417_ipc::MAILBOX_ADDR` have drifted apart",
+            ch32h417_ipc::MAILBOX_ADDR
+        );
     }
-    fail(
-        "no boot-core image with a `MAILBOX` symbol found — build a boot-core example first\n\
-         \x20     (all shared symbols are defined by the V3F image; the V5F consumes their address)",
-    )
 }
 
-/// Built boot-core (release) ELFs, as example names.
-///
-/// A boot-core example whose source vanished but whose ELF is still in
-/// `target/` stays a candidate, because all boot-core images place the
-/// mailbox at the same address — a stale image cannot mislead the layout.
-fn built_boot_images() -> Vec<String> {
-    let boot = core_named(BOOT_CORE);
-    let release_dir = root()
-        .join(boot.name)
-        .join("target")
-        .join(boot.target)
-        .join("release");
-    let mut names: Vec<String> = fs::read_dir(&release_dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            // A bare ELF: the plain built binary, not a build script, dep-info
-            // or hashed artifact.
-            (path.is_file() && path.extension().is_none())
-                .then(|| path.file_name()?.to_str().map(str::to_string))?
-        })
-        .collect();
-    names.sort();
-    names
-}
-
-/// `(address, size)` of the `MAILBOX` symbol in `elf`.
-///
-/// Read straight out of the ELF symbol table instead of shelling out to
-/// `llvm-nm`: CI installs no `llvm-tools-preview`, and the layout a build needs
-/// must not depend on a tool only flashing needs.
+/// `(address, size)` of the `MAILBOX` symbol in `elf`, read straight out of the
+/// ELF symbol table instead of shelling out to `llvm-nm` (CI installs no
+/// `llvm-tools-preview`).
 fn mailbox_symbol(elf: &Path) -> Option<(u32, u32)> {
     let data = fs::read(elf).ok()?;
     // ELF32, little endian, then its section header table.
@@ -727,25 +652,6 @@ fn merge(opts: &Options) {
     println!("intel hex:    {}", hex.display());
 }
 
-/// The mailbox address the boot core exported, as written by [`write_layout`].
-fn read_layout_address() -> u64 {
-    let path = root().join("out/layout.txt");
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| {
-        fail(&format!(
-            "cannot read {}: {e}\n     run `cargo xtask build --example NAME --dual-core` first",
-            path.display()
-        ))
-    });
-    for line in text.lines() {
-        if let Some(raw) = line.strip_prefix("mailbox_addr ") {
-            if let Ok(address) = u32::from_str_radix(raw.trim().trim_start_matches("0x"), 16) {
-                return address as u64;
-            }
-        }
-    }
-    fail(&format!("no mailbox_addr in {}", path.display()))
-}
-
 /// Reads the mailbox back and decodes it.
 ///
 /// The V5F half cannot report over SDI while a console is attached — every wlink
@@ -754,23 +660,31 @@ fn read_layout_address() -> u64 {
 ///
 /// The layout comes from the `ch32h417-ipc` crate: the very `#[repr(C)]` struct
 /// both cores place at `SRAM_SHARED`, linked into this tool so the field offsets
-/// decoded here cannot drift from the ones they write.
-fn report() {
-    /// Offset of one mailbox field, from the shared definition.
-    macro_rules! at {
-        ($field:ident) => {
-            core::mem::offset_of!(ch32h417_ipc::Mailbox, $field)
-        };
-    }
+/// decoded here cannot drift from the ones they write. Which payload that struct
+/// carries depends on the example, so the read length and the decoder both follow
+/// the `--example` asked for.
+fn report(opts: &Options) {
+    let Some(example) = opts.example.as_deref() else {
+        fail(&format!("`report` needs --example NAME\n\n{USAGE}"))
+    };
+    let len = match example {
+        "dualcore" => size_of::<ch32h417_ipc::Mailbox<ipc::Dualcore>>(),
+        "delay_systick" => size_of::<ch32h417_ipc::Mailbox<ipc::DelaySystick>>(),
+        "rcc_delay_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RccDelayCheck>>(),
+        "atomics" => size_of::<ch32h417_ipc::Mailbox<ipc::Atomics>>(),
+        "cpuid" => size_of::<ch32h417_ipc::Mailbox<ipc::Cpuid>>(),
+        "pingpong" => size_of::<ch32h417_ipc::Mailbox<ipc::Pingpong>>(),
+        "sdi_cpuid" => size_of::<ch32h417_ipc::Mailbox<ipc::SdiCpuid>>(),
+        "bme280" => size_of::<ch32h417_ipc::Mailbox<ipc::Bme280>>(),
+        "launcher" => size_of::<ch32h417_ipc::Mailbox<ipc::Empty>>(),
+        other => fail(&format!( "{other} publishes nothing `report` knows how to read")),
+    };
 
-    /// Bytes to read: the whole structure, so a field added at the end cannot be
-    /// decoded past the end of the dump.
-    const LEN: usize = core::mem::size_of::<ch32h417_ipc::Mailbox>();
-
-    let base = read_layout_address();
+    check_mailbox_address(example);
+    let base = ch32h417_ipc::MAILBOX_ADDR as u64;
     let tmp = env::temp_dir().join(format!("h417-mailbox-{}.bin", std::process::id()));
     let address = format!("{base:#010x}");
-    let length = LEN.to_string();
+    let length = len.to_string();
     let read = run_timed(
         "wlink",
         &[
@@ -794,8 +708,8 @@ fn report() {
         u32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]])
     };
 
-    println!("mailbox @ {base:#010x}");
-    let version = word(at!(layout_version));
+    println!("mailbox @ {base:#010x} ({example})");
+    let version = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Empty>, layout_version));
     if version != ch32h417_ipc::LAYOUT_VERSION {
         println!(
             "  note: the flashed half reports mailbox layout v{version}, this tool knows v{} — \
@@ -804,87 +718,125 @@ fn report() {
         );
     }
 
-    println!("  sdi_cpuid token   = {:#010x}", word(at!(sdi_token)));
-    println!("  sdi_cpuid ticks   = {}", word(at!(sdi_ticks)));
-    let marker = word(at!(dualcore_marker));
-    println!(
-        "  dualcore  marker  = {marker:#010x}{}",
-        if marker == ch32h417_ipc::DUALCORE_MARKER {
-            "  (hart 1 ran)"
-        } else {
-            ""
-        }
-    );
-    println!("  dualcore  counter = {}", word(at!(dualcore_counter)));
-    println!("  pingpong  ping    = {}", word(at!(ping)));
-    println!("  pingpong  pong    = {}", word(at!(pong)));
-
-    // `bme280`: hart 1 reads the sensor, this prints the last sample it stored.
-    // Temperature is 1/100 °C, pressure 1/100 Pa, humidity 1/100 %RH.
-    let bme_status = word(at!(bme280_status));
-    let bme_seq = word(at!(bme280_seq));
-    let bme_state = match bme_status {
-        ch32h417_ipc::BME280_IDLE => "idle",
-        ch32h417_ipc::BME280_INIT => "init",
-        ch32h417_ipc::BME280_OK => "ok",
-        ch32h417_ipc::BME280_BMP => "bmp280",
-        ch32h417_ipc::BME280_FAIL => "FAILED",
-        _ => "unknown",
-    };
-    println!("  bme280    status  = {bme_status} ({bme_state}), sample {bme_seq}");
-    if bme_seq != ch32h417_ipc::BME280_NO_SAMPLE {
-        let temperature = word(at!(bme280_temperature)) as i32;
-        let pressure = word(at!(bme280_pressure));
-        let humidity = word(at!(bme280_humidity));
-        println!(
-            "  bme280    reading = {:.2} C, {:.2} hPa, {:.2} %RH",
-            temperature as f32 / 100.0,
-            pressure as f32 / 10_000.0,
-            humidity as f32 / 100.0
-        );
+    /// Print `label` and the word at `field` of `payload`.
+    macro_rules! field {
+        ($payload:ty, $field:ident, $label:literal) => {
+            println!(
+                "  {:<18}= {}",
+                $label,
+                word(core::mem::offset_of!(ch32h417_ipc::Mailbox<$payload>, payload.$field))
+            )
+        };
     }
 
-    // `atomics`: both cores `fetch_add` the same word, so the total is the
-    // litmus test for the A extension actually performing the atomics.
-    let cas_total = word(at!(cas_total));
-    let cas_done = word(at!(cas_done));
-    let cas_expected = ch32h417_ipc::CAS_INCREMENTS * 2;
+    match example {
+        "dualcore" => {
+            let marker = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Dualcore>, payload.marker));
+            println!(
+                "  {:<18}= {marker:#010x}{}",
+                "marker",
+                if marker == ipc::DUALCORE_MARKER { "  (hart 1 ran)" } else { "" }
+            );
+            field!(ipc::Dualcore, counter, "counter");
+        }
+        "delay_systick" => {
+            field!(ipc::DelaySystick, v3f_ticks, "v3f ticks");
+            field!(ipc::DelaySystick, v5f_ticks, "v5f ticks");
+        }
+        "rcc_delay_check" => {
+            field!(ipc::RccDelayCheck, stage, "stage");
+            field!(ipc::RccDelayCheck, failures, "failures");
+            field!(ipc::RccDelayCheck, v3f_hz, "v3f Hz");
+            field!(ipc::RccDelayCheck, v5f_hz, "v5f Hz");
+            field!(ipc::RccDelayCheck, heartbeat, "heartbeat");
+        }
+        "atomics" => report_atomics(&word),
+        "bme280" => report_bme280(&word),
+        "cpuid" => report_cpuid(&word, core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Cpuid>, payload.cpuid)),
+        "pingpong" => {
+            report_cpuid(&word, core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Pingpong>, payload.cpuid));
+            field!(ipc::Pingpong, ping, "ping");
+            field!(ipc::Pingpong, pong, "pong");
+        }
+        "sdi_cpuid" => {
+            field!(ipc::SdiCpuid, token, "token");
+            field!(ipc::SdiCpuid, ticks, "ticks");
+            report_cpuid(&word, core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::SdiCpuid>, payload.cpuid));
+        }
+        "launcher" => {}
+        _ => unreachable!(),
+    }
+}
+
+/// `atomics`: both cores `fetch_add` the same word, so the total is the litmus
+/// test for the A extension actually performing the atomics.
+fn report_atomics(word: &impl Fn(usize) -> u32) {
+    let total = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Atomics>, payload.total));
+    let done = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Atomics>, payload.done));
+    let expected = ipc::CAS_INCREMENTS * 2;
     println!(
-        "  atomics   total   = {cas_total} (expected {cas_expected}, done mask {cas_done:#x}){}",
-        if cas_done & (ch32h417_ipc::CAS_DONE_V3F | ch32h417_ipc::CAS_DONE_V5F)
-            == (ch32h417_ipc::CAS_DONE_V3F | ch32h417_ipc::CAS_DONE_V5F)
-        {
-            if cas_total == cas_expected {
-                "  OK"
-            } else {
-                "  LOST UPDATES"
-            }
+        "  total             = {total} (expected {expected}, done mask {done:#x}){}",
+        if done & (ipc::CAS_DONE_V3F | ipc::CAS_DONE_V5F) == (ipc::CAS_DONE_V3F | ipc::CAS_DONE_V5F) {
+            if total == expected { "  OK" } else { "  LOST UPDATES" }
         } else {
             "  (not finished)"
         }
     );
+}
 
-    if word(at!(cpuid_done)) != ch32h417_ipc::CPUID_DONE {
+/// `bme280`: hart 1 reads the sensor, this prints the last sample it stored.
+/// Temperature is 1/100 °C, pressure 1/100 Pa, humidity 1/100 %RH.
+fn report_bme280(word: &impl Fn(usize) -> u32) {
+    let status = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.status));
+    let seq = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.seq));
+    let state = match status {
+        ipc::BME280_IDLE => "idle",
+        ipc::BME280_INIT => "init",
+        ipc::BME280_OK => "ok",
+        ipc::BME280_BMP => "bmp280",
+        ipc::BME280_FAIL => "FAILED",
+        _ => "unknown",
+    };
+    println!("  status            = {status} ({state}), sample {seq}");
+    if seq != ipc::BME280_NO_SAMPLE {
+        let temperature = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.temperature));
+        let pressure = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.pressure));
+        let humidity = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.humidity));
+        println!(
+            "  reading           = {:.2} C, {:.2} hPa, {:.2} %RH",
+            temperature as i32 as f32 / 100.0,
+            pressure as f32 / 10_000.0,
+            humidity as f32 / 100.0
+        );
+    }
+}
+
+/// Hart 1's CPU-ID block, which `cpuid`, `pingpong` and `sdi_cpuid` all carry at
+/// different offsets inside their own payload.
+fn report_cpuid(word: &impl Fn(usize) -> u32, base: usize) {
+    let at = |field| base + field;
+    if word(at(core::mem::offset_of!(ipc::CpuidBlock, done))) != ipc::CPUID_DONE {
         println!(
             "  cpuid: no report from hart 1 (magic missing, progress = {})",
-            word(at!(cpuid_progress))
+            word(at(core::mem::offset_of!(ipc::CpuidBlock, progress)))
         );
         return;
     }
     println!(
-        "  cpuid  (hart 1)   image build features = {:#04x}",
-        word(at!(cpuid_buildcfg))
+        "  cpuid (hart 1)    image build features = {:#04x}",
+        word(at(core::mem::offset_of!(ipc::CpuidBlock, buildcfg)))
     );
-    let present = word(at!(cpuid_present));
+    let present = word(at(core::mem::offset_of!(ipc::CpuidBlock, present)));
+    let values = core::mem::offset_of!(ipc::CpuidBlock, values);
     let mut misa = None;
-    for (i, name) in ch32h417_ipc::CPUID_CSR_NAMES.iter().enumerate() {
-        let value = word(at!(cpuid_values) + i * 4);
+    for (i, name) in ipc::CPUID_CSR_NAMES.iter().enumerate() {
+        let value = word(at(values) + i * 4);
         if present & (1 << i) == 0 {
             println!("    {name:<18}   absent (read faulted)");
             continue;
         }
         println!("    {name:<18} = {value:#010x}");
-        if i == ch32h417_ipc::CPUID_MISA_INDEX {
+        if i == ipc::CPUID_MISA_INDEX {
             misa = Some(value);
         }
     }

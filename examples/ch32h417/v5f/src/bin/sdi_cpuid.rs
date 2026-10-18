@@ -33,7 +33,9 @@
 use ch32h417_v5f::sdi::SdiPrint;
 use ch32h417_v5f::{cache, cpuid};
 use ch32h417_v5f::sdi_try_println;
-use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::{
+    SdiCpuid, CPUID_CSR_NAMES, CPUID_MISA_INDEX,
+};
 use ch32h417_v5f::mailbox;
 use qingke::pfic::HartId;
 use panic_halt as _;
@@ -63,14 +65,15 @@ fn main() -> ! {
     // probes, so a *report* that shows 0x101 means hart 1 entered main and then
     // died before probing — the usual way "hart 1 never ran" is actually
     // "hart 1 ran and hung", which this distinguishes.
-    mailbox().cpuid_progress.store(0x101, Ordering::Relaxed);
+    let mailbox = mailbox::<SdiCpuid>();
+    mailbox.payload.cpuid.progress.store(0x101, Ordering::Relaxed);
     // Hart 1 must enable its own instruction cache: it resets to disabled.
     cache::enable_icache();
 
     // Wait for the console handoff. Nothing global is initialised here — see
     // the module docs.
     let mut spins = 0u32;
-    while mailbox().sdi_token.load(Ordering::Relaxed) != 1 {
+    while mailbox.payload.token.load(Ordering::Relaxed) != 1 {
         spins += 1;
         if spins > HANDOFF_SPINS {
             break;
@@ -88,22 +91,22 @@ fn main() -> ! {
     // Bounded prints (`sdi_try_println!`) so a missing console cannot wedge this
     // core: with the console open every line goes out, without it the lines are
     // dropped and the loop below keeps ticking.
-    cpuid::report_self(mailbox());
-    let values = mailbox().cpuid_snapshot();
-    let present = mailbox().cpuid_present.load(Ordering::Relaxed);
+    cpuid::report_self(&mailbox.payload.cpuid);
+    let values = mailbox.payload.cpuid.snapshot();
+    let present = mailbox.payload.cpuid.present.load(Ordering::Relaxed);
     sdi_try_println!(
         "[V5F] image build features = {:#04x}",
-        mailbox().cpuid_buildcfg.load(Ordering::Relaxed)
+        mailbox.payload.cpuid.buildcfg.load(Ordering::Relaxed)
     );
-    for (i, name) in ipc::CPUID_CSR_NAMES.iter().enumerate() {
+    for (i, name) in CPUID_CSR_NAMES.iter().enumerate() {
         if present & (1 << i) != 0 {
             sdi_try_println!("  {:<18} = {:#010x}", name, values[i]);
         } else {
             sdi_try_println!("  {:<18}   absent (read faulted)", name);
         }
     }
-    if present & (1 << ipc::CPUID_MISA_INDEX) != 0 {
-        let misa = values[ipc::CPUID_MISA_INDEX];
+    if present & (1 << CPUID_MISA_INDEX) != 0 {
+        let misa = values[CPUID_MISA_INDEX];
         let mut letters = [0u8; 26];
         let mut len = 0;
         for (bit, letter) in (b'A'..=b'Z').enumerate() {
@@ -121,13 +124,13 @@ fn main() -> ! {
 
     // Hand the console back to the boot core; it is the only SDI writer from
     // here on, so this core never has to arbitrate again.
-    mailbox().sdi_token.store(0, Ordering::Relaxed);
+    mailbox.payload.token.store(0, Ordering::Relaxed);
 
     // Report liveness through shared SRAM. A single 32-bit aligned writer and
     // a single reader need no locking.
     loop {
-        let ticks = mailbox().sdi_ticks.load(Ordering::Relaxed);
-        mailbox().sdi_ticks.store(ticks.wrapping_add(1), Ordering::Relaxed);
+        let ticks = mailbox.payload.ticks.load(Ordering::Relaxed);
+        mailbox.payload.ticks.store(ticks.wrapping_add(1), Ordering::Relaxed);
 
         // The HAL's delay is not usable here (its calibration is filled in by
         // the boot core's `hal::init()` and it drives hart 0's systick), so a

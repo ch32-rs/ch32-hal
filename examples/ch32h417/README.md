@@ -9,7 +9,7 @@ ch32h417/
 ├── v5f/     second core,  hart 1 — riscv32imafbc, flash 0x00010000…
 ├── ipc/     the shared mailbox, consumed by both crates
 ├── xtask/   build / flash / run / merge / report driver
-└── out/     merged images and the exported layout (generated)
+└── out/     merged images (generated)
 ```
 
 `v3f/` and `v5f/` are separate crates: different ISA (`imafc` vs `imafbc`),
@@ -53,7 +53,7 @@ cargo xtask flash  --example cpuid --jump-v5f      # jump firmware + V5F payload
 cargo xtask flash  --jump-v5f                      # reflash the jumper alone
 
 cargo xtask merge  --example dualcore --dual-core  # out/dualcore.bin + .hex
-cargo xtask report                                 # decode the shared mailbox
+cargo xtask report --example dualcore              # decode that example's mailbox
 ```
 
 | Layout | Boot core (`v3f`) | Second core (`v5f`) |
@@ -78,7 +78,7 @@ The examples publish into the shared mailbox instead:
 
 ```sh
 cargo xtask flash --example cpuid --dual-core
-cargo xtask report
+cargo xtask report --example cpuid
 ```
 
 Leave a gap between reads: a burst of `wlink` requests keeps both harts halted,
@@ -100,11 +100,10 @@ boot core's own lines.
   the 400 MHz preset: cached V3F/V5F frequencies, RCC refresh, and SysTick
   compare values for rounded-up nanosecond delays, zero delay, and exact
   microsecond/millisecond delays. It does not wake hart 1 or print over SDI.
-  `report` reads the reused mailbox fields: `dualcore marker` (1 = init entered,
-  2 = init returned, 3 = checks passed), `atomics total` (failed check count,
-  **0** means success), `pingpong ping/pong` (cached V3F/V5F Hz, **100000000 /
-  400000000**), `dualcore counter` (one-second heartbeat). Read once per fresh
-  flash.
+  `report` reads its own payload: `stage` (1 = init entered, 2 = init returned,
+  3 = checks passed), `failures` (**0** means success), `v3f_hz` / `v5f_hz`
+  (**100000000 / 400000000**) and `heartbeat` (one-second counter). Read once per
+  fresh flash.
 - **`cpuid`** — the handover example. The V3F half runs `hal::init()` (RCC, flash
   latency, AFIO/GPIO, EXTI), writes hart 1's entry to the PFIC wake register and
   parks in `wfi`; the V5F half probes its own Machine-mode CSRs into the mailbox.
@@ -150,20 +149,27 @@ to ITCM is not implemented here, so keep V5F halves small.
 ### Mailbox
 
 One shared region, `SRAM_SHARED` (`0x20178000` + 32K), holding one shared
-object, the `ch32h417-ipc` crate's `Mailbox` (`#[repr(C)]`). The boot core
-**defines** it; the second core **consumes its address**:
+object: `ch32h417_ipc::Mailbox<T>`, a layout-version word plus the example's own
+`#[repr(C)]` payload. The payload types live in `ipc/src/protocols.rs` — one per
+example, so an example no longer reserves words for protocols it never runs, and
+two examples no longer share a field. The boot core **defines** the object; the
+second core never places one:
 
 ```
-v3f image   .shared (NOLOAD) -> ipc::MAILBOX @ 0x20178000   (defined here, and only here)
-xtask       post-processes the V3F ELF -> out/layout.txt
-v5f image   no .shared at all -> ipc::at(MAILBOX_ADDR) from the generated layout
+v3f image   .shared (NOLOAD) -> MAILBOX @ 0x20178000   (defined here, and only here)
+v5f image   no .shared, no MAILBOX symbol -> ipc::at(MAILBOX_ADDR)
 ```
 
-Because the region is `NOLOAD` it costs no flash and nothing zeroes it at boot,
-so it survives one core resetting while the other runs. The boot core clears it
-before handing over, so `report` describes the current run. `layout.txt` also
-carries a version word, so two independently flashed halves can notice they
-disagree.
+The address is not negotiated between the images. `shared.x` puts `.shared` at
+the start of `SRAM_SHARED`, both `memory.x` files pin that region at
+`0x20178000`, and `ch32h417_ipc::MAILBOX_ADDR` names the same place, so moving
+the region means changing all three. `cargo xtask report --example NAME` decodes
+whichever protocol that example stores there; the read length is
+`size_of::<Mailbox<ThatProtocol>>()`. Because the region is `NOLOAD` it costs no
+flash and nothing zeroes it at boot, so it survives one core resetting while the
+other runs. The boot core clears it before handing over, so `report` describes
+the current run. The version word versions the container only, so two
+independently flashed halves can notice they disagree about it.
 
 ## Notes
 

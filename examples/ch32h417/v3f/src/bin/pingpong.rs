@@ -20,7 +20,7 @@
 //!
 //! ```text
 //! cargo xtask flash --example pingpong --dual-core   # rounds run; read them back
-//! cargo xtask report                                  # ping/pong advancing
+//! cargo xtask report --example pingpong                                  # ping/pong advancing
 //! cargo xtask run   --example pingpong --dual-core    # see hart 1's report printed
 //! ```
 //!
@@ -33,14 +33,19 @@
 //!
 //! ```text
 //! cargo xtask flash --example pingpong --dual-core
-//! cargo xtask report
+//! cargo xtask report --example pingpong
 //! ```
 
 #![no_std]
 #![no_main]
 
 use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::{
+    Pingpong, CPUID_CSR_NAMES, CPUID_DONE, CPUID_MISA_INDEX,
+};
 use core::sync::atomic::Ordering;
+
+ipc::mailbox!(Pingpong);
 use hal::delay::Delay;
 use qingke::pfic;
 use {ch32_hal as hal, panic_halt as _};
@@ -59,23 +64,24 @@ fn main() -> ! {
 
     // Clear the mailbox (shared RAM survives a reset) and hand over — before
     // printing anything, because a blocking print would strand hart 1.
-    let mailbox = ipc::mailbox();
+    let mailbox = mailbox();
     mailbox.clear();
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
 
+    let cpuid = &mailbox.payload.cpuid;
     let mut spins = 0u32;
-    while mailbox.cpuid_done.load(Ordering::Relaxed) != ipc::CPUID_DONE {
+    while cpuid.done.load(Ordering::Relaxed) != CPUID_DONE {
         spins += 1;
         if spins > HANDOFF_SPINS {
             break;
         }
     }
 
-    if mailbox.cpuid_done.load(Ordering::Relaxed) == ipc::CPUID_DONE {
+    if cpuid.done.load(Ordering::Relaxed) == CPUID_DONE {
         hal::try_println!("=== hart 1, reported through shared memory ===");
-        let values = mailbox.cpuid_snapshot();
-        let present = mailbox.cpuid_present.load(Ordering::Relaxed);
-        for (i, name) in ipc::CPUID_CSR_NAMES.iter().enumerate() {
+        let values = cpuid.snapshot();
+        let present = cpuid.present.load(Ordering::Relaxed);
+        for (i, name) in CPUID_CSR_NAMES.iter().enumerate() {
             if present & (1 << i) != 0 {
                 hal::try_println!("  {:<18} = {:#010x}", name, values[i]);
             } else {
@@ -84,10 +90,10 @@ fn main() -> ! {
         }
         hal::try_println!(
             "  image build features = {:#04x}",
-            mailbox.cpuid_buildcfg.load(Ordering::Relaxed)
+            cpuid.buildcfg.load(Ordering::Relaxed)
         );
-        if present & (1 << ipc::CPUID_MISA_INDEX) != 0 {
-            let misa = values[ipc::CPUID_MISA_INDEX];
+        if present & (1 << CPUID_MISA_INDEX) != 0 {
+            let misa = values[CPUID_MISA_INDEX];
             let mut letters = [0u8; 26];
             hal::try_println!(
                 "  misa: MXL={} extensions={}",
@@ -98,20 +104,20 @@ fn main() -> ! {
     } else {
         hal::try_println!(
             "no report from hart 1 (progress = {})",
-            mailbox.cpuid_progress.load(Ordering::Relaxed)
+            cpuid.progress.load(Ordering::Relaxed)
         );
     }
 
     // Ping-pong: answer hart 1's counter once per second. `ping != pong` means a
     // round is outstanding, so hart 1 only starts the next one after this core
     // has echoed — the exchange cannot run away from the printer.
-    let mut echoed = mailbox.pong.load(Ordering::Relaxed);
+    let mut echoed = mailbox.payload.pong.load(Ordering::Relaxed);
     loop {
-        let ping = mailbox.ping.load(Ordering::Relaxed);
+        let ping = mailbox.payload.ping.load(Ordering::Relaxed);
         if ping != echoed {
             hal::try_println!("[V3F] round {} (pong was {})", ping, echoed);
             echoed = ping;
-            mailbox.pong.store(ping, Ordering::Relaxed);
+            mailbox.payload.pong.store(ping, Ordering::Relaxed);
         }
         Delay.delay_ms(1000);
     }

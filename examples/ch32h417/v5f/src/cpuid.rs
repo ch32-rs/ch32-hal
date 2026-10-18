@@ -13,7 +13,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use ch32h417_ipc as ipc;
-use ipc::Mailbox;
+use ipc::protocols::CpuidBlock;
 
 /// Set by the binary's `ExceptionHandler` when a `csrr` faulted.
 static TRAP_HIT: AtomicU32 = AtomicU32::new(0);
@@ -68,26 +68,26 @@ pub fn build_features() -> u32 {
     f
 }
 
-/// Fill `mailbox`'s CPU-ID block with this hart's own values.
+/// Fill `block` with this hart's own CPU-ID values.
 ///
-/// The order matches [`ipc::CPUID_CSR_NAMES`] (and the boot core's printer). The
-/// block is invalidated first, so a stale `DONE` from an earlier run cannot make
-/// the boot core read a half-written block as if it were new.
-pub fn report_self(mailbox: &Mailbox) {
-    mailbox.cpuid_progress.store(0, Ordering::Relaxed);
-    mailbox.cpuid_done.store(0, Ordering::Relaxed);
+/// The order matches [`ipc::protocols::CPUID_CSR_NAMES`] (and the boot core's
+/// printer). The block is invalidated first, so a stale `DONE` from an earlier
+/// run cannot make the boot core read a half-written block as if it were new.
+pub fn report_self(block: &CpuidBlock) {
+    block.progress.store(0, Ordering::Relaxed);
+    block.done.store(0, Ordering::Relaxed);
 
     let mut present_mask = 0u32;
 
     macro_rules! report {
         ($i:expr, $addr:literal) => {{
             let (value, present) = probe_csr!($addr);
-            mailbox.cpuid_values[$i].store(value, Ordering::Relaxed);
+            block.values[$i].store(value, Ordering::Relaxed);
             if present {
                 present_mask |= 1 << $i;
             }
             // Advance the progress marker so a hang is localisable.
-            mailbox.cpuid_progress.store($i + 1, Ordering::Relaxed);
+            block.progress.store($i + 1, Ordering::Relaxed);
         }};
     }
 
@@ -106,10 +106,8 @@ pub fn report_self(mailbox: &Mailbox) {
     report!(12, "0xbc2"); // cache_strtg_ctlr (QingKe V5-specific)
     report!(13, "0xbc3"); // cache_pmp_ovr   (QingKe V5-specific)
 
-    mailbox.cpuid_buildcfg.store(build_features(), Ordering::Relaxed);
-    mailbox
-        .cpuid_present
-        .store(present_mask, Ordering::Relaxed);
+    block.buildcfg.store(build_features(), Ordering::Relaxed);
+    block.present.store(present_mask, Ordering::Relaxed);
     // Last: tells the boot core the block above is complete.
-    mailbox.cpuid_done.store(ipc::CPUID_DONE, Ordering::Relaxed);
+    block.done.store(ipc::protocols::CPUID_DONE, Ordering::Relaxed);
 }

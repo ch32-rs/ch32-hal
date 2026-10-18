@@ -13,7 +13,9 @@
 #![no_std]
 #![no_main]
 
-use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::{
+    Bme280, BME280_BMP, BME280_FAIL, BME280_INIT, BME280_OK,
+};
 use ch32h417_v5f::{cache, i2c, mailbox};
 use core::sync::atomic::Ordering;
 use edrv_bme280::blocking::BME280;
@@ -28,32 +30,26 @@ const SAMPLE_SPINS: u32 = 8_000_000;
 fn main() -> ! {
     cache::enable_icache();
 
-    let mailbox = mailbox();
-    mailbox.bme280_status.store(ipc::BME280_INIT, Ordering::Relaxed);
+    let mailbox = mailbox::<Bme280>();
+    mailbox.payload.status.store(BME280_INIT, Ordering::Relaxed);
 
     // 100 kHz: the bus clock is derived from the prescalers the boot core left
     // behind, and standard mode tolerates that estimate being a step off.
     // Safety: this half is the only user of I2C1 and of PB6/PB7.
     if unsafe { i2c::init(100_000) }.is_err() {
-        mailbox.bme280_status.store(ipc::BME280_FAIL, Ordering::Release);
+        mailbox.payload.status.store(BME280_FAIL, Ordering::Release);
         loop {}
     }
 
     let mut sensor = BME280::new_primary(Bus);
     let mut delay = SpinDelay;
     match sensor.init() {
-        Ok(()) => mailbox.bme280_status.store(
-            if sensor.is_bme280 {
-                ipc::BME280_OK
-            } else {
-                ipc::BME280_BMP
-            },
+        Ok(()) => mailbox.payload.status.store(
+            if sensor.is_bme280 { BME280_OK } else { BME280_BMP },
             Ordering::Release,
         ),
         Err(_) => {
-            mailbox
-                .bme280_status
-                .store(ipc::BME280_FAIL, Ordering::Release);
+            mailbox.payload.status.store(BME280_FAIL, Ordering::Release);
             loop {}
         }
     }
@@ -65,15 +61,18 @@ fn main() -> ! {
             // Values before the sequence number: the reader treats a changed
             // sequence as "this sample is complete".
             mailbox
-                .bme280_temperature
+                .payload
+                .temperature
                 .store(reading.temperature as u32, Ordering::Relaxed);
             mailbox
-                .bme280_pressure
+                .payload
+                .pressure
                 .store(reading.pressure, Ordering::Relaxed);
             mailbox
-                .bme280_humidity
+                .payload
+                .humidity
                 .store(reading.humidity, Ordering::Relaxed);
-            mailbox.bme280_seq.store(seq, Ordering::Release);
+            mailbox.payload.seq.store(seq, Ordering::Release);
         }
         delay_spins(SAMPLE_SPINS);
     }

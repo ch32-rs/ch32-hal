@@ -36,7 +36,12 @@
 #![no_main]
 
 use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::{
+    SdiCpuid, CPUID_CSR_NAMES, CPUID_DONE, CPUID_MISA_INDEX,
+};
 use qingke::pfic::{self, HartId};
+
+ipc::mailbox!(SdiCpuid);
 use {ch32_hal as hal, panic_halt as _};
 
 /// Must match `v5f/memory.x` FLASH ORIGIN (1KB-aligned).
@@ -59,7 +64,7 @@ fn main() -> ! {
 
     // Clear the whole mailbox (shared RAM survives a reset), so a report always
     // describes this run — including hart 1's progress markers.
-    ipc::mailbox().clear();
+    mailbox().clear();
 
     hal::debug::SDIPrint::enable();
 
@@ -70,24 +75,24 @@ fn main() -> ! {
     hal::try_println!("[V3F] waking the second core at {:#010x}", V5F_ENTRY);
 
     // Hand the console to hart 1, then start it.
-    unsafe { ipc::mailbox().sdi_token.store(1, core::sync::atomic::Ordering::Relaxed) };
+    mailbox().payload.token.store(1, core::sync::atomic::Ordering::Relaxed);
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
 
     // Wait for hart 1 to print its banner and hand the token back.
     let mut spins = 0u32;
-    while unsafe { ipc::mailbox().sdi_token.load(core::sync::atomic::Ordering::Relaxed) } != 0 {
+    while mailbox().payload.token.load(core::sync::atomic::Ordering::Relaxed) != 0 {
         spins += 1;
         if spins > HANDOFF_SPINS {
             break;
         }
     }
-    unsafe { ipc::mailbox().sdi_token.store(0, core::sync::atomic::Ordering::Relaxed) };
+    mailbox().payload.token.store(0, core::sync::atomic::Ordering::Relaxed);
 
     let mut n = 0u32;
     loop {
         // Re-issue the wake until hart 1 reports in: its startup races with the
         // debug link attaching, and re-waking is idempotent.
-        let v5f_ticks = unsafe { ipc::mailbox().sdi_ticks.load(core::sync::atomic::Ordering::Relaxed) };
+        let v5f_ticks = mailbox().payload.ticks.load(core::sync::atomic::Ordering::Relaxed);
         if v5f_ticks == 0 {
             unsafe { pfic::wake_other_core(V5F_ENTRY) };
         }
@@ -95,23 +100,22 @@ fn main() -> ! {
         // it), so print what it published before the console opened — this is the
         // SDI-print alternative to `cargo xtask report`. Repeating it every few
         // seconds covers a console that attaches late.
-        if ipc::mailbox().cpuid_done.load(core::sync::atomic::Ordering::Relaxed) == ipc::CPUID_DONE
-            && n % 5 == 0
-        {
-            let values = ipc::mailbox().cpuid_snapshot();
-            let present = ipc::mailbox().cpuid_present.load(core::sync::atomic::Ordering::Relaxed);
+        let cpuid = &mailbox().payload.cpuid;
+        if cpuid.done.load(core::sync::atomic::Ordering::Relaxed) == CPUID_DONE && n % 5 == 0 {
+            let values = cpuid.snapshot();
+            let present = cpuid.present.load(core::sync::atomic::Ordering::Relaxed);
             hal::try_println!("=== hart 1, published through shared memory ===");
             hal::try_println!(
                 "  image build features = {:#04x}",
-                ipc::mailbox().cpuid_buildcfg.load(core::sync::atomic::Ordering::Relaxed)
+                cpuid.buildcfg.load(core::sync::atomic::Ordering::Relaxed)
             );
-            for (i, name) in ipc::CPUID_CSR_NAMES.iter().enumerate() {
+            for (i, name) in CPUID_CSR_NAMES.iter().enumerate() {
                 if present & (1 << i) != 0 {
                     hal::try_println!("  {:<18} = {:#010x}", name, values[i]);
                 }
             }
-            if present & (1 << ipc::CPUID_MISA_INDEX) != 0 {
-                let misa = values[ipc::CPUID_MISA_INDEX];
+            if present & (1 << CPUID_MISA_INDEX) != 0 {
+                let misa = values[CPUID_MISA_INDEX];
                 let mut letters = [0u8; 26];
                 let mut len = 0;
                 for (bit, letter) in (b'A'..=b'Z').enumerate() {

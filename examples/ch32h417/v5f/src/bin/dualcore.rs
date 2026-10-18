@@ -12,7 +12,7 @@
 #![no_std]
 #![no_main]
 
-use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::{Dualcore, DUALCORE_MARKER};
 use ch32h417_v5f::{cache, mailbox};
 use panic_halt as _;
 
@@ -20,9 +20,10 @@ use panic_halt as _;
 fn main() -> ! {
     cache::enable_icache();
 
-    mailbox()
-        .dualcore_marker
-        .store(ipc::DUALCORE_MARKER, core::sync::atomic::Ordering::Relaxed);
+    mailbox::<Dualcore>()
+        .payload
+        .marker
+        .store(DUALCORE_MARKER, core::sync::atomic::Ordering::Relaxed);
 
     loop {}
 }

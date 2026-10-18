@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! cargo xtask flash --example atomics --dual-core
-//! cargo xtask report
+//! cargo xtask report --example atomics
 //! cargo xtask run --example atomics --dual-core   # prints the verdict
 //! ```
 
@@ -17,7 +17,10 @@
 #![no_main]
 
 use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::{Atomics, CAS_DONE_V3F, CAS_DONE_V5F, CAS_INCREMENTS};
 use core::sync::atomic::Ordering;
+
+ipc::mailbox!(Atomics);
 use qingke::pfic;
 use {ch32_hal as hal, panic_halt as _};
 
@@ -36,13 +39,13 @@ fn main() -> ! {
     let _p = hal::init(config);
     hal::debug::SDIPrint::enable();
 
-    let mailbox = ipc::mailbox();
+    let mailbox = mailbox();
     mailbox.clear();
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
 
     // Start only once hart 1 is running, so the increments really do contend.
     let mut spins = 0u32;
-    while mailbox.cas_total.load(Ordering::Relaxed) == 0 {
+    while mailbox.payload.total.load(Ordering::Relaxed) == 0 {
         spins += 1;
         if spins > SPINS {
             hal::try_println!("hart 1 never started incrementing");
@@ -50,24 +53,22 @@ fn main() -> ! {
         }
     }
 
-    for _ in 0..ipc::CAS_INCREMENTS {
-        mailbox.cas_total.fetch_add(1, Ordering::Relaxed);
+    for _ in 0..CAS_INCREMENTS {
+        mailbox.payload.total.fetch_add(1, Ordering::Relaxed);
     }
-    mailbox
-        .cas_done
-        .fetch_or(ipc::CAS_DONE_V3F, Ordering::Release);
+    mailbox.payload.done.fetch_or(CAS_DONE_V3F, Ordering::Release);
 
     spins = 0;
-    while mailbox.cas_done.load(Ordering::Acquire) & ipc::CAS_DONE_V5F == 0 {
+    while mailbox.payload.done.load(Ordering::Acquire) & CAS_DONE_V5F == 0 {
         spins += 1;
         if spins > SPINS {
             break;
         }
     }
 
-    let done = mailbox.cas_done.load(Ordering::Acquire);
-    let total = mailbox.cas_total.load(Ordering::Relaxed);
-    let expected = ipc::CAS_INCREMENTS * 2;
+    let done = mailbox.payload.done.load(Ordering::Acquire);
+    let total = mailbox.payload.total.load(Ordering::Relaxed);
+    let expected = CAS_INCREMENTS * 2;
     hal::try_println!("[V3F] done={done:#x} total={total} expected={expected}");
     if total == expected {
         hal::try_println!("[V3F] OK: the A extension did the increments, no updates lost");

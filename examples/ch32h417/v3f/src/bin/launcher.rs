@@ -24,7 +24,12 @@
 #![no_main]
 
 use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::Empty;
 use hal::println;
+
+// The launcher starts whatever V5F image is already programmed, so it cannot
+// know that image's payload. It only stamps the version word.
+ipc::mailbox!(Empty);
 use qingke::pfic;
 use {ch32_hal as hal, panic_halt as _};
 
@@ -41,7 +46,7 @@ fn main() -> ! {
 
     // Keep `cargo xtask report` honest: shared RAM survives a reset, so without
     // this it could show fields an earlier example left behind.
-    ipc::mailbox().clear();
+    mailbox().clear();
 
     // Wake the second core before printing anything. `SDIPrint::write_str`
     // spins until the debug module consumes `DATA0`, which never happens

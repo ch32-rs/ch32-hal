@@ -30,7 +30,10 @@
 
 use ch32_hal as hal;
 use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::Dualcore;
 use core::panic::PanicInfo;
+
+ipc::mailbox!(Dualcore);
 use hal::delay::Delay;
 use hal::gpio::{Level, Output};
 use qingke::pfic;
@@ -56,7 +59,7 @@ fn main() -> ! {
 
     // Clear the mailbox before the handover so `xtask report` describes this run
     // rather than leftovers from another example.
-    ipc::mailbox().clear();
+    mailbox().clear();
 
     // Wake V5F (CPU-originated WAKEIP + SENDEVENT; debug-bus writes to
     // PFIC_SCTLR do not generate the wake event).
@@ -64,8 +67,9 @@ fn main() -> ! {
 
     loop {
         led.toggle();
-        ipc::mailbox()
-            .dualcore_counter
+        mailbox()
+            .payload
+            .counter
             .store(counter, core::sync::atomic::Ordering::Relaxed);
         unsafe { core::ptr::write_volatile(0x200a0000 as *mut u32, counter) };
         counter = counter.wrapping_add(1);

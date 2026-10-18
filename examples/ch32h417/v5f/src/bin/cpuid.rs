@@ -16,6 +16,7 @@
 #![no_std]
 #![no_main]
 
+use ch32h417_ipc::protocols::Cpuid;
 use ch32h417_v5f::{cache, cpuid, mailbox};
 use panic_halt as _;
 
@@ -37,7 +38,7 @@ fn main() -> ! {
     // Hart 1 must enable its own instruction cache: it resets to disabled, and
     // this image runs from flash.
     cache::enable_icache();
-    cpuid::report_self(mailbox());
+    cpuid::report_self(&mailbox::<Cpuid>().payload.cpuid);
 
     loop {}
 }

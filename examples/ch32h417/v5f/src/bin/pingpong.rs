@@ -16,6 +16,7 @@
 #![no_std]
 #![no_main]
 
+use ch32h417_ipc::protocols::Pingpong;
 use ch32h417_v5f::{cache, cpuid, mailbox};
 use core::sync::atomic::Ordering;
 use panic_halt as _;
@@ -37,20 +38,20 @@ pub extern "C" fn ExceptionHandler() {
 fn main() -> ! {
     cache::enable_icache();
 
-    let mailbox = mailbox();
+    let mailbox = mailbox::<Pingpong>();
 
     // Describe ourselves first: that block is what the boot core prints.
-    cpuid::report_self(mailbox);
+    cpuid::report_self(&mailbox.payload.cpuid);
 
     // Start round one, then answer the boot core's echoes. This core does not
     // pace the exchange — the boot core does, in its one-second loop.
-    mailbox.ping.store(1, Ordering::Relaxed);
+    mailbox.payload.ping.store(1, Ordering::Relaxed);
     let mut acked = 0u32;
     loop {
-        let pong = mailbox.pong.load(Ordering::Relaxed);
+        let pong = mailbox.payload.pong.load(Ordering::Relaxed);
         if pong != acked {
             acked = pong;
-            mailbox.ping.store(pong.wrapping_add(1), Ordering::Relaxed);
+            mailbox.payload.ping.store(pong.wrapping_add(1), Ordering::Relaxed);
         }
     }
 }

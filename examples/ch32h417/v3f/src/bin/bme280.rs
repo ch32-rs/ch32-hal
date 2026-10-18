@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! cargo xtask flash --example bme280 --dual-core
-//! cargo xtask report
+//! cargo xtask report --example bme280
 //! cargo xtask run   --example bme280 --dual-core
 //! ```
 //!
@@ -19,7 +19,10 @@
 #![no_main]
 
 use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::{Bme280, BME280_FAIL, BME280_IDLE, BME280_NO_SAMPLE};
 use core::sync::atomic::Ordering;
+
+ipc::mailbox!(Bme280);
 use hal::delay::Delay;
 use qingke::pfic;
 use {ch32_hal as hal, panic_halt as _};
@@ -35,22 +38,22 @@ fn main() -> ! {
     hal::debug::SDIPrint::enable();
 
     // Shared RAM survives a reset; clear it so the report describes this run.
-    let mailbox = ipc::mailbox();
+    let mailbox = mailbox();
     mailbox.clear();
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
 
     hal::try_println!("BME280: hart 1 reads I2C1 (PB6/PB7), hart 0 prints");
 
-    let mut printed = ipc::BME280_NO_SAMPLE;
+    let mut printed = BME280_NO_SAMPLE;
     loop {
-        let status = mailbox.bme280_status.load(Ordering::Acquire);
-        let seq = mailbox.bme280_seq.load(Ordering::Acquire);
+        let status = mailbox.payload.status.load(Ordering::Acquire);
+        let seq = mailbox.payload.seq.load(Ordering::Acquire);
 
-        if seq != printed && seq != ipc::BME280_NO_SAMPLE {
+        if seq != printed && seq != BME280_NO_SAMPLE {
             // The sequence number is stored last, so these three belong to it.
-            let temperature = mailbox.bme280_temperature.load(Ordering::Relaxed) as i32;
-            let pressure = mailbox.bme280_pressure.load(Ordering::Relaxed);
-            let humidity = mailbox.bme280_humidity.load(Ordering::Relaxed);
+            let temperature = mailbox.payload.temperature.load(Ordering::Relaxed) as i32;
+            let pressure = mailbox.payload.pressure.load(Ordering::Relaxed);
+            let humidity = mailbox.payload.humidity.load(Ordering::Relaxed);
             hal::try_println!(
                 "[V5F] T={:.2}C  P={:.2}hPa  H={:.2}%",
                 temperature as f32 / 100.0,
@@ -58,14 +61,14 @@ fn main() -> ! {
                 humidity as f32 / 100.0
             );
             printed = seq;
-        } else if seq == ipc::BME280_NO_SAMPLE {
+        } else if seq == BME280_NO_SAMPLE {
             // Nothing to print yet. Keep saying why, and keep re-issuing the
             // wake: hart 1's startup races with the debug link attaching.
             match status {
-                ipc::BME280_FAIL => {
+                BME280_FAIL => {
                     hal::try_println!("hart 1: sensor did not answer (PB6/PB7, addr 0x76)")
                 }
-                ipc::BME280_IDLE => {
+                BME280_IDLE => {
                     unsafe { pfic::wake_other_core(V5F_ENTRY) };
                     hal::try_println!("waiting for hart 1");
                 }
