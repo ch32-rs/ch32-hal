@@ -100,6 +100,8 @@ pub mod dma;
 pub mod adc;
 #[cfg(dac)]
 pub mod dac;
+#[cfg(crc)]
+pub mod crc;
 pub mod exti;
 pub mod gpio;
 #[cfg(i2c)]
@@ -114,6 +116,8 @@ pub mod spi;
 #[cfg(any(timer_x0, timer_v3))]
 pub mod timer;
 pub mod usart;
+#[cfg(any(iwdg, wwdg))]
+pub mod wdg;
 
 /// Common structures for USB drivers
 pub mod usb;
