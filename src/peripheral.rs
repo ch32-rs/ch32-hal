@@ -27,11 +27,11 @@ pub trait RemapPeripheral: SealedRemapPeripheral + 'static {}
 /// Remap chips require [`RemapPeripheral`]. CH32H4 selects the function with
 /// a per-pin AF number, so the bound is empty there.
 #[cfg(not(afio_h4))]
-pub trait RemapBound: RemapPeripheral {}
+pub(crate) trait RemapBound: RemapPeripheral {}
 #[cfg(not(afio_h4))]
 impl<T: RemapPeripheral> RemapBound for T {}
 
 #[cfg(afio_h4)]
-pub trait RemapBound {}
+pub(crate) trait RemapBound {}
 #[cfg(afio_h4)]
 impl<T: ?Sized> RemapBound for T {}

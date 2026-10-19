@@ -144,7 +144,12 @@ pub(crate) fn slice_ptr_parts_mut<T>(slice: *mut [T]) -> (usize, usize) {
     unsafe { mem::transmute(slice) }
 }
 
-// safety: must be called only once at startup
-pub(crate) unsafe fn init(cs: critical_section::CriticalSection, dma_priority: interrupt::Priority) {
-    dma_bdma::init(cs, dma_priority);
+// safety: must be called only once at startup. `enable_irqs` is false on a core
+// that does not own the DMA interrupts; see `dma_bdma::init`.
+pub(crate) unsafe fn init(
+    cs: critical_section::CriticalSection,
+    dma_priority: interrupt::Priority,
+    enable_irqs: bool,
+) {
+    dma_bdma::init(cs, dma_priority, enable_irqs);
 }

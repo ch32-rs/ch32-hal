@@ -55,6 +55,7 @@ pub enum TimerBits {
 }
 
 /// Core timer instance.
+#[allow(private_bounds)]
 pub trait CoreInstance: RccPeripheral + crate::peripheral::RemapBound + embassy_hal_internal::PeripheralType + 'static {
     /// Update Interrupt for this timer.
     type UpdateInterrupt: interrupt::typelevel::Interrupt;

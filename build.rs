@@ -647,12 +647,27 @@ fn main() {
                 _ => panic!("bad dma channel kind {}", bi.kind),
             };
 
+            // The interrupt this one channel is delivered on, so a transfer can
+            // unmask just that and not every channel of the controller. The
+            // signal name is `CHn` and the channel number is 1-based.
+            let signal = format!("CH{}", ch.channel + 1);
+            let ch_irq = dma_peri
+                .interrupts
+                .iter()
+                .find(|i| i.signal == signal)
+                .map(|i| {
+                    let irq = format_ident!("{}", i.interrupt.to_ascii_uppercase());
+                    quote!(Some(crate::pac::Interrupt::#irq))
+                })
+                .unwrap_or_else(|| quote!(None));
+
             let dmamux = quote!();
 
             dmas.extend(quote! {
                 crate::dma::ChannelInfo {
                     dma: #dma_info,
                     num: #ch_num,
+                    irq: #ch_irq,
                     #dmamux
                 },
             });

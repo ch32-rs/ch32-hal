@@ -199,8 +199,81 @@ pub fn init(config: Config) -> Peripherals {
     }
 
     ::critical_section::with(|cs| unsafe {
-        gpio::init(cs);
-        dma::init(cs, config.dma_interrupt_priority);
+        gpio::init(cs, true);
+        dma::init(cs, config.dma_interrupt_priority, true);
+        #[cfg(feature = "exti")]
+        exti::init(cs);
+    });
+
+    p
+}
+
+/// What [`init_secondary`] may touch on a core that does not own the chip.
+///
+/// The defaults only do what is safe while the boot core is running: read the
+/// clock tree back, and turn on the GPIO port and DMA clocks (both are
+/// write-1-to-enable bits the boot core already set). The AFIO reset and the
+/// DMA interrupt enables are off because each changes state the boot core
+/// relies on.
+#[cfg(rcc_h4)]
+pub struct SecondaryConfig {
+    /// Crystal frequency, needed only when the boot core switched SYSCLK to
+    /// HSE or to a PLL driven by it. `None` for HSI.
+    pub hse: Option<time::Hertz>,
+    /// Pulse the AFIO reset. That clears `GPIO_AFR` back to AF0, dropping
+    /// every alternate function the boot core configured, so leave it off
+    /// unless this core owns the whole pin mux.
+    pub reset_afio: bool,
+    /// Enable every DMA channel interrupt. On CH32H4 an interrupt above 31 is
+    /// delivered to exactly one core, and enabling it assigns it to the core
+    /// that did the enable, so this takes the DMA interrupts away from the
+    /// boot core. Leave it off and let each transfer enable its own channel.
+    pub enable_dma_irqs: bool,
+    /// Priority stored for the DMA interrupts. Only matters for the channels
+    /// this core actually enables.
+    pub dma_interrupt_priority: interrupt::Priority,
+}
+
+#[cfg(rcc_h4)]
+impl Default for SecondaryConfig {
+    fn default() -> Self {
+        Self {
+            hse: None,
+            reset_afio: false,
+            enable_dma_irqs: false,
+            dma_interrupt_priority: interrupt::Priority::P0,
+        }
+    }
+}
+
+/// Initialize the HAL on a core that does not own the clock tree.
+///
+/// For the second core of a dual-core chip: the boot core has already run
+/// [`init`] and programmed the PLL, and doing that again here would switch
+/// SYSCLK out from under it. This reads the RCC registers back into [`rcc::clocks`]
+/// instead of writing them.
+///
+/// # Safety
+///
+/// The boot core must have finished [`init`] before this runs. The two cores
+/// must not both use one peripheral. Each image is linked on its own, so each
+/// has its own `Peripherals` singleton and this cannot tell that the other
+/// core already took one.
+#[cfg(rcc_h4)]
+pub unsafe fn init_secondary(config: SecondaryConfig) -> Peripherals {
+    let p = Peripherals::take();
+
+    unsafe {
+        rcc::refresh(config.hse);
+        delay::init();
+
+        #[cfg(feature = "embassy")]
+        embassy::init();
+    }
+
+    ::critical_section::with(|cs| unsafe {
+        gpio::init(cs, config.reset_afio);
+        dma::init(cs, config.dma_interrupt_priority, config.enable_dma_irqs);
         #[cfg(feature = "exti")]
         exti::init(cs);
     });

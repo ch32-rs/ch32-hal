@@ -9,11 +9,15 @@ use super::ringbuffer::{DmaCtrl, OverrunError, ReadableDmaRingBuffer, WritableDm
 use super::word::{Word, WordSize};
 use super::{AnyChannel, Channel, Dir, Request, STATE};
 use crate::interrupt::typelevel::Interrupt;
+use crate::pac::InterruptNumber;
 use crate::{interrupt, pac, Peri};
 
 pub(crate) struct ChannelInfo {
     pub(crate) dma: DmaInfo,
     pub(crate) num: usize,
+    /// PFIC interrupt this channel's completion is delivered on. `None` for a
+    /// channel whose controller has no per-channel interrupt in the metadata.
+    pub(crate) irq: Option<pac::Interrupt>,
 }
 
 #[derive(Clone, Copy)]
@@ -212,11 +216,24 @@ impl ChannelState {
 }
 
 /// safety: must be called only once
-pub(crate) unsafe fn init(cs: critical_section::CriticalSection, dma_priority: interrupt::Priority) {
+///
+/// `enable_irqs` is false on a core that does not own the DMA interrupts. On
+/// CH32H4 an interrupt above 31 is shared and delivered to exactly one core:
+/// enabling it assigns it to the core that did the enable (RM §4.7.5.45,
+/// `PFIC_IALLOCR`). Enabling all of them here would take them from the boot
+/// core. The channel IRQ is unmasked later, when this core starts a transfer
+/// on a channel it owns.
+pub(crate) unsafe fn init(
+    cs: critical_section::CriticalSection,
+    dma_priority: interrupt::Priority,
+    enable_irqs: bool,
+) {
     foreach_interrupt! {
         ($peri:ident, dma, $block:ident, $signal_name:ident, $irq:ident) => {
             crate::interrupt::typelevel::$irq::set_priority_with_cs(cs, dma_priority);
-            crate::interrupt::typelevel::$irq::enable();
+            if enable_irqs {
+                crate::interrupt::typelevel::$irq::enable();
+            }
         };
     }
     crate::_generated::init_dma();
@@ -288,6 +305,15 @@ impl AnyChannel {
         options: TransferOptions,
     ) {
         let info = self.info();
+
+        // Unmask this channel's interrupt on the core that starts the transfer.
+        // `init` only does this for the core that owns the DMA interrupts; on
+        // CH32H4 enabling an interrupt above 31 assigns it to the enabling core
+        // (RM §4.7.5.45), so the other core must enable exactly the channels it
+        // uses and no others.
+        if let Some(irq) = info.irq {
+            unsafe { qingke::pfic::enable_interrupt(irq.number() as u8) };
+        }
 
         assert!(mem_len > 0 && mem_len <= 0xFFFF);
 
