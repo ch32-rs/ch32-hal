@@ -1,14 +1,11 @@
 //! Derive bus / core frequencies from live RCC registers (EVT `SystemAndCoreClockUpdate`).
 
-use crate::pac::rcc::vals::{Pllmul, Pllsrc, Sw as SysclkSw, SyspllSel};
+use crate::pac::rcc::vals::{Pllsrc, Sw as SysclkSw, SyspllSel};
 use crate::pac::RCC;
 use crate::time::Hertz;
 
-use super::prescale::{ahb_from_sysclk, hclk_from_ahb, pclk_from_hclk};
+use super::prescale::{self, ahb_from_sysclk, hclk_from_ahb, pclk_from_hclk};
 use super::HSI_FREQUENCY;
-
-const PLL_MUL_TABLE: [u8; 32] =
-    [4, 6, 7, 8, 17, 9, 19, 10, 21, 11, 23, 12, 25, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 59];
 
 const SERDES_MUL_TABLE: [u8; 16] = [25, 28, 30, 32, 35, 38, 40, 45, 50, 56, 60, 64, 70, 76, 80, 90];
 
@@ -70,22 +67,9 @@ fn main_pll_frequency(hse: Option<Hertz>) -> Hertz {
         _ => HSI_FREQUENCY.0 / presc,
     };
 
-    let mul = pll_multiplier(pllmull);
-    let half = matches!(
-        pllmull,
-        Pllmul::MUL4 | Pllmul::MUL6 | Pllmul::MUL8 | Pllmul::MUL10 | Pllmul::MUL12
-    );
-    let hz = if half {
-        (ref_hz * mul) / 2
-    } else {
-        ref_hz * mul
-    };
-    Hertz(hz)
-}
-
-fn pll_multiplier(mul: Pllmul) -> u32 {
-    let idx = mul as u8 as usize;
-    PLL_MUL_TABLE.get(idx).copied().unwrap_or(16) as u32
+    // u64: the reference can be the 480/500 MHz auxiliary PLL output, and
+    // `480e6 * 118` wraps a u32. A legal output still fits in u32.
+    Hertz((ref_hz as u64 * prescale::pll_mul_x2(pllmull) as u64 / 2) as u32)
 }
 
 fn serdes_pll_hz(hse: Option<Hertz>) -> u32 {

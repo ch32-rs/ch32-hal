@@ -17,6 +17,7 @@ mod prescale;
 
 pub use mux::KernelMux;
 pub use pll::{AuxPlls, UsbhsPll, UsbssPll};
+pub use prescale::{ahb_hz, hclk_hz, pclk_hz, pll_mul_x2};
 
 use crate::pac::rcc::vals::{
     Adcpre, Fpre, Hpre, Mco, Pllmul, Pllsrc, Ppre, Sw as SysclkSw, SyspllSel, UsbhspllRefsel,
