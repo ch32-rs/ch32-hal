@@ -29,6 +29,7 @@ Link: [OSHWHUB](https://oshwhub.com/andelf/linedog)
 
 call `rustup install nightly` and `rustup override set nightly` to build this project with rust nightly,
 which allows to compilation for riscv32ec using the [json-file](riscv32ec-unknown-none-elf.json) provided.
+That spec also enables `xwchc`, WCH's compressed byte and halfword loads and stores (QingKe V2A implements it; QingKe V3 manual, table 1-1).
 
 You might need to install the sources for core with `rustup component add rust-src`
 

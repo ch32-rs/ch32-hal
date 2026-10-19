@@ -9,7 +9,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::i2c::Operation;
 
 use crate::dma::ChannelAndRequest;
-use crate::gpio::{AFType, Speed};
+use crate::gpio::{AfType, OutputType, Speed};
 use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode};
 // use crate::interrupt::Interrupt;
@@ -109,10 +109,10 @@ pub struct I2c<'d, T: Instance, M: Mode> {
 
 impl<'d, T: Instance> I2c<'d, T, Async> {
     /// Create a new I2C driver.
-    pub fn new<const REMAP: u8>(
+    pub fn new<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
-        scl: Peri<'d, impl SclPin<T, REMAP>>,
-        sda: Peri<'d, impl SdaPin<T, REMAP>>,
+        scl: Peri<'d, if_remap!(impl SclPin<T, REMAP>)>,
+        sda: Peri<'d, if_remap!(impl SdaPin<T, REMAP>)>,
         _irq: impl interrupt::typelevel::Binding<T::EventInterrupt, EventInterruptHandler<T>>
             + interrupt::typelevel::Binding<T::ErrorInterrupt, ErrorInterruptHandler<T>>
             + 'd,
@@ -121,47 +121,51 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
         freq: Hertz,
         config: Config,
     ) -> Self {
+        apply_remap!();
         Self::new_inner(peri, scl, sda, new_dma!(tx_dma), new_dma!(rx_dma), freq, config)
     }
 }
 
 impl<'d, T: Instance> I2c<'d, T, Blocking> {
     /// Create a new blocking I2C driver.
-    pub fn new_blocking<const REMAP: u8>(
+    pub fn new_blocking<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
-        scl: Peri<'d, impl SclPin<T, REMAP>>,
-        sda: Peri<'d, impl SdaPin<T, REMAP>>,
+        scl: Peri<'d, if_remap!(impl SclPin<T, REMAP>)>,
+        sda: Peri<'d, if_remap!(impl SdaPin<T, REMAP>)>,
         freq: Hertz,
         config: Config,
     ) -> Self {
+        apply_remap!();
         Self::new_inner(peri, scl, sda, None, None, freq, config)
     }
 }
 
 impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     /// Create a new I2C driver.
-    fn new_inner<const REMAP: u8>(
+    fn new_inner<#[cfg(not(afio_h4))] const REMAP: u8>(
         _peri: Peri<'d, T>,
-        scl: Peri<'d, impl SclPin<T, REMAP>>,
-        sda: Peri<'d, impl SdaPin<T, REMAP>>,
+        scl: Peri<'d, if_remap!(impl SclPin<T, REMAP>)>,
+        sda: Peri<'d, if_remap!(impl SdaPin<T, REMAP>)>,
         tx_dma: Option<ChannelAndRequest<'d>>,
         rx_dma: Option<ChannelAndRequest<'d>>,
         freq: Hertz,
         config: Config,
     ) -> Self {
+        apply_remap!();
         use crate::interrupt::typelevel::Interrupt;
 
         T::enable_and_reset();
 
-        T::set_remap(REMAP);
 
+        // gpio_x0 doesn't expose an open-drain AF variant; SCL/SDA fall back
+        // to push-pull and rely on external pull-ups (already required for I2C).
         #[cfg(not(gpio_x0))]
-        let af_type = AFType::OutputOpenDrain;
+        let af = AfType::output(OutputType::OpenDrain, Speed::High);
         #[cfg(gpio_x0)]
-        let af_type = AFType::OutputPushPull;
+        let af = AfType::output(OutputType::PushPull, Speed::High);
 
-        scl.set_as_af_output(af_type, Speed::High);
-        sda.set_as_af_output(af_type, Speed::High);
+        set_as_af!(scl, af);
+        set_as_af!(sda, af);
 
         unsafe { T::EventInterrupt::enable() };
         unsafe { T::ErrorInterrupt::enable() };
@@ -856,14 +860,14 @@ impl State {
     }
 }
 
-trait SealedInstance: crate::peripheral::RccPeripheral + crate::peripheral::RemapPeripheral {
+trait SealedInstance: crate::peripheral::RccPeripheral {
     fn regs() -> crate::pac::i2c::I2c;
     fn state() -> &'static State;
 }
 
 /// I2C peripheral instance
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + 'static {
+pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + crate::peripheral::RemapBound + 'static {
     /// Event interrupt for this instance
     type EventInterrupt: interrupt::typelevel::Interrupt;
     /// Error interrupt for this instance

@@ -32,33 +32,44 @@ others should work if you are careful as most peripherals are similar enough.
 
 For a full list of chip capabilities and peripherals, check the [ch32-data](https://github.com/ch32-rs/ch32-data) repository.
 
-| Family     | V2/V3 | V1  | V003 | V00X | X0   | L1   | CH641 | CH643 |
-| ---------- | ----- | --- | ---- | ---- | ---- | ---- | ----- | ----- |
-| Embassy    | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
-| RCC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
-| GPIO       | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
-| EXTI\*     | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
-| UART\*     | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ❓    | ❓    |
-| SPI\*      | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | N/A   | ❓    |
-| I2C        | ✅    | ✅  | ✅   | ❓   | ❓   | ❓   | ❓    | ❓    |
-| ADC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    |
-| Timer(PWM) | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ✅    | ✅    |
-| USBD       | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
-| USB/OTG FS | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
-| USB HS     | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
-| USB PD     | N/A   | N/A | N/A  | N/A  | ✅\* | ✅\* | ❓    | ❓    |
-| ETH\*      | ✅†   | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   |
-| CAN\*      | ✅    | N/A | N/A  | N/A  | N/A  | ✅   | N/A   | N/A   |
+| Family     | V2/V3 | V1  | V003 | V00X | X0   | L1   | CH641 | CH643 | H4‡   |
+| ---------- | ----- | --- | ---- | ---- | ---- | ---- | ----- | ----- | ---- |
+| Embassy    | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ❓    |
+| RCC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
+| GPIO       | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
+| EXTI\*     | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
+| UART\*     | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ❓    | ❓    | ✅    |
+| SPI\*      | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | N/A   | ❓    | ❌    |
+| I2C        | ✅    | ✅  | ✅   | ❓   | ❓   | ❓   | ❓    | ❓    | ✅    |
+| ADC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ❌    |
+| Timer(PWM) | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ✅    | ✅    | ✅    |
+| USBD       | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | N/A  |
+| USB/OTG FS | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | N/A  |
+| USB HS     | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ❌    |
+| USB PD     | N/A   | N/A | N/A  | N/A  | ✅\* | ✅\* | ❓    | ❓    | ❌    |
+| ETH\*      | ✅†   | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | N/A  |
+| CAN\*      | ✅    | N/A | N/A  | N/A  | N/A  | ✅   | N/A   | N/A   | ❌    |
 
 - ✅ : Expected to work
 - ❌ : Not implemented
 - ❓ : Not tested
 - `*` marks the async driver (EXTI is also opt-in via the `exti` Cargo feature)
 - `†` ETH: only the CH32V208 10M MAC+PHY. V305/V307 Synopsys DWC MAC is in progress (PR #157)
+- `‡` H4 is the dual-core CH32H417 (QingKe V3F + V5F). The ❌ rows are compiled
+  out on purpose: those drivers reach into V3 register layouts the H4 blocks do
+  not have (ADC/DAC/SPI/CAN/USBPD), or the block is a different version than the
+  driver (USB HS is `usbhs_h4`, the module is `usbhs_v3`). I2C is the exception,
+  flagged `version: v3` in the H4 metadata, so the V3 driver applies as-is. DMA
+  is not in the table; the H4 DMAMUX is driven from request numbers in metadata.
+  Embassy has no H4 time driver yet — the SysTick one is excluded, and a
+  `time-driver-timN` feature has to be selected explicitly.
 - TODO: I haven't got a dev board yet, help-wanted
 - N/A: Not available
 
 **V00X** covers CH32V002 / CH32V004 / CH32V005 / CH32V006 / CH32V007 and CH32M007.
+
+Dual-core examples for the CH32H417 (separate V3F and V5F images, a shared
+mailbox, `xtask` for flash/report) live in [`examples/ch32h417`](examples/ch32h417).
 
 ### Notes
 

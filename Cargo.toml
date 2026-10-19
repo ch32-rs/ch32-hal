@@ -13,13 +13,20 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# ch32-data rev = a515903589cfbc342dc6ad0d13c02b4382da5628
+# ch32-data rev = 3a947aa (ch32-metapac 0.1.2)
 ch32-metapac = { features = [
     "rt",
-], version = "0.1.1" }
+], version = "0.1.2" }
 
-qingke = { version = "0.8", features = ["critical-section-impl"] }
-qingke-rt = { version = "0.8", optional = true }
+# `unsafe-trust-wch-atomics`: qingke 0.8.2 refuses to build whenever the target
+# claims byte atomics unless this is set, and every A-extension target does.
+# Verified on the CH32H417, where both cores `fetch_add` one word a million
+# times each and the total comes out exact (`examples/ch32h417` `atomics`).
+qingke = { version = "0.8.2", features = [
+    "critical-section-impl",
+    "unsafe-trust-wch-atomics",
+] }
+qingke-rt = { version = "0.8.2", optional = true }
 
 embedded-hal = { package = "embedded-hal", version = "1.0" }
 embedded-hal-async = "1.0.0"
@@ -51,10 +58,10 @@ sdio-host = "0.5.0"
 embedded-storage = "0.3.1"
 
 [build-dependencies]
-# ch32-data rev = a515903589cfbc342dc6ad0d13c02b4382da5628
+# ch32-data rev = 3a947aa (ch32-metapac 0.1.2)
 ch32-metapac = { features = [
     "metadata",
-], version = "0.1.1" }
+], version = "0.1.2" }
 
 proc-macro2 = "1.0"
 quote = "1.0"
@@ -171,3 +178,21 @@ ch32x035g8u6 = ["ch32-metapac/ch32x035g8u6", "qingke-rt/v4c", "qingke/v4c"]
 ch32x035r8t6 = ["ch32-metapac/ch32x035r8t6", "qingke-rt/v4c", "qingke/v4c"]
 ch641 = ["ch32-metapac/ch641", "qingke-rt/v2a", "qingke/v2a"]
 ch643 = ["ch32-metapac/ch643", "qingke-rt/v4c", "qingke/v4c"]
+
+# H4 chip features — paired with ch32-data's CH32H4 family definitions.
+# Cores: V3F (qingke-v3f, hart 0, control core) and V5F (qingke-v5f, hart
+# 1, compute core with FP + ICache). Only the AFIO + GPIO + USART
+# scaffolding is wired up via this PR; ADC/DAC/DMA/USBPD/RCC drivers still
+# need H4-specific porting (separate follow-up PRs).
+ch32h417qeu6-v3f = [
+    "ch32-metapac/ch32h417qeu6-qingke-v3f",
+    "qingke-rt/v3f",
+    "qingke/v3f",
+    "qingke/dual-core",
+]
+ch32h417qeu6-v5f = [
+    "ch32-metapac/ch32h417qeu6-qingke-v5f",
+    "qingke-rt/v5f",
+    "qingke/v5f",
+    "qingke/dual-core",
+]

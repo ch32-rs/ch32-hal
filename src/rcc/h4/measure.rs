@@ -1,0 +1,84 @@
+//! Derive bus / core frequencies from live RCC registers (EVT `SystemAndCoreClockUpdate`).
+
+use crate::pac::rcc::vals::{Pllsrc, Sw as SysclkSw, SyspllSel};
+use crate::pac::RCC;
+use crate::time::Hertz;
+
+use super::prescale::{self, ahb_from_sysclk, hclk_from_ahb, pclk_from_hclk};
+use super::HSI_FREQUENCY;
+
+const SERDES_MUL_TABLE: [u8; 16] = [25, 28, 30, 32, 35, 38, 40, 45, 50, 56, 60, 64, 70, 76, 80, 90];
+
+pub(crate) fn measure(hse: Option<Hertz>) -> super::super::Clocks {
+    let sysclk = sysclk_frequency(hse);
+    let cfgr = RCC.cfgr0().read();
+    let ahb = ahb_from_sysclk(sysclk, cfgr.hpre());
+    let hclk = hclk_from_ahb(ahb, cfgr.fpre());
+    let (pclk1, pclk1_tim) = pclk_from_hclk(hclk, cfgr.ppre1());
+    let (pclk2, pclk2_tim) = pclk_from_hclk(hclk, cfgr.ppre2());
+
+    super::super::Clocks {
+        sysclk,
+        hclk,
+        pclk1,
+        pclk2,
+        pclk1_tim,
+        pclk2_tim,
+        // V5F runs off AHB (before FPRE); V3F is the FPRE-divided HCLK domain.
+        v3f: hclk,
+        v5f: ahb,
+    }
+}
+
+fn sysclk_frequency(hse: Option<Hertz>) -> Hertz {
+    match RCC.cfgr0().read().sws() {
+        SysclkSw::HSI => HSI_FREQUENCY,
+        SysclkSw::HSE => hse.expect("RCC: HSE frequency required to measure clocks"),
+        SysclkSw::PLL => syspll_frequency(hse),
+        _ => HSI_FREQUENCY,
+    }
+}
+
+fn syspll_frequency(hse: Option<Hertz>) -> Hertz {
+    let sel = RCC.pllcfgr().read().syspll_sel();
+    match sel {
+        SyspllSel::PLL_CLK => main_pll_frequency(hse),
+        SyspllSel::USBHS_PLL => Hertz(480_000_000),
+        SyspllSel::ETH_PLL => Hertz(500_000_000),
+        SyspllSel::SERDES_PLL_DIV2 => serdes_sysclk(hse),
+        SyspllSel::USBSS_PLL => Hertz(125_000_000),
+        _ => HSI_FREQUENCY,
+    }
+}
+
+fn main_pll_frequency(hse: Option<Hertz>) -> Hertz {
+    let pllcfgr = RCC.pllcfgr().read();
+    let pllmull = pllcfgr.pllmul();
+    let pllsrc = pllcfgr.pllsrc();
+    let presc = (pllcfgr.pll_src_div() as u32) + 1;
+
+    let ref_hz = match pllsrc {
+        Pllsrc::HSI => HSI_FREQUENCY.0 / presc,
+        Pllsrc::HSE => hse.expect("RCC: HSE frequency required for PLL").0 / presc,
+        Pllsrc::USBHS_PLL => 480_000_000 / presc,
+        Pllsrc::ETH_PLL => 500_000_000 / presc,
+        Pllsrc::USBSS_PLL => 125_000_000 / presc,
+        Pllsrc::SERDES_PLL_DIV2 => serdes_pll_hz(hse) / presc,
+        _ => HSI_FREQUENCY.0 / presc,
+    };
+
+    // u64: the reference can be the 480/500 MHz auxiliary PLL output, and
+    // `480e6 * 118` wraps a u32. A legal output still fits in u32.
+    Hertz((ref_hz as u64 * prescale::pll_mul_x2(pllmull) as u64 / 2) as u32)
+}
+
+fn serdes_pll_hz(hse: Option<Hertz>) -> u32 {
+    let hse = hse.expect("RCC: HSE frequency required for SERDES PLL").0;
+    let idx = RCC.pllcfgr2().read().serdespll_mul() as u8 as usize;
+    let mul = SERDES_MUL_TABLE.get(idx).copied().unwrap_or(25) as u32;
+    hse * mul
+}
+
+fn serdes_sysclk(hse: Option<Hertz>) -> Hertz {
+    Hertz(serdes_pll_hz(hse) / 2)
+}

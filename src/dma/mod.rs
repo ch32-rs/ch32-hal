@@ -10,6 +10,10 @@ use embassy_hal_internal::PeripheralType;
 
 use crate::{impl_peripheral, interrupt};
 
+// dma_bdma covers the V0/V1/V2/V3 "single DMA + optional BDMA" controller
+// and the CH32H4 DMA1+DMA2. The register layout is the same; H4 only renames
+// the accessors and adds the DMAMUX, both handled inside the driver.
+#[cfg(any(bdma, dma))]
 mod dma_bdma;
 #[cfg(any(bdma, dma))]
 pub use dma_bdma::*;
@@ -39,7 +43,28 @@ enum Dir {
     PeripheralToMemory,
 }
 
+/// DMA request selector.
+///
+/// On chips with fixed channel wiring this carries nothing — the channel
+/// itself is the request. On CH32H4 it is the DMAMUX request number
+/// (RM table 10-2) programmed into the channel's mux slot.
+#[cfg(not(ch32h4))]
 pub type Request = ();
+#[cfg(ch32h4)]
+pub type Request = u8;
+
+/// Marker for a channel routed through the chip's single DMAMUX.
+///
+/// Implemented for `DMA1_CH1`..`DMA1_CH8` and `DMA2_CH1`..`DMA2_CH8`, and
+/// nothing else. Signal traits (`TxDma<USART1>` and friends) blanket-impl
+/// over this, which is what keeps a request number from applying to a
+/// channel that cannot carry it. It only exists as a bound: the mux slot is
+/// derived from the channel's controller and number, not from the type.
+#[cfg(ch32h4)]
+pub trait MuxChannel: SealedMuxChannel {}
+
+#[cfg(ch32h4)]
+pub(crate) trait SealedMuxChannel {}
 
 pub(crate) trait SealedChannel {
     fn id(&self) -> u8;
@@ -119,7 +144,12 @@ pub(crate) fn slice_ptr_parts_mut<T>(slice: *mut [T]) -> (usize, usize) {
     unsafe { mem::transmute(slice) }
 }
 
-// safety: must be called only once at startup
-pub(crate) unsafe fn init(cs: critical_section::CriticalSection, dma_priority: interrupt::Priority) {
-    dma_bdma::init(cs, dma_priority);
+// safety: must be called only once at startup. `enable_irqs` is false on a core
+// that does not own the DMA interrupts; see `dma_bdma::init`.
+pub(crate) unsafe fn init(
+    cs: critical_section::CriticalSection,
+    dma_priority: interrupt::Priority,
+    enable_irqs: bool,
+) {
+    dma_bdma::init(cs, dma_priority, enable_irqs);
 }

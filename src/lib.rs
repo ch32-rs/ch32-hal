@@ -96,22 +96,32 @@ pub use crate::_generated::{peripherals, Peripherals};
 pub mod delay;
 pub mod dma;
 
-#[cfg(adc)]
+// ADC / DAC drivers are written against the V3-family register layout
+// (`pac::adc::vals::SampleTime`, `pac::dac::vals::TrigSel`, ...). On H4
+// these `vals` submodules don't exist because chiptool only emits them
+// for fields that carry enum types — H4's HSADC + ADC2 + DAC use a
+// different register convention. Gate the V3 driver out until a dedicated
+// H4 driver is ported.
+#[cfg(all(adc, not(ch32h4)))]
 pub mod adc;
-#[cfg(dac)]
+#[cfg(all(dac, not(ch32h4)))]
 pub mod dac;
 pub mod exti;
 pub mod gpio;
+// spi/can/flash drivers reach into V3-specific register fields that
+// don't exist on `*_h4`-versioned peripherals. I2C is the exception:
+// H4 chip metadata flags I2C as `version: v3` (same register layout
+// as the V2/V3 families), so the existing V3 driver applies directly.
 #[cfg(i2c)]
 pub mod i2c;
-#[cfg(rng)]
+#[cfg(all(rng, not(ch32h4)))]
 pub mod rng;
 #[cfg(sdio_v3)]
 pub mod sdio;
 pub mod signature;
-#[cfg(spi)]
+#[cfg(all(spi, not(ch32h4)))]
 pub mod spi;
-#[cfg(any(timer_x0, timer_v3))]
+#[cfg(any(timer_x0, timer_v3, timer_h4))]
 pub mod timer;
 pub mod usart;
 
@@ -127,16 +137,19 @@ pub mod usbd;
 #[cfg(usbhs_v3)]
 pub mod usbhs;
 
-#[cfg(usbpd)]
+// H4's USBPD register layout differs from V3 — gate out for now.
+#[cfg(all(usbpd, not(ch32h4)))]
 pub mod usbpd;
 
 #[cfg(any(eth, emac))]
 pub mod eth;
-#[cfg(can)]
+#[cfg(all(can, not(ch32h4)))]
 pub mod can;
 
-#[cfg(flash)]
+#[cfg(all(flash, not(ch32h4)))]
 pub mod flash;
+
+mod patches;
 
 #[cfg(feature = "embassy")]
 pub mod embassy;
@@ -151,7 +164,6 @@ pub(crate) mod _generated {
     include!(concat!(env!("OUT_DIR"), "/_generated.rs"));
 }
 
-mod patches;
 pub use crate::_generated::interrupt;
 
 pub struct Config {
@@ -187,8 +199,81 @@ pub fn init(config: Config) -> Peripherals {
     }
 
     ::critical_section::with(|cs| unsafe {
-        gpio::init(cs);
-        dma::init(cs, config.dma_interrupt_priority);
+        gpio::init(cs, true);
+        dma::init(cs, config.dma_interrupt_priority, true);
+        #[cfg(feature = "exti")]
+        exti::init(cs);
+    });
+
+    p
+}
+
+/// What [`init_secondary`] may touch on a core that does not own the chip.
+///
+/// The defaults only do what is safe while the boot core is running: read the
+/// clock tree back, and turn on the GPIO port and DMA clocks (both are
+/// write-1-to-enable bits the boot core already set). The AFIO reset and the
+/// DMA interrupt enables are off because each changes state the boot core
+/// relies on.
+#[cfg(rcc_h4)]
+pub struct SecondaryConfig {
+    /// Crystal frequency, needed only when the boot core switched SYSCLK to
+    /// HSE or to a PLL driven by it. `None` for HSI.
+    pub hse: Option<time::Hertz>,
+    /// Pulse the AFIO reset. That clears `GPIO_AFR` back to AF0, dropping
+    /// every alternate function the boot core configured, so leave it off
+    /// unless this core owns the whole pin mux.
+    pub reset_afio: bool,
+    /// Enable every DMA channel interrupt. On CH32H4 an interrupt above 31 is
+    /// delivered to exactly one core, and enabling it assigns it to the core
+    /// that did the enable, so this takes the DMA interrupts away from the
+    /// boot core. Leave it off and let each transfer enable its own channel.
+    pub enable_dma_irqs: bool,
+    /// Priority stored for the DMA interrupts. Only matters for the channels
+    /// this core actually enables.
+    pub dma_interrupt_priority: interrupt::Priority,
+}
+
+#[cfg(rcc_h4)]
+impl Default for SecondaryConfig {
+    fn default() -> Self {
+        Self {
+            hse: None,
+            reset_afio: false,
+            enable_dma_irqs: false,
+            dma_interrupt_priority: interrupt::Priority::P0,
+        }
+    }
+}
+
+/// Initialize the HAL on a core that does not own the clock tree.
+///
+/// For the second core of a dual-core chip: the boot core has already run
+/// [`init`] and programmed the PLL, and doing that again here would switch
+/// SYSCLK out from under it. This reads the RCC registers back into [`rcc::clocks`]
+/// instead of writing them.
+///
+/// # Safety
+///
+/// The boot core must have finished [`init`] before this runs. The two cores
+/// must not both use one peripheral. Each image is linked on its own, so each
+/// has its own `Peripherals` singleton and this cannot tell that the other
+/// core already took one.
+#[cfg(rcc_h4)]
+pub unsafe fn init_secondary(config: SecondaryConfig) -> Peripherals {
+    let p = Peripherals::take();
+
+    unsafe {
+        rcc::refresh(config.hse);
+        delay::init();
+
+        #[cfg(feature = "embassy")]
+        embassy::init();
+    }
+
+    ::critical_section::with(|cs| unsafe {
+        gpio::init(cs, config.reset_afio);
+        dma::init(cs, config.dma_interrupt_priority, config.enable_dma_irqs);
         #[cfg(feature = "exti")]
         exti::init(cs);
     });
