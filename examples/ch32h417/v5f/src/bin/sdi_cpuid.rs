@@ -5,27 +5,22 @@
 //! reports liveness by bumping a counter in shared SRAM that the boot core
 //! prints. See `v3f/src/bin/sdi_cpuid.rs`.
 //!
-//! # Why this file uses metapac and not `ch32-hal`
+//! # Why this file calls nothing in `ch32-hal`
 //!
 //! On CH32H417 there is a single RCC block shared by both harts, and the boot
 //! core has already configured it — including this core's own `FPRE`
 //! prescaler. So hart 1 deliberately initialises nothing global:
 //!
-//! * `ch32-hal`'s `init()` starts with `Peripherals::take()`, a process-wide
-//!   singleton guard in RAM shared by both harts — a second call panics.
-//! * its `rcc::init()` re-programs the PLL and then *blocks* on
+//! * `ch32_hal::init` re-programs the PLL and then *blocks* on
 //!   `CFGR0.SWS == PLL`, which would switch SYSCLK out from under the other
-//!   core while it is executing.
+//!   core while it is executing. `init_secondary` only reads the clock tree
+//!   back, but this half needs no clock and no driver, so it calls neither.
 //! * GPIO/AFIO, DMA and EXTI bring-up are global resources, already done.
 //!
-//! This crate therefore depends on `ch32-metapac` directly (re-exported as
-//! `ch32h417_v5f::pac`) and prints through `ch32h417_v5f::sdi`. What hart 1 does
-//! need is core-local: its own stack (set up by `qingke-rt`'s entry from
-//! `REGION_STACK`) and its own vector table. Nothing here touches RCC, which is
-//! exactly why the demo can run at all.
-//!
-//! See `README.md` ("Writing a V5F half"); `docs/backlog.md` tracks the
-//! `ch32-hal` secondary-core entry that would let hart 1 use HAL drivers.
+//! It prints through `ch32h417_v5f::sdi` and reaches registers through
+//! `ch32h417_v5f::pac`. What hart 1 does need is core-local: its own stack (set
+//! up by `qingke-rt`'s entry from `REGION_STACK`) and its own vector table.
+//! Nothing here touches RCC, which is exactly why the demo can run at all.
 
 #![no_std]
 #![no_main]

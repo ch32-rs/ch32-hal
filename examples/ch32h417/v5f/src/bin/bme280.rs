@@ -1,8 +1,9 @@
 //! BME280 read by hart 1 (V5F), published through the shared mailbox.
 //!
 //! Woken by `v3f/src/bin/bme280.rs`. This half owns the sensor: it brings up
-//! I2C1 on PB6/PB7 itself (metapac only — the boot core's `hal::init()` must
-//! not run here) and stores each compensated reading in the mailbox. It never
+//! I2C1 on PB6/PB7 itself (`ch32_hal::init_secondary` reads the clock tree
+//! back; the boot core's `hal::init()` must not run here) and stores each
+//! compensated reading in the mailbox. It never
 //! prints. The boot core is the only SDI writer and prints whatever this core
 //! published, which is also what `xtask report` reads back.
 //!
@@ -21,20 +22,25 @@ use core::sync::atomic::Ordering;
 use edrv_bme280::blocking::BME280;
 use panic_halt as _;
 
-/// How long hart 1 waits between readings. It has no HAL delay (that lives in
-/// the boot core's image), so this is a counted spin. The boot core paces the
-/// printing; this only has to be slower than one print.
+/// How long hart 1 waits between readings. A counted spin rather than a timer:
+/// the boot core paces the printing, so this only has to be slower than one
+/// print.
 const SAMPLE_SPINS: u32 = 8_000_000;
 
 #[qingke_rt::entry]
 fn main() -> ! {
     cache::enable_icache();
 
+    // The boot core programs the clock tree; this only reads it back. The
+    // default config runs from HSI, so no HSE frequency is needed, and the
+    // defaults leave the AFIO reset and the DMA interrupts to the boot core.
+    let _p = unsafe { ch32_hal::init_secondary(Default::default()) };
+
     let mailbox = mailbox::<Bme280>();
     mailbox.payload.status.store(BME280_INIT, Ordering::Relaxed);
 
-    // 100 kHz: the bus clock is derived from the prescalers the boot core left
-    // behind, and standard mode tolerates that estimate being a step off.
+    // 100 kHz. `i2c::init` derives the bus clock from `rcc::clocks()`, which
+    // `init_secondary` filled by reading the prescalers the boot core left.
     // Safety: this half is the only user of I2C1 and of PB6/PB7.
     if unsafe { i2c::init(100_000) }.is_err() {
         mailbox.payload.status.store(BME280_FAIL, Ordering::Release);
@@ -85,8 +91,8 @@ fn delay_spins(n: u32) {
 }
 
 /// The delay the BME280 driver uses to wait out a conversion. A counted spin
-/// rather than a timer: hart 1's SysTick is free, but its divider lives in the
-/// boot core's clock cache, which this image cannot see.
+/// rather than a timer: it only has to outlast one conversion, so a generous
+/// overestimate is enough.
 struct SpinDelay;
 
 impl embedded_hal::delay::DelayNs for SpinDelay {

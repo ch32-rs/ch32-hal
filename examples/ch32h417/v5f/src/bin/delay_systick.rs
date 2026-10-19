@@ -5,10 +5,10 @@
 //! hart's core clock); this side only provides a rough, flash-pacing
 //! counterexample in `ping`.
 //!
-//! Hart 1 deliberately does not use `hal::delay::Delay`: `Clocks` lives in
-//! the boot core's private ITCM, so on this hart the HAL would read the
-//! compile-time `HSI = 25 MHz`, not the post-PLL frequency — the fix is the
-//! secondary-core entry in `docs/backlog.md`.
+//! Hart 1 deliberately does not use `hal::delay::Delay`. `init_secondary`
+//! would read the real post-PLL frequency back out of the RCC registers, but
+//! this half is a counterexample against a frequency baked in at build time,
+//! so it stays a plain counted loop.
 
 #![no_std]
 #![no_main]

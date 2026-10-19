@@ -3,11 +3,10 @@
 //! Probes its identity/ISA CSRs and stores the results in the shared-RAM
 //! mailbox; the boot core prints them (`v3f/src/bin/cpuid.rs`).
 //!
-//! Deliberately minimal: metapac only, no `ch32-hal` and no embassy (there is
-//! one shared RCC block and
-//! the boot core has already programmed it, including this core's `FPRE`),
-//! and no SDI or `core::fmt` — the V5F's flash-resident execution is slow, so
-//! only the CSR probes and the stores happen here.
+//! Deliberately minimal: no `ch32_hal::init` and no embassy (there is one
+//! shared RCC block and the boot core has already programmed it, including this
+//! core's `FPRE`), and no SDI or `core::fmt` — the V5F's flash-resident
+//! execution is slow, so only the CSR probes and the stores happen here.
 //!
 //! Each CSR is probed with a recoverable illegal-instruction handler, because
 //! the QingKe V5 manual's CSR table lists CSRs that the core does not

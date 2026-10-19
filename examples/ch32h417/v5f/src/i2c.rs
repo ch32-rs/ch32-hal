@@ -2,15 +2,16 @@
 //!
 //! Just enough for the BME280: blocking write and write-then-read, no DMA and
 //! no interrupts. The boot core has already programmed the clock tree; this
-//! only turns the peripheral clocks on and reads the prescalers back, so it
-//! never touches the PLL.
+//! only turns the peripheral clocks on and reads PCLK1 back from
+//! `rcc::clocks()` (filled by `ch32_hal::init_secondary`), so it never touches
+//! the PLL.
 //!
 //! Pins are fixed: PB6 = SCL, PB7 = SDA, AF4 (CH32H4 family data). Both are
 //! open-drain alternate function, which is what I2C needs; the bus still wants
 //! its external pull-ups.
 
-use ch32_metapac::gpio::vals::{Cnf, Mode};
-use ch32_metapac::{AFIO, GPIOB, I2C1, RCC};
+use ch32_hal::pac::gpio::vals::{Cnf, Mode};
+use ch32_hal::pac::{AFIO, GPIOB, I2C1, RCC};
 
 /// 7-bit address of the sensor this master talks to.
 pub const BME280_ADDR: u8 = 0x76;
@@ -101,53 +102,13 @@ pub unsafe fn init(freq_hz: u32) -> Result<(), Error> {
     Ok(())
 }
 
-/// PCLK1 from the live RCC prescalers.
+/// PCLK1 as the boot core left it.
 ///
-/// HCLK is the boot core's domain (`FPRE` of AHB). The default recipe leaves
-/// the dividers at 1 and runs from HSI, so this reads 25 MHz until the boot
-/// core programs a PLL — and whatever it programmed, once it has.
+/// `init_secondary` reads the RCC registers back into `rcc::clocks()`, so this
+/// follows whatever preset the boot core programmed instead of assuming one.
 fn pclk1_hz() -> u32 {
-    let cfgr = RCC.cfgr0().read();
-    let hpre = cfgr.hpre() as u32;
-    let ahb_shift = if hpre >= 0b1000 { hpre - 0b1000 + 1 } else { 0 };
-    let fpre_div = match cfgr.fpre() as u32 {
-        1 => 2,
-        2 => 4,
-        _ => 1,
-    };
-    let ppre1 = cfgr.ppre1() as u32;
-    let ppre1_shift = if ppre1 >= 0b100 { ppre1 - 0b100 + 1 } else { 0 };
-
-    // Same source the boot core switched to. HSE and HSI are both 25 MHz on
-    // this board; a PLL is measured from its own registers. PCLK1 divides the
-    // HCLK domain, which is AHB after `FPRE`.
-    let sys = match cfgr.sws() {
-        ch32_metapac::rcc::vals::Sw::PLL => pll_hz(),
-        _ => 25_000_000,
-    };
-    (sys >> ahb_shift) / fpre_div >> ppre1_shift
+    ch32_hal::rcc::clocks().pclk1.0
 }
-
-fn pll_hz() -> u32 {
-    // The 400 MHz recipe multiplies a 25 MHz source by 16. Read it rather than
-    // assume it, so a different boot-core preset still gets a sane bus clock.
-    let pll = RCC.pllcfgr().read();
-    let presc = (pll.pll_src_div() as u32) + 1;
-    let ref_hz = 25_000_000 / presc;
-    let mul = PLL_MUL[pll.pllmul() as usize];
-    let half = matches!(pll.pllmul() as u8, 0 | 1 | 3 | 5 | 7);
-    if half {
-        (ref_hz * mul as u32) / 2
-    } else {
-        ref_hz * mul as u32
-    }
-}
-
-/// `PLL_MUL_TABLE` from the HAL's clock measurement, indexed by `pllmul`.
-const PLL_MUL: [u8; 32] = [
-    4, 6, 7, 8, 17, 9, 19, 10, 21, 11, 23, 12, 25, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 26, 28,
-    30, 32, 34, 36, 38, 40, 59,
-];
 
 /// Write `bytes`, then a repeated START and read into `read`.
 pub fn write_read(addr: u8, bytes: &[u8], read: &mut [u8]) -> Result<(), Error> {

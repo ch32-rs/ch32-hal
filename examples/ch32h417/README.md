@@ -29,13 +29,15 @@ register (`PFIC_WAKEIP1`), so examples come in exactly two shapes, which
 | **dual-core** | both `src/bin/NAME.rs` | `atomics`, `bme280`, `cpuid`, `dualcore`, `hello`, `pingpong`, `sdi_cpuid` |
 
 In a dual-core example the V3F half brings the chip up (clocks, GPIO, SDI),
-hands over to hart 1, and reports. The V5F half is written against **metapac
-only** — no `ch32-hal`, no embassy: `Peripherals::take()` is a single-use
-singleton shared by both cores, and `rcc::init()` re-programs the PLL and then
-blocks on `CFGR0.SWS == PLL`, which would switch SYSCLK out from under the core
-that is running. `v5f/` depends on `ch32-metapac` directly (`ch32h417_v5f::pac`)
-and prints through `v5f/src/sdi.rs`. A V5F half that wants HAL drivers needs the
-secondary-core entry point tracked in `docs/backlog.md`.
+hands over to hart 1, and reports. The V5F half depends on `ch32-hal` but never
+calls `ch32_hal::init`: that re-programs the PLL and then blocks on
+`CFGR0.SWS == PLL`, which would switch SYSCLK out from under the core that is
+running. It calls `ch32_hal::init_secondary` instead, which only reads the clock
+tree the boot core already programmed back into `rcc::clocks()`.
+`ch32h417_v5f::pac` re-exports the HAL's metapac, and the half prints through
+`v5f/src/sdi.rs`. The two cores still must not both use one peripheral: each
+image has its own `Peripherals` singleton, so neither can tell that the other
+already took it.
 
 ## Commands
 
@@ -91,9 +93,10 @@ boot core's own lines.
   `cargo xtask run --example sdi_print`.
 - **`i2c_scan`**, **`bme280_blocking`** — v3f-only, I2C1 on PB6 = SCL, PB7 = SDA
   (AF4). The boot core reads the sensor itself.
-- **`bme280`** — the same sensor read by hart 1 instead. The V5F half brings up
-  I2C1 through metapac (no HAL, so it does not touch the clock tree) and stores
-  each sample in the mailbox; the boot core only prints it. `report` prints the
+- **`bme280`** — the same sensor read by hart 1 instead. The V5F half calls
+  `ch32_hal::init_secondary` (which reads the clock tree back rather than
+  touching it) and brings up I2C1 itself, then stores each sample in the
+  mailbox; the boot core only prints it. `report` prints the
   sensor state (`ok` once the chip answered) and the last temperature, pressure
   and humidity.
 - **`rcc_delay_check`** — v3f-only regression check for the default 25 MHz HSE at

@@ -11,7 +11,8 @@
 //! core's copy for how to watch it, and why attaching the console freezes this
 //! core.
 //!
-//! Metapac only, no `ch32-hal` and no embassy — the boot core owns bring-up.
+//! No `ch32_hal::init` and no embassy — the boot core owns bring-up, and this
+//! half only reads and writes the mailbox.
 
 #![no_std]
 #![no_main]

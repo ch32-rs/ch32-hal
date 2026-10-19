@@ -7,7 +7,8 @@
 //! `2 * CAS_INCREMENTS` — which is exactly why both target JSONs say
 //! `atomic-cas: true` and both crates enable `qingke/unsafe-trust-wch-atomics`.
 //!
-//! Metapac only, no `ch32-hal` and no embassy — the boot core owns bring-up.
+//! No `ch32_hal::init` and no embassy — the boot core owns bring-up, and this
+//! half only touches the shared word.
 //!
 //! It also turns hart 1's instruction cache on before starting: the cache is
 //! disabled by reset, and with it off this flash-resident loop runs an order of
