@@ -188,7 +188,8 @@ pub struct UartTx<'d, T: Instance, M: Mode> {
 }
 
 impl<'d, T: Instance, M: Mode> UartTx<'d, T, M> {
-    fn set_config(&mut self, config: &Config) -> Result<(), ConfigError> {
+    /// Reconfigure the driver
+    pub fn set_config(&mut self, config: &Config) -> Result<(), ConfigError> {
         reconfigure::<T>(config)
     }
 
