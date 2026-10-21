@@ -188,7 +188,8 @@ pub struct UartTx<'d, T: Instance, M: Mode> {
 }
 
 impl<'d, T: Instance, M: Mode> UartTx<'d, T, M> {
-    fn set_config(&mut self, config: &Config) -> Result<(), ConfigError> {
+    /// Reconfigure the driver
+    pub fn set_config(&mut self, config: &Config) -> Result<(), ConfigError> {
         reconfigure::<T>(config)
     }
 
@@ -971,7 +972,7 @@ fn reconfigure<T: Instance>(config: &Config) -> Result<(), ConfigError> {
     let r = T::regs();
 
     let cr = r.ctlr1().read();
-    configure(&r, config, T::frequency(), cr.re(), cr.te())?;
+    configure(&r, config, T::frequency(), cr.te(), cr.re())?;
 
     T::Interrupt::unpend();
     unsafe { T::Interrupt::enable() };
