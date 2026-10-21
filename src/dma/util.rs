@@ -56,4 +56,9 @@ impl<'d> ChannelAndRequest<'d> {
     ) -> Transfer<'a> {
         Transfer::new_write_repeated(self.channel.reborrow(), self.request, repeated, count, peri_addr, options)
     }
+
+    /// Returns the number of bytes remaining in the current DMA transfer.
+    pub fn remaining_bytes(&self) -> usize {
+        self.channel.get_remaining_transfers() as usize
+    }
 }

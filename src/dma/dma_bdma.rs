@@ -420,7 +420,7 @@ impl AnyChannel {
         }
     }
 
-    fn get_remaining_transfers(&self) -> u16 {
+    pub fn get_remaining_transfers(&self) -> u16 {
         let info = self.info();
         match self.info().dma {
             #[cfg(not(ch32h4))]
