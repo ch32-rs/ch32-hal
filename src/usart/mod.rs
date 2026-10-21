@@ -971,7 +971,7 @@ fn reconfigure<T: Instance>(config: &Config) -> Result<(), ConfigError> {
     let r = T::regs();
 
     let cr = r.ctlr1().read();
-    configure(&r, config, T::frequency(), cr.re(), cr.te())?;
+    configure(&r, config, T::frequency(), cr.te(), cr.re())?;
 
     T::Interrupt::unpend();
     unsafe { T::Interrupt::enable() };
