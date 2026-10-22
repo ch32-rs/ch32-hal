@@ -9,11 +9,11 @@ use super::Smi;
 /// Trait for Ethernet PHY drivers.
 pub trait Phy {
     /// Reset the PHY and wait for it to come out of reset.
-    fn phy_reset(&mut self, smi: &Smi);
+    fn phy_reset(&mut self, smi: &mut Smi);
     /// Initialize the PHY (enable autonegotiation, etc).
-    fn phy_init(&mut self, smi: &Smi);
+    fn phy_init(&mut self, smi: &mut Smi);
     /// Poll the link state. Returns true if link is up.
-    fn poll_link(&mut self, smi: &Smi, cx: &mut Context) -> bool;
+    fn poll_link(&mut self, smi: &mut Smi, cx: &mut Context) -> bool;
 }
 
 /// MII PHY register constants.
@@ -53,13 +53,13 @@ impl GenericPhy {
 }
 
 impl Phy for GenericPhy {
-    fn phy_reset(&mut self, smi: &Smi) {
+    fn phy_reset(&mut self, smi: &mut Smi) {
         smi.write(self.phy_addr, phy_regs::BCR, phy_regs::BCR_RESET);
         // Wait for reset bit to self-clear
         while smi.read(self.phy_addr, phy_regs::BCR) & phy_regs::BCR_RESET != 0 {}
     }
 
-    fn phy_init(&mut self, smi: &Smi) {
+    fn phy_init(&mut self, smi: &mut Smi) {
         // Set auto PN polarity on MDIX register (WCH internal 10M PHY
         // needs this for reliable link establishment; harmless on external PHYs).
         smi.write(self.phy_addr, phy_regs::MDIX, phy_regs::MDIX_PN_AUTO);
@@ -71,7 +71,7 @@ impl Phy for GenericPhy {
         );
     }
 
-    fn poll_link(&mut self, smi: &Smi, _cx: &mut Context) -> bool {
+    fn poll_link(&mut self, smi: &mut Smi, _cx: &mut Context) -> bool {
         let bsr = smi.read(self.phy_addr, phy_regs::BSR);
         bsr & phy_regs::BSR_LINK_UP != 0
     }
