@@ -14,6 +14,7 @@
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 
+use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::StackResources;
@@ -21,15 +22,14 @@ use embassy_time::Timer;
 use embedded_io_async::Write;
 use hal::eth::{self, Ethernet, GenericPhy, PacketQueue, PhyInterface};
 use hal::println;
+use panic_halt as _;
 use static_cell::StaticCell;
-use {ch32_hal as hal, panic_halt as _};
 
-#[hal::interrupt]
-unsafe fn ETH() {
-    eth::on_interrupt();
-}
+hal::bind_interrupts!(struct Irqs {
+    ETH => eth::InterruptHandler<hal::peripherals::ETH>;
+});
 
-type Device = Ethernet<'static, 4, 4, GenericPhy>;
+type Device = Ethernet<'static, hal::peripherals::ETH, 4, 4, GenericPhy>;
 
 #[embassy_executor::task]
 async fn net_task(mut runner: embassy_net::Runner<'static, Device>) -> ! {
@@ -41,7 +41,7 @@ async fn main(spawner: Spawner) -> ! {
     hal::debug::SDIPrint::enable();
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::SYSCLK_FREQ_144MHZ_HSE;
-    let _p = hal::init(config);
+    let p = hal::init(config);
 
     Timer::after_millis(100).await;
 
@@ -53,7 +53,7 @@ async fn main(spawner: Spawner) -> ! {
     // Built-in 10M PHY is accessible via SMI at address 1
     let phy = GenericPhy::new(1);
 
-    let device = Ethernet::new(queue, mac_addr, phy, PhyInterface::Internal10M, 144);
+    let device = Ethernet::new(p.ETH, Irqs, queue, mac_addr, phy, PhyInterface::Internal10M, 144);
 
     println!(
         "MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
