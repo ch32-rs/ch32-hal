@@ -9,10 +9,11 @@
 //!
 //! # Hardware
 //!
-//! The MAC connects to an external PHY via MII or RMII interface. Pin
-//! configuration must be done by the caller before creating the driver.
+//! Use [`Ethernet::new_internal`] for the built-in PHY, or
+//! [`Ethernet::new_rmii`] for an external PHY. RMII pins are configured and
+//! retained by the driver.
 //!
-//! ## RMII mode pins (typical, active-low remapping)
+//! ## RMII mode pins (default mapping)
 //!
 //! | Signal           | Pin  | Direction |
 //! |------------------|------|-----------|
@@ -42,7 +43,7 @@ mod smi;
 
 pub use dma::{PacketQueue, RDes, RDesRing, RxToken, TDes, TDesRing, TxToken};
 pub use phy::{GenericPhy, InternalPhy, Phy};
-pub use pins::init_rmii_pins;
+pub use pins::{CrsDvPin, MdcPin, MdioPin, RefClkPin, RmiiPins, Rxd0Pin, Rxd1Pin, TxEnPin, Txd0Pin, Txd1Pin};
 pub use smi::{Smi, SmiError};
 
 use dma::MTU;
@@ -63,17 +64,10 @@ impl State {
 // Driver
 // ============================================================================
 
-/// MII/RMII interface mode selection.
+// Internal setup and shutdown selection; callers select a constructor.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PhyInterface {
-    /// Media Independent Interface (MII) - 18 pins.
-    Mii,
-    /// Reduced MII (RMII) - 9 pins.
+enum PhyInterface {
     Rmii,
-    /// Built-in 10M PHY — no external pins needed.
-    ///
-    /// The CH32V307 has an integrated 10BASE-T PHY connected internally to the
-    /// EMAC. TX+/TX-/RX+/RX- go through a transformer on dedicated analog pins.
     Internal10M,
 }
 
@@ -102,29 +96,80 @@ pub struct Ethernet<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> {
     smi: Smi,
     mac_addr: [u8; 6],
     phy_interface: PhyInterface,
+    _pins: Option<[Peri<'d, crate::gpio::AnyPin>; 9]>,
     _phantom: PhantomData<T>,
 }
 
-impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, TX, RX, P> {
-    /// Create and initialize a new Ethernet MAC driver.
-    ///
-    /// # Arguments
-    ///
-    /// * `queue` - Static packet queue for DMA descriptors and buffers
-    /// * `mac_addr` - 6-byte MAC address
-    /// * `phy` - PHY driver instance
-    /// * `phy_interface` - MII or RMII mode
+impl<'d, T: Instance, const TX: usize, const RX: usize> Ethernet<'d, T, TX, RX, InternalPhy> {
+    /// Initialize Ethernet using the built-in 10M PHY at its fixed SMI address.
+    /// No external MII/RMII pins are needed.
     ///
     /// # Errors
     ///
     /// Returns an error if DMA reset or a PHY management transaction times out.
-    pub fn new(
+    pub fn new_internal(
+        peri: Peri<'d, T>,
+        irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+        queue: &'d mut PacketQueue<TX, RX>,
+        mac_addr: [u8; 6],
+    ) -> Result<Self, InitError> {
+        Self::new_inner(
+            peri,
+            irqs,
+            queue,
+            InternalPhy::new(),
+            mac_addr,
+            PhyInterface::Internal10M,
+            None,
+        )
+    }
+}
+
+impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, TX, RX, P> {
+    /// Initialize Ethernet using an external PHY connected through RMII.
+    /// The driver configures and retains the supplied pins using the default mapping.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if DMA reset or a PHY management transaction times out.
+    pub fn new_rmii(
+        peri: Peri<'d, T>,
+        irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+        queue: &'d mut PacketQueue<TX, RX>,
+        pins: RmiiPins<
+            'd,
+            impl RefClkPin<T>,
+            impl MdioPin<T>,
+            impl MdcPin<T>,
+            impl CrsDvPin<T>,
+            impl Rxd0Pin<T>,
+            impl Rxd1Pin<T>,
+            impl TxEnPin<T>,
+            impl Txd0Pin<T>,
+            impl Txd1Pin<T>,
+        >,
+        phy: P,
+        mac_addr: [u8; 6],
+    ) -> Result<Self, InitError> {
+        Self::new_inner(
+            peri,
+            irqs,
+            queue,
+            phy,
+            mac_addr,
+            PhyInterface::Rmii,
+            Some(pins.configure()),
+        )
+    }
+
+    fn new_inner(
         _peri: Peri<'d, T>,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         queue: &'d mut PacketQueue<TX, RX>,
-        mac_addr: [u8; 6],
         mut phy: P,
+        mac_addr: [u8; 6],
         phy_interface: PhyInterface,
+        pins: Option<[Peri<'d, crate::gpio::AnyPin>; 9]>,
     ) -> Result<Self, InitError> {
         // ETH needs separate MAC, TX, and RX clocks.
         critical_section::with(|_| {
@@ -153,11 +198,11 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             // Enable the built-in 10M PHY via EXTEND register
             pac::EXTEND.ctr().modify(|w| w.set_eth_10m_en(true));
         } else {
-            // Select MII/RMII interface via AFIO for external PHY
+            // Select RMII via AFIO for the external PHY.
             #[cfg(afio_v3)]
             {
                 pac::AFIO.pcfr1().modify(|w| {
-                    w.set_mii_rmii_sel(phy_interface == PhyInterface::Rmii);
+                    w.set_mii_rmii_sel(true);
                 });
             }
         }
@@ -284,6 +329,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             smi,
             mac_addr,
             phy_interface,
+            _pins: pins,
             _phantom: PhantomData,
         })
     }
