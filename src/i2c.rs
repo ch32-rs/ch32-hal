@@ -241,6 +241,33 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         regs.ctlr1().modify(|w| w.set_pe(true));
     }
 
+    fn generate_stop() {
+        T::regs().ctlr1().modify(|w| w.set_stop(true));
+    }
+
+    /// Wait until a previously requested STOP has been generated and HW has
+    /// cleared CTLR1.STOP. Needed before the next START RMW (#221): a plain
+    /// `ctlr1().modify(|r| r.set_start(true))` can capture STOP=1 and write it
+    /// back after HW cleared it, so a second STOP follows the new START.
+    fn wait_stop_finished(timeout: Timeout) -> Result<(), Error> {
+        while T::regs().ctlr1().read().stop() {
+            timeout.check().ok_or(Error::Timeout)?;
+        }
+        Ok(())
+    }
+
+    /// Issue a START (optionally with ACK) only after any pending STOP finishes.
+    fn launch_start(ack: bool, timeout: Timeout) -> Result<(), Error> {
+        Self::wait_stop_finished(timeout)?;
+        T::regs().ctlr1().modify(|reg| {
+            reg.set_start(true);
+            if ack {
+                reg.set_ack(true);
+            }
+        });
+        Ok(())
+    }
+
     fn check_and_clear_error_flags() -> Result<crate::pac::i2c::regs::Star1, Error> {
         // Note that flags should only be cleared once they have been registered. If flags are
         // cleared otherwise, there may be an inherent race condition and flags may be missed.
@@ -249,6 +276,8 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         #[cfg(i2c_v3)]
         if star1.timeout() {
             T::regs().star1().modify(|w| w.set_timeout(false));
+            // Release the bus; otherwise the master can keep SCL low (#222).
+            Self::generate_stop();
             return Err(Error::Timeout);
         }
 
@@ -264,11 +293,16 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
         if star1.af() {
             T::regs().star1().modify(|w| w.set_af(false));
+            // Without STOP the peripheral stays in master mode with SCL held
+            // low (ch32-rs/ch32-hal#222). Mirror the v5f local driver / embassy
+            // async AF path.
+            Self::generate_stop();
             return Err(Error::Nack);
         }
 
         if star1.arlo() {
             T::regs().star1().modify(|w| w.set_arlo(false));
+            Self::generate_stop();
             return Err(Error::Arbitration);
         }
 
@@ -284,10 +318,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     fn write_bytes(&mut self, addr: u8, bytes: &[u8], timeout: Timeout, frame: FrameOptions) -> Result<(), Error> {
         if frame.send_start() {
             // Send a START condition
-
-            T::regs().ctlr1().modify(|reg| {
-                reg.set_start(true);
-            });
+            Self::launch_start(false, timeout)?;
 
             // Wait until START condition was generated
             while !Self::check_and_clear_error_flags()?.sb() {
@@ -296,6 +327,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
             // Check if we were the ones to generate START
             if T::regs().ctlr1().read().start() || !T::regs().star2().read().msl() {
+                Self::generate_stop();
                 return Err(Error::Arbitration);
             }
 
@@ -379,10 +411,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
         if frame.send_start() {
             // Send a START condition and set ACK bit
-            T::regs().ctlr1().modify(|reg| {
-                reg.set_start(true);
-                reg.set_ack(true);
-            });
+            Self::launch_start(true, timeout)?;
 
             // Wait until START condition was generated
             while !Self::check_and_clear_error_flags()?.sb() {
@@ -391,6 +420,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
             // Check if we were the ones to generate START
             if T::regs().ctlr1().read().start() || !T::regs().star2().read().msl() {
+                Self::generate_stop();
                 return Err(Error::Arbitration);
             }
 
@@ -503,22 +533,21 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
         });
 
         // Sentinel to disable transfer when an error occurs or future is canceled.
-        // TODO: Generate STOP condition on cancel?
         let on_drop = OnDrop::new(|| {
             T::regs().ctlr2().modify(|w| {
                 w.set_dmaen(false);
                 w.set_iterren(false);
                 w.set_itevten(false);
-            })
+            });
+            // Release the bus if the future is cancelled mid-transfer.
+            Self::generate_stop();
         });
 
         let state = T::state();
 
         if frame.send_start() {
             // Send a START condition
-            T::regs().ctlr1().modify(|reg| {
-                reg.set_start(true);
-            });
+            Self::launch_start(false, self.timeout())?;
 
             // Wait until START condition was generated
             poll_fn(|cx| {
@@ -541,6 +570,7 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
 
             // Check if we were the ones to generate START
             if T::regs().ctlr1().read().start() || !T::regs().star2().read().msl() {
+                Self::generate_stop();
                 return Err(Error::Arbitration);
             }
 
@@ -674,23 +704,21 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
         });
 
         // Sentinel to disable transfer when an error occurs or future is canceled.
-        // TODO: Generate STOP condition on cancel?
         let on_drop = OnDrop::new(|| {
             T::regs().ctlr2().modify(|w| {
                 w.set_dmaen(false);
                 w.set_iterren(false);
                 w.set_itevten(false);
-            })
+            });
+            // Release the bus if the future is cancelled mid-transfer.
+            Self::generate_stop();
         });
 
         let state = T::state();
 
         if frame.send_start() {
             // Send a START condition and set ACK bit
-            T::regs().ctlr1().modify(|reg| {
-                reg.set_start(true);
-                reg.set_ack(true);
-            });
+            Self::launch_start(true, self.timeout())?;
 
             // Wait until START condition was generated
             poll_fn(|cx| {
@@ -713,6 +741,7 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
 
             // Check if we were the ones to generate START
             if T::regs().ctlr1().read().start() || !T::regs().star2().read().msl() {
+                Self::generate_stop();
                 return Err(Error::Arbitration);
             }
 
