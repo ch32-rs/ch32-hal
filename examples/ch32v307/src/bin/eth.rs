@@ -19,7 +19,7 @@ use embassy_net::tcp::TcpSocket;
 use embassy_net::StackResources;
 use embassy_time::Timer;
 use embedded_io_async::Write;
-use hal::eth::{self, Ethernet, InternalPhy, PacketQueue, PhyInterface};
+use hal::eth::{self, Ethernet, InternalPhy, PacketQueue};
 use hal::println;
 use static_cell::StaticCell;
 use {ch32_hal as hal, panic_halt as _};
@@ -49,11 +49,7 @@ async fn main(spawner: Spawner) -> ! {
     static QUEUE: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
     let queue = QUEUE.init(PacketQueue::new());
 
-    // The built-in PHY driver selects its fixed SMI address automatically.
-    let phy = InternalPhy::new();
-
-    let device = Ethernet::new(p.ETH, Irqs, queue, mac_addr, phy, PhyInterface::Internal10M)
-        .expect("Ethernet initialization failed");
+    let device = Ethernet::new_internal(p.ETH, Irqs, queue, mac_addr).expect("Ethernet initialization failed");
 
     println!(
         "MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
