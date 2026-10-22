@@ -35,18 +35,6 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::{pac, Peri};
 
-/// Shorthand for the ETH peripheral instance.
-#[cfg(emac)]
-fn eth() -> pac::emac::Eth {
-    pac::ETH
-}
-
-/// Shorthand for the ETH peripheral instance.
-#[cfg(not(emac))]
-fn eth() -> pac::eth::Eth {
-    pac::ETH
-}
-
 mod dma;
 mod phy;
 mod pins;
@@ -174,7 +162,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             0b000 // div42
         };
         e.macmiiar().write(|w| w.set_cr(clock_range));
-        let smi = Smi { clock_range };
+        let mut smi = Smi::new(T::regs(), clock_range);
 
         // 5. Configure MAC
         e.maccr().write(|w| {
@@ -258,8 +246,8 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         });
 
         // 16. Reset and initialize PHY
-        phy.phy_reset(&smi);
-        phy.phy_init(&smi);
+        phy.phy_reset(&mut smi);
+        phy.phy_init(&mut smi);
 
         // 17. Enable ETH interrupt in PFIC
         unsafe {
@@ -278,8 +266,8 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
     }
 
     /// Get the SMI interface for direct PHY register access.
-    pub fn smi(&self) -> &Smi {
-        &self.smi
+    pub fn smi(&mut self) -> &mut Smi {
+        &mut self.smi
     }
 
     /// Get the configured MAC address.
@@ -416,7 +404,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driv
     }
 
     fn link_state(&mut self, cx: &mut Context) -> LinkState {
-        if self.phy.poll_link(&self.smi, cx) {
+        if self.phy.poll_link(&mut self.smi, cx) {
             LinkState::Up
         } else {
             LinkState::Down
