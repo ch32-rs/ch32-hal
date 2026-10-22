@@ -19,7 +19,7 @@ use embassy_net::tcp::TcpSocket;
 use embassy_net::StackResources;
 use embassy_time::Timer;
 use embedded_io_async::Write;
-use hal::eth::{self, Ethernet, GenericPhy, PacketQueue, PhyInterface};
+use hal::eth::{self, Ethernet, InternalPhy, PacketQueue, PhyInterface};
 use hal::println;
 use static_cell::StaticCell;
 use {ch32_hal as hal, panic_halt as _};
@@ -28,7 +28,7 @@ hal::bind_interrupts!(struct Irqs {
     ETH => eth::InterruptHandler<hal::peripherals::ETH>;
 });
 
-type Device = Ethernet<'static, hal::peripherals::ETH, 4, 4, GenericPhy>;
+type Device = Ethernet<'static, hal::peripherals::ETH, 4, 4, InternalPhy>;
 
 #[embassy_executor::task]
 async fn net_task(mut runner: embassy_net::Runner<'static, Device>) -> ! {
@@ -49,8 +49,8 @@ async fn main(spawner: Spawner) -> ! {
     static QUEUE: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
     let queue = QUEUE.init(PacketQueue::new());
 
-    // Built-in 10M PHY is accessible via SMI at address 1
-    let phy = GenericPhy::new(1);
+    // The built-in PHY driver selects its fixed SMI address automatically.
+    let phy = InternalPhy::new();
 
     let device = Ethernet::new(p.ETH, Irqs, queue, mac_addr, phy, PhyInterface::Internal10M, 144);
 
