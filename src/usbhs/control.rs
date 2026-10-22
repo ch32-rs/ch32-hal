@@ -71,6 +71,10 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::ControlPipe for Con
 
         OUT_STATE[0].ready.store(false, Ordering::Relaxed);
         critical_section::with(|_| {
+            // the chunks embassy-usb asks for are the host's packets: the length if the
+            // interrupt only sees the host move on
+            OUT_STATE[0].len.store(buf.len() as u16, Ordering::Relaxed);
+            OUT_STATE[0].armed.store(true, Ordering::Relaxed);
             if first {
                 d.ep_rx_ctrl(0).write(|v| {
                     v.set_mask_uep_r_tog(EpTog::DATA1);
@@ -103,6 +107,17 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::ControlPipe for Con
         self.ep0.data.buffer.write_volatile(data);
         IN_STATE[0].ready.store(false, Ordering::Relaxed);
         critical_section::with(|_| {
+            if last {
+                // the status stage (a zero-length OUT, DATA1) right away: the host gets through
+                // even if no entry sees the data packet's completion (its OUT stands for it)
+                OUT_STATE[0].ready.store(false, Ordering::Relaxed);
+                OUT_STATE[0].len.store(0, Ordering::Relaxed);
+                d.ep_rx_ctrl(0).write(|w| {
+                    w.set_mask_uep_r_tog(EpTog::DATA1);
+                    w.set_mask_uep_r_res(EpRxResponse::ACK);
+                });
+            }
+            IN_STATE[0].armed.store(true, Ordering::Relaxed);
             d.ep_t_len(0).write(|v| v.set_len(data.len() as u16));
             if first {
                 d.ep_tx_ctrl(0).write(|v| {
@@ -117,14 +132,6 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::ControlPipe for Con
         complete(&IN_STATE[0]).await?;
 
         if last {
-            // status stage: a zero-length OUT, DATA1
-            OUT_STATE[0].ready.store(false, Ordering::Relaxed);
-            critical_section::with(|_| {
-                d.ep_rx_ctrl(0).write(|w| {
-                    w.set_mask_uep_r_tog(EpTog::DATA1);
-                    w.set_mask_uep_r_res(EpRxResponse::ACK);
-                })
-            });
             if complete(&OUT_STATE[0]).await? != 0 {
                 error!("Expected 0 len OUT stage, found non-zero len, aborting");
                 return Err(EndpointError::BufferOverflow);
@@ -157,6 +164,8 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::ControlPipe for Con
         let d = T::dregs();
 
         critical_section::with(|_| {
+            OUT_STATE[0].armed.store(false, Ordering::Relaxed);
+            IN_STATE[0].armed.store(false, Ordering::Relaxed);
             d.ep_tx_ctrl(0).modify(|v| v.set_mask_uep_t_res(EpTxResponse::STALL));
             d.ep_rx_ctrl(0).modify(|v| v.set_mask_uep_r_res(EpRxResponse::STALL));
         });

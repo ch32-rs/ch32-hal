@@ -59,8 +59,33 @@ const EP_MAX_PACKET_SIZE: u16 = 64;
 pub const ISO_OUT_SLOTS: usize = 16;
 /// Packets queued per isochronous IN endpoint.
 pub const ISO_IN_SLOTS: usize = 2;
-// the ring indices are u8s that wrap: a slot count that doesn't divide 256 would skip slots
+// the ring indices are u8s that wrap and are masked: slot counts are powers of two up to 256
 const _: () = assert!(256 % ISO_OUT_SLOTS == 0 && 256 % ISO_IN_SLOTS == 0);
+
+/// The pattern an armed isochronous OUT slot is filled with (see `iso_out_check`)
+const ISO_OUT_MARK: u32 = 0x5A3C_A5C3;
+/// Isochronous OUT endpoints, a bit each
+static ISO_OUT_EPS: AtomicU16 = AtomicU16::new(0);
+/// Isochronous IN endpoints polled every (micro)frame, a bit each
+static ISO_IN_EVERY: AtomicU16 = AtomicU16::new(0);
+/// Of those, the ones paced by `iso_in_advance` instead of their completions
+static ISO_IN_PACED: AtomicU16 = AtomicU16::new(0);
+/// A paced endpoint's last microframe advanced (`NO_FRAME`: none since enabled)
+static PACED_LAST: [AtomicU16; MAX_NR_EP] = [const { AtomicU16::new(NO_FRAME) }; MAX_NR_EP];
+
+/// The iso IN endpoints the interrupt completes: polled every microframe, not paced.
+fn iso_in_every(d: crate::pac::usbhs::Usbd) -> u16 {
+    in_enabled(d, ISO_IN_EVERY.load(Ordering::Relaxed) & !ISO_IN_PACED.load(Ordering::Relaxed))
+}
+
+/// The endpoints of `mask` (bit n: endpoint n) whose IN direction is enabled.
+fn in_enabled(d: crate::pac::usbhs::Usbd, mask: u16) -> u16 {
+    if mask == 0 {
+        return 0;
+    }
+    // EP_CONFIG bit n: endpoint n's IN enable
+    mask & d.ep_config().read().0 as u16
+}
 
 /// The isochronous IN response: "data ready" (TinyUSB `USBHS_EP_T_RES_NYET`).
 const TX_RES_ISO: EpTxResponse = EpTxResponse::_RESERVED_1;
@@ -74,7 +99,8 @@ pub(crate) struct EpState {
     /// the loaded packet went out
     pub(crate) ready: AtomicBool,
     pub(crate) len: AtomicU16,
-    /// OUT: a read is waiting (the endpoint answers ACK)
+    /// bulk / interrupt: OUT -- a read is waiting (the endpoint answers ACK); IN -- a packet
+    /// is loaded
     pub(crate) armed: AtomicBool,
     pub(crate) iso: AtomicBool,
     // isochronous ring: slot i at base + (i % slots) * stride; [tail, head) hold packets
@@ -90,6 +116,14 @@ pub(crate) struct EpState {
     pub(crate) overruns: AtomicU32,
     /// IN: the frame number of the last iso completion (`NO_FRAME`: none)
     pub(crate) last_frame: AtomicU16,
+    /// isochronous OUT: the packet size the slots are marked over
+    pub(crate) max_len: AtomicU16,
+    /// isochronous OUT: the shortest packet since enabled (marks below it get overwritten)
+    pub(crate) min_len: AtomicU16,
+    /// isochronous OUT: the armed slot's address
+    pub(crate) armed_slot: AtomicU32,
+    /// bulk / interrupt: R_TOG / T_TOG after the last packet taken / sent (DATA1: true)
+    pub(crate) tog: AtomicBool,
 }
 
 impl EpState {
@@ -109,6 +143,10 @@ impl EpState {
         lens: [const { AtomicU16::new(0) }; ISO_OUT_SLOTS],
         overruns: AtomicU32::new(0),
         last_frame: AtomicU16::new(NO_FRAME),
+        max_len: AtomicU16::new(0),
+        min_len: AtomicU16::new(0),
+        armed_slot: AtomicU32::new(0),
+        tog: AtomicBool::new(false),
     };
 
     fn reset(&self) {
@@ -118,6 +156,7 @@ impl EpState {
         self.head.store(0, Ordering::Relaxed);
         self.tail.store(0, Ordering::Relaxed);
         self.loaded.store(false, Ordering::Relaxed);
+        self.tog.store(false, Ordering::Relaxed);
     }
 
     pub(crate) fn count(&self) -> u8 {
@@ -128,7 +167,7 @@ impl EpState {
 
     pub(crate) fn slot_addr(&self, i: u8) -> u32 {
         let n = self.slots.load(Ordering::Relaxed);
-        self.base.load(Ordering::Relaxed) + (i % n) as u32 * self.stride.load(Ordering::Relaxed) as u32
+        self.base.load(Ordering::Relaxed) + (i & (n - 1)) as u32 * self.stride.load(Ordering::Relaxed) as u32
     }
 }
 
@@ -144,6 +183,24 @@ static EP0_BUF: AtomicU32 = AtomicU32::new(0);
 /// The peripheral's base address, for the free functions (0 until a driver exists).
 static REGS: AtomicUsize = AtomicUsize::new(0);
 static SOF_CALLBACK: AtomicUsize = AtomicUsize::new(0);
+/// The frame number of the last SOF handled
+static SOF_FRAME: AtomicU16 = AtomicU16::new(NO_FRAME);
+/// Polls of MIS_ST to wait for an iso OUT to finish: longer than a 1024-byte packet
+const SIE_WAIT: u32 = 2000;
+
+/// The frame number register: frame (bits 10:0) and microframe (bits 15:13); bits 12:11
+/// are always 0, so this is never a frame number.
+const NO_FRAME: u16 = 0x1800;
+const MICROFRAME_MASK: u16 = (1 << 14) - 1;
+
+/// A frame number as a microframe count
+fn microframe_index(frame: u16) -> u16 {
+    (frame & 0x7FF) << 3 | frame >> 13
+}
+
+fn frame_of_index(i: u16) -> u16 {
+    (i >> 3) & 0x7FF | (i & 7) << 13
+}
 
 fn dregs() -> Option<crate::pac::usbhs::Usbd> {
     match REGS.load(Ordering::Acquire) {
@@ -161,20 +218,10 @@ pub fn set_sof_callback(f: fn()) {
     }
 }
 
-/// The frame number register: frame (bits 10:0) and microframe (bits 15:13); bits 12:11
-/// are always 0, so this is never a frame number.
-const NO_FRAME: u16 = 0x1800;
-
-/// The current microframe number, from the frame number register: 8 per frame, wrapping
-/// at 2^14. Counts microframes whose SOF interrupt was lost (see the iso IN completion).
+/// The current microframe number: 8 per frame, wrapping at 2^14. Read from the frame
+/// number register, so it also counts microframes whose SOF interrupt was missed.
 pub fn microframe() -> u16 {
-    match dregs() {
-        Some(d) => {
-            let f = d.frame_no().read().frame_no();
-            (f & 0x7FF) << 3 | f >> 13
-        }
-        None => 0,
-    }
+    dregs().map_or(0, |d| microframe_index(d.frame_no().read().frame_no()))
 }
 
 /// Whether the host enabled endpoint `ep` in `direction` (for an isochronous one: selected
@@ -203,7 +250,7 @@ pub fn iso_out_take<R>(ep: usize, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
     }
     let tail = s.tail.load(Ordering::Relaxed);
     let n = s.slots.load(Ordering::Relaxed);
-    let len = s.lens[(tail % n) as usize].load(Ordering::Relaxed) as usize;
+    let len = s.lens[(tail & (n - 1)) as usize].load(Ordering::Relaxed) as usize;
     // SAFETY: a slot in [tail, head): the DMA is done with it until tail moves
     let r = f(unsafe { core::slice::from_raw_parts(s.slot_addr(tail) as *const u8, len) });
     s.tail.store(tail.wrapping_add(1), Ordering::Release);
@@ -221,7 +268,53 @@ pub fn iso_in_register_waker(ep: usize, waker: &core::task::Waker) {
 /// Packets queued on isochronous IN endpoint `ep` and not yet taken by the host
 /// (including the one loaded in the endpoint).
 pub fn iso_in_pending(ep: usize) -> u8 {
+    if ep == 0 || ep >= MAX_NR_EP {
+        return 0;
+    }
     IN_STATE[ep].count()
+}
+
+/// Pace isochronous IN endpoint `ep` (polled every microframe) from outside: the interrupt
+/// no longer moves it on after an IN; `iso_in_advance`, called once in each microframe after
+/// the host's IN to it and well before the next, does.
+///
+/// The USBHS keeps one status for all endpoints, and an iso IN raises its flag a little
+/// before the SIE is free, so the interrupt mostly can't tell such an IN went out until the
+/// next SOF -- and a host polls an iso IN early in the microframe (~3 us after the SOF on
+/// Linux), so loading the next packet there races it: now and then the loaded packet goes
+/// out again. A timer some way into the microframe has tens of us on either side.
+pub fn iso_in_set_paced(ep: usize, paced: bool) {
+    if ep == 0 || ep >= MAX_NR_EP {
+        return;
+    }
+    critical_section::with(|_| {
+        let m = ISO_IN_PACED.load(Ordering::Relaxed);
+        ISO_IN_PACED.store(if paced { m | 1 << ep } else { m & !(1 << ep) }, Ordering::Relaxed);
+        PACED_LAST[ep].store(NO_FRAME, Ordering::Relaxed);
+    });
+}
+
+/// A paced iso IN endpoint (`iso_in_set_paced`): the host took a packet in each microframe
+/// since the last call; they move on and the next queued packet is loaded. Call it at the
+/// USB interrupt's priority (it shares the endpoint's state with it), some way into the
+/// microframe: after the host's IN, before the next microframe's.
+pub fn iso_in_advance(ep: usize) {
+    let Some(d) = dregs() else { return };
+    if ep == 0 || ep >= MAX_NR_EP || ISO_IN_PACED.load(Ordering::Relaxed) & 1 << ep == 0 {
+        return;
+    }
+    if in_enabled(d, 1 << ep) == 0 {
+        PACED_LAST[ep].store(NO_FRAME, Ordering::Relaxed);
+        return;
+    }
+    let now = microframe_index(d.frame_no().read().frame_no());
+    let last = PACED_LAST[ep].load(Ordering::Relaxed);
+    let n = if last == NO_FRAME { 1 } else { now.wrapping_sub(microframe_index(last)) & MICROFRAME_MASK };
+    // more than the ring holds: the rest went out empty anyway
+    for _ in 0..n.min(ISO_IN_SLOTS as u16 + 1) {
+        iso_in_complete(d, ep);
+    }
+    PACED_LAST[ep].store(frame_of_index(now), Ordering::Relaxed);
 }
 
 /// Queue one packet on isochronous IN endpoint `ep`; callable from interrupts. `false`:
@@ -274,7 +367,7 @@ fn iso_in_enqueue_with(ep: usize, f: impl FnOnce(&mut [u8]) -> usize) -> bool {
     let stride = s.stride.load(Ordering::Relaxed) as usize;
     // SAFETY: the slot is inside the ring's buffers and not in [tail, head)
     let len = f(unsafe { core::slice::from_raw_parts_mut(s.slot_addr(head) as *mut u8, stride) }).min(stride);
-    s.lens[(head % n) as usize].store(len as u16, Ordering::Relaxed);
+    s.lens[(head & (n - 1)) as usize].store(len as u16, Ordering::Relaxed);
     s.head.store(head.wrapping_add(1), Ordering::Release);
     true
 }
@@ -287,6 +380,193 @@ fn first_in_frame(s: &EpState, frame: u16) -> bool {
     first
 }
 
+/// An iso IN completion: the loaded packet went out, load the next. Interrupt only.
+fn iso_in_complete(d: crate::pac::usbhs::Usbd, ep: usize) {
+    let s = &IN_STATE[ep];
+    if s.loaded.load(Ordering::Relaxed) {
+        s.tail
+            .store(s.tail.load(Ordering::Relaxed).wrapping_add(1), Ordering::Release);
+    }
+    iso_in_load(d, ep);
+    s.waker.wake();
+}
+
+/// Bulk / interrupt / control: NAK before releasing the flag, so the next transaction
+/// waits for the task.
+fn nak_non_iso(d: crate::pac::usbhs::Usbd, st: ch32_metapac::usbhs::regs::IntSt) {
+    let ep = st.endp() as usize;
+    match st.token() {
+        // bulk / interrupt: before knowing whether a packet went through (`toggled`), so the
+        // next can't land on it
+        UsbToken::OUT if (ep == 0 && st.tog_ok()) || (ep != 0 && !OUT_STATE[ep].iso.load(Ordering::Relaxed)) => {
+            d.ep_rx_ctrl(ep).modify(|w| w.set_mask_uep_r_res(EpRxResponse::NAK))
+        }
+        UsbToken::IN if !IN_STATE[ep].iso.load(Ordering::Relaxed) => {
+            d.ep_tx_ctrl(ep).modify(|w| w.set_mask_uep_t_res(EpTxResponse::NAK))
+        }
+        _ => {}
+    }
+}
+
+/// A packet went through a bulk / interrupt endpoint (not EP0): the SIE flips its toggle on
+/// each one it accepts (OUT) or the host ACKs (IN). INT_ST's TOG_OK can't tell: the flag comes
+/// a little before the SIE goes free, and an entry that early reads it before it's final.
+/// Waits for the SIE. The entry NAKed the endpoint; a read / write still waiting gets it back.
+fn toggled(r: crate::pac::usbhs::Usb, d: crate::pac::usbhs::Usbd, ep: usize, dir: Direction) -> bool {
+    let mut n = 0;
+    while !r.mis_st().read().sie_free() && n < SIE_WAIT {
+        n += 1;
+    }
+    let (s, tog) = match dir {
+        Direction::Out => (&OUT_STATE[ep], d.ep_rx_ctrl(ep).read().mask_uep_r_tog()),
+        Direction::In => (&IN_STATE[ep], d.ep_tx_ctrl(ep).read().mask_uep_t_tog()),
+    };
+    let tog = tog == EpTog::DATA1;
+    if s.tog.load(Ordering::Relaxed) == tog {
+        if s.armed.load(Ordering::Relaxed) {
+            match dir {
+                Direction::Out => d.ep_rx_ctrl(ep).modify(|w| w.set_mask_uep_r_res(EpRxResponse::ACK)),
+                Direction::In => d.ep_tx_ctrl(ep).modify(|w| w.set_mask_uep_t_res(EpTxResponse::ACK)),
+            }
+        }
+        return false;
+    }
+    s.tog.store(tog, Ordering::Relaxed);
+    s.armed.store(false, Ordering::Relaxed);
+    true
+}
+
+/// Isochronous OUT arrivals, by the slot's first word: the endpoint's slot gets `ISO_OUT_MARK`
+/// when it's armed, so a packet in it shows whatever INT_ST shows -- with the flag one bit, a
+/// late entry may stand for an OUT and show the transaction after it. (a packet that starts
+/// with the mark is lost; zero-length ones aren't seen.) Interrupt only.
+fn iso_out_check(r: crate::pac::usbhs::Usb, d: crate::pac::usbhs::Usbd, entry: Option<(usize, u16)>) {
+    let mut eps = ISO_OUT_EPS.load(Ordering::Relaxed);
+    while eps != 0 {
+        let ep = eps.trailing_zeros() as usize;
+        eps &= eps - 1;
+        let s = &OUT_STATE[ep];
+        let slot = s.armed_slot.load(Ordering::Relaxed);
+        // SAFETY: the armed slot, a buffer of this endpoint
+        if unsafe { core::ptr::read_volatile(slot as *const u32) } == ISO_OUT_MARK {
+            continue;
+        }
+        let max = s.max_len.load(Ordering::Relaxed) as usize;
+        let len = match entry {
+            // RX_LEN as this packet's entry read it (releasing the flag clears it)
+            Some((e, len)) if e == ep => len,
+            _ => {
+                // read after the slot: while its OUT is the last token, the packet may still be
+                // arriving (or its DMA finishing), and its own entry follows
+                let st = r.int_st().read();
+                if st.token() == UsbToken::OUT && st.endp() as usize == ep {
+                    continue;
+                }
+                marked_len(slot, max) as u16
+            }
+        };
+        if len != 0 && len < s.min_len.load(Ordering::Relaxed) {
+            s.min_len.store(len, Ordering::Relaxed);
+        }
+        let n = s.slots.load(Ordering::Relaxed);
+        let mut head = s.head.load(Ordering::Relaxed);
+        // what the slot to arm holds (marks past it are still there)
+        let mut dirty = len as usize;
+        if head.wrapping_sub(s.tail.load(Ordering::Acquire)) < n - 1 {
+            s.lens[(head & (n - 1)) as usize].store(len, Ordering::Relaxed);
+            head = head.wrapping_add(1);
+            s.head.store(head, Ordering::Release);
+            dirty = s.lens[(head & (n - 1)) as usize].load(Ordering::Relaxed) as usize;
+        } else {
+            // full: the next packet overwrites this slot
+            s.overruns
+                .store(s.overruns.load(Ordering::Relaxed).wrapping_add(1), Ordering::Relaxed);
+        }
+        let from = s.min_len.load(Ordering::Relaxed) as usize;
+        iso_out_arm(d, ep, s.slot_addr(head), from, dirty.min(max));
+        s.waker.wake();
+    }
+}
+
+/// The length of a packet in a slot filled with `ISO_OUT_MARK` before it: up to its last
+/// byte that differs from the pattern.
+fn marked_len(slot: u32, max: usize) -> usize {
+    let mark = ISO_OUT_MARK.to_le_bytes();
+    let words = slot as *const u32;
+    // SAFETY: the slot holds `max` bytes, rounded up to words when marked
+    let word = |i: usize| unsafe { core::ptr::read_volatile(words.add(i)) };
+    // the first word of the marks after the packet (a packet word that matches the mark can
+    // throw this off: 2^-32), then the last byte before them that differs
+    let (mut lo, mut hi) = (0, max.div_ceil(4));
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if word(mid) == ISO_OUT_MARK {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    let w = lo;
+    if w == 0 {
+        return 0;
+    }
+    let last = word(w - 1).to_le_bytes();
+    let mut b = 4;
+    while last[b - 1] == mark[b - 1] {
+        b -= 1;
+    }
+    ((w - 1) * 4 + b).min(max)
+}
+
+/// Point isochronous OUT endpoint `ep` at the slot at `addr`, marked empty: its first word
+/// and its bytes `from..dirty` are marked again -- past `dirty` they still are, and below
+/// `from` (no packet is that short) the next packet overwrites them.
+fn iso_out_arm(d: crate::pac::usbhs::Usbd, ep: usize, addr: u32, from: usize, dirty: usize) {
+    let words = addr as *mut u32;
+    // SAFETY: a slot of this endpoint, not the reader's, word aligned
+    unsafe { core::ptr::write_volatile(words, ISO_OUT_MARK) };
+    for i in (from / 4).max(1)..dirty.div_ceil(4) {
+        unsafe { core::ptr::write_volatile(words.add(i), ISO_OUT_MARK) };
+    }
+    OUT_STATE[ep].armed_slot.store(addr, Ordering::Relaxed);
+    d.ep_rx_dma(ep - 1).write_value(addr);
+}
+
+/// A new microframe's SOF (once each, possibly from a later entry). An iso IN endpoint
+/// polled every microframe completes in each: one that didn't in the last went out unseen,
+/// its completion merged into another entry's flag (the host repeats a packet otherwise).
+/// Not while an IN to that endpoint is on the bus: that may be its packet going out late.
+/// An IN to another endpoint doesn't hold it back: a host polling a bulk IN (NAKed) at the
+/// SOF would otherwise leave the packet loaded, and it goes out twice.
+fn on_sof(r: crate::pac::usbhs::Usb, d: crate::pac::usbhs::Usbd, frame: u16) {
+    SOF_FRAME.store(frame, Ordering::Relaxed);
+    let prev = microframe_index(frame).wrapping_sub(1) & MICROFRAME_MASK;
+    let mut eps = iso_in_every(d);
+    while eps != 0 {
+        let ep = eps.trailing_zeros() as usize;
+        eps &= eps - 1;
+        let s = &IN_STATE[ep];
+        let last = s.last_frame.load(Ordering::Relaxed);
+        if last != NO_FRAME && microframe_index(last) == prev {
+            continue;
+        }
+        if !r.mis_st().read().sie_free() {
+            let st = r.int_st().read();
+            if st.token() == UsbToken::IN && st.endp() as usize == ep {
+                continue;
+            }
+        }
+        s.last_frame.store(frame_of_index(prev), Ordering::Relaxed);
+        iso_in_complete(d, ep);
+    }
+    let f = SOF_CALLBACK.load(Ordering::Acquire);
+    if f != 0 {
+        // SAFETY: stored from a `fn()` in `set_sof_callback`
+        let f: fn() = unsafe { core::mem::transmute(f) };
+        f();
+    }
+}
+
 /// Load slot `tail` into the endpoint, or a zero-length packet if the ring is empty.
 /// Interrupt only (see `iso_in_enqueue_with`).
 fn iso_in_load(d: crate::pac::usbhs::Usbd, ep: usize) {
@@ -296,7 +576,7 @@ fn iso_in_load(d: crate::pac::usbhs::Usbd, ep: usize) {
         let n = s.slots.load(Ordering::Relaxed);
         d.ep_tx_dma(ep - 1).write_value(s.slot_addr(tail));
         d.ep_t_len(ep)
-            .write(|w| w.set_len(s.lens[(tail % n) as usize].load(Ordering::Relaxed)));
+            .write(|w| w.set_len(s.lens[(tail & (n - 1)) as usize].load(Ordering::Relaxed)));
         s.loaded.store(true, Ordering::Relaxed);
     } else {
         d.ep_t_len(ep).write(|w| w.set_len(0));
@@ -351,94 +631,149 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
         }
 
         if flag.transfer() {
-            let st = r.int_st().read();
-            let len = r.rx_len().read();
+            // INT_ST shows a token as soon as it arrives, not when its transaction completes:
+            // an entry that runs late (the next transaction is already on the bus) reads a
+            // token that hasn't completed
+            let mut busy = !r.mis_st().read().sie_free();
+            let mut st = r.int_st().read();
+            let mut len = r.rx_len().read();
+            if !busy || (st.token() != UsbToken::SOF && st.endp() != 0) {
+                nak_non_iso(d, st);
+            }
+            // release early: INT_ST / RX_LEN are read
+            r.int_fg().write(|w| w.set_transfer(true));
+            // an iso OUT on the bus: this entry is its own (raised a little before the SIE goes
+            // free) or a late one. take it here once it's in -- left to a later entry, the next
+            // microframe's OUT may land on it first. its completion after the release sets
+            // RX_LEN (and the flag again: that entry finds it taken)
+            let mut out_late = false;
+            let mut rx_len_ok = true;
+            if busy && st.token() == UsbToken::OUT && OUT_STATE[st.endp() as usize].iso.load(Ordering::Relaxed) {
+                let mut n = 0;
+                while !r.mis_st().read().sie_free() && n < SIE_WAIT {
+                    n += 1;
+                }
+                let now = r.int_st().read();
+                len = r.rx_len().read();
+                // 0: it completed before the release, which cleared RX_LEN; another token:
+                // the next transaction already. the slot shows the length
+                if len == 0 || now.token() != UsbToken::OUT || now.endp() != st.endp() {
+                    rx_len_ok = false;
+                }
+                busy = false;
+                out_late = true;
+            } else if busy
+                && st.endp() != 0
+                && match st.token() {
+                    UsbToken::OUT => true, // iso: above
+                    UsbToken::IN => !IN_STATE[st.endp() as usize].iso.load(Ordering::Relaxed),
+                    _ => false,
+                }
+            {
+                // bulk / interrupt raise their flag before the SIE goes free too: this may be the
+                // shown transaction's own entry (`toggled` tells). an OUT completing after the
+                // release sets RX_LEN again
+                let mut n = 0;
+                while !r.mis_st().read().sie_free() && n < SIE_WAIT {
+                    n += 1;
+                }
+                busy = false;
+                let now = r.rx_len().read();
+                if now != 0 {
+                    len = now;
+                }
+            } else if busy && r.mis_st().read().sie_free() && !r.int_fg().read().transfer() {
+                // it completed before the release, which took its flag (and RX_LEN): handle it
+                // here
+                busy = false;
+                st = r.int_st().read();
+                rx_len_ok = false;
+                nak_non_iso(d, st);
+            }
             let ep = st.endp() as usize;
             let token = st.token();
-
             let iso = match token {
                 UsbToken::OUT => OUT_STATE[ep].iso.load(Ordering::Relaxed),
                 UsbToken::IN => IN_STATE[ep].iso.load(Ordering::Relaxed),
                 _ => true,
             };
-            // bulk / interrupt / control: NAK before releasing the flag, so the next
-            // transaction waits for the task
-            if !iso {
-                match token {
-                    UsbToken::OUT if st.tog_ok() => {
-                        d.ep_rx_ctrl(ep).modify(|w| w.set_mask_uep_r_res(EpRxResponse::NAK))
+            let frame = d.frame_no().read().frame_no();
+            // an iso IN raises its flag a little before the SIE goes free (its only entry):
+            // with this microframe's SOF handled, the entry is that IN's own
+            if busy && iso && token == UsbToken::IN && SOF_FRAME.load(Ordering::Relaxed) == frame {
+                busy = false;
+            }
+            // the flag is one bit: a late entry also stands for what completed before the
+            // token it shows. the SOF if this microframe's wasn't handled
+            if token != UsbToken::SOF && SOF_FRAME.load(Ordering::Relaxed) != frame {
+                on_sof(r, d, frame);
+            }
+
+            if out_late {
+                // what raised a late entry completed before the OUT: the iso INs polled every
+                // microframe that haven't completed in it (hosts poll them first; the SOF
+                // catches up the ones polled after)
+                let mut eps = iso_in_every(d);
+                while eps != 0 {
+                    let i = eps.trailing_zeros() as usize;
+                    eps &= eps - 1;
+                    if first_in_frame(&IN_STATE[i], frame) {
+                        iso_in_complete(d, i);
                     }
-                    UsbToken::IN => d.ep_tx_ctrl(ep).modify(|w| w.set_mask_uep_t_res(EpTxResponse::NAK)),
-                    _ => {}
                 }
             }
-            // release early: INT_ST / RX_LEN are read
-            r.int_fg().write(|w| w.set_transfer(true));
-            let frame = d.frame_no().read().frame_no();
-
-            match token {
-                UsbToken::SOF => {
-                    let f = SOF_CALLBACK.load(Ordering::Acquire);
-                    if f != 0 {
-                        let f: fn() = core::mem::transmute(f);
-                        f();
+            if !busy {
+                match token {
+                    UsbToken::SOF => {
+                        if SOF_FRAME.load(Ordering::Relaxed) != frame {
+                            on_sof(r, d, frame);
+                        }
                     }
-                }
-                // a wrong toggle: a retransmit (lost ACK), dropped; the endpoint stays armed
-                UsbToken::OUT if !st.tog_ok() => {}
-                UsbToken::OUT if iso => {
-                    let s = &OUT_STATE[ep];
-                    let n = s.slots.load(Ordering::Relaxed);
-                    let mut head = s.head.load(Ordering::Relaxed);
-                    if head.wrapping_sub(s.tail.load(Ordering::Acquire)) < n - 1 {
-                        s.lens[(head % n) as usize].store(len, Ordering::Relaxed);
-                        head = head.wrapping_add(1);
-                        s.head.store(head, Ordering::Release);
-                    } else {
-                        // full: the next packet overwrites this slot
-                        s.overruns
-                            .store(s.overruns.load(Ordering::Relaxed).wrapping_add(1), Ordering::Relaxed);
+                    // iso OUT: see iso_out_check
+                    UsbToken::OUT if iso => {}
+                    // no new packet (a retransmit after a lost ACK, or one NAKed): the endpoint
+                    // stays as it is
+                    UsbToken::OUT if ep != 0 && !toggled(r, d, ep, Direction::Out) => {}
+                    UsbToken::OUT if ep == 0 && !st.tog_ok() => {}
+                    UsbToken::OUT => {
+                        let s = &OUT_STATE[ep];
+                        if ep == 0 {
+                            d.ep_rx_ctrl(0)
+                                .modify(|w| w.set_mask_uep_r_tog(flip(w.mask_uep_r_tog())));
+                        }
+                        s.len.store(len, Ordering::Relaxed);
+                        s.armed.store(false, Ordering::Relaxed);
+                        s.ready.store(true, Ordering::Release);
+                        s.waker.wake();
                     }
-                    d.ep_rx_dma(ep - 1).write_value(s.slot_addr(head));
-                    s.waker.wake();
-                }
-                UsbToken::OUT => {
-                    let s = &OUT_STATE[ep];
-                    if ep == 0 {
-                        d.ep_rx_ctrl(0)
-                            .modify(|w| w.set_mask_uep_r_tog(flip(w.mask_uep_r_tog())));
+                    // one iso IN per microframe (no high bandwidth): a second completion in
+                    // one is a stale INT_ST, already counted
+                    // paced: `iso_in_advance` moves it on
+                    UsbToken::IN if iso && ISO_IN_PACED.load(Ordering::Relaxed) & 1 << ep != 0 => {}
+                    UsbToken::IN if iso && !first_in_frame(&IN_STATE[ep], frame) => {}
+                    UsbToken::IN if iso => iso_in_complete(d, ep),
+                    UsbToken::IN if ep != 0 && !toggled(r, d, ep, Direction::In) => {}
+                    UsbToken::IN => {
+                        let s = &IN_STATE[ep];
+                        if ep == 0 {
+                            d.ep_tx_ctrl(0)
+                                .modify(|w| w.set_mask_uep_t_tog(flip(w.mask_uep_t_tog())));
+                            s.armed.store(false, Ordering::Relaxed);
+                        }
+                        s.ready.store(true, Ordering::Release);
+                        s.waker.wake();
                     }
-                    s.len.store(len, Ordering::Relaxed);
-                    s.armed.store(false, Ordering::Relaxed);
-                    s.ready.store(true, Ordering::Release);
-                    s.waker.wake();
+                    UsbToken::SETUP => {}
                 }
-                // INT_ST shows a token as soon as it arrives, not when its transaction
-                // completes: an entry for the SOF that runs late reads the microframe's iso
-                // IN token and looks like its completion, and the real one follows in the
-                // same microframe. one iso IN per microframe (no high bandwidth), so a second
-                // in the same one is that real completion, already counted: the packet loaded
-                // at the first goes out next. (counting both marked that packet sent unsent)
-                UsbToken::IN if iso && !first_in_frame(&IN_STATE[ep], frame) => {}
-                UsbToken::IN if iso => {
-                    let s = &IN_STATE[ep];
-                    if s.loaded.load(Ordering::Relaxed) {
-                        s.tail
-                            .store(s.tail.load(Ordering::Relaxed).wrapping_add(1), Ordering::Release);
-                    }
-                    iso_in_load(d, ep);
-                    s.waker.wake();
-                }
-                UsbToken::IN => {
-                    let s = &IN_STATE[ep];
-                    if ep == 0 {
-                        d.ep_tx_ctrl(0)
-                            .modify(|w| w.set_mask_uep_t_tog(flip(w.mask_uep_t_tog())));
-                    }
-                    s.ready.store(true, Ordering::Release);
-                    s.waker.wake();
-                }
-                UsbToken::SETUP => {}
+            }
+            let entry = (!busy && rx_len_ok && token == UsbToken::OUT && iso && st.tog_ok()).then_some((ep, len));
+            // an OUT completes too early in its microframe to merge into the next SOF's entry,
+            // and a busy entry takes its own OUT above
+            if token != UsbToken::SOF {
+                iso_out_check(r, d, entry);
+            }
+            if ep == 0 {
+                ep0_moved_on(d, token);
             }
         }
 
@@ -449,13 +784,47 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             let buf = EP0_BUF.load(Ordering::Relaxed) as *const u32;
             SETUP[0].store(core::ptr::read_volatile(buf), Ordering::Relaxed);
             SETUP[1].store(core::ptr::read_volatile(buf.add(1)), Ordering::Relaxed);
-            OUT_STATE[0].ready.store(false, Ordering::Relaxed);
-            IN_STATE[0].ready.store(false, Ordering::Relaxed);
+            for s in [&OUT_STATE[0], &IN_STATE[0]] {
+                s.ready.store(false, Ordering::Relaxed);
+                s.armed.store(false, Ordering::Relaxed);
+            }
             SETUP_READY.store(true, Ordering::Release);
             r.int_fg().write(|w| w.set_setup_act(true));
             OUT_STATE[0].waker.wake();
             IN_STATE[0].waker.wake();
         }
+    }
+}
+
+/// An EP0 stage whose completion no entry saw: the flag is one bit and INT_ST shows the
+/// latest token, NAKed ones too, so a host polling a bulk IN right after an EP0 transaction
+/// hides it (EP0 has no auto toggle to tell). The host's token for the other direction says
+/// it went through: the status stage after the last data packet. (one hidden before the
+/// last gets resent with the same toggle, which the host drops, and completes then.)
+fn ep0_moved_on(d: crate::pac::usbhs::Usbd, token: UsbToken) {
+    match token {
+        UsbToken::OUT if IN_STATE[0].armed.load(Ordering::Relaxed) => {
+            d.ep_tx_ctrl(0).modify(|w| {
+                w.set_mask_uep_t_res(EpTxResponse::NAK);
+                w.set_mask_uep_t_tog(flip(w.mask_uep_t_tog()));
+            });
+            let s = &IN_STATE[0];
+            s.armed.store(false, Ordering::Relaxed);
+            s.ready.store(true, Ordering::Release);
+            s.waker.wake();
+        }
+        UsbToken::IN if OUT_STATE[0].armed.load(Ordering::Relaxed) => {
+            d.ep_rx_ctrl(0).modify(|w| {
+                w.set_mask_uep_r_res(EpRxResponse::NAK);
+                w.set_mask_uep_r_tog(flip(w.mask_uep_r_tog()));
+            });
+            // `len`: the packet the stage expects (`ControlPipe` sets it)
+            let s = &OUT_STATE[0];
+            s.armed.store(false, Ordering::Relaxed);
+            s.ready.store(true, Ordering::Release);
+            s.waker.wake();
+        }
+        _ => {}
     }
 }
 
@@ -482,6 +851,10 @@ pub struct Driver<'d, T: Instance, const NR_EP: usize, const SIZE: usize> {
     allocator: EndpointBufferAllocator<'d, NR_EP, SIZE>,
     allocated_in: Bitmap<MAX_NR_EP>,
     allocated_out: Bitmap<MAX_NR_EP>,
+    /// endpoint numbers with an isochronous endpoint in either direction
+    iso_nums: Bitmap<MAX_NR_EP>,
+    /// endpoint numbers with a bulk / interrupt endpoint in either direction
+    other_nums: Bitmap<MAX_NR_EP>,
 }
 
 impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP, SIZE> {
@@ -549,6 +922,8 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
             allocator,
             allocated_in: Bitmap::new(),
             allocated_out: Bitmap::new(),
+            iso_nums: Bitmap::new(),
+            other_nums: Bitmap::new(),
         }
     }
 
@@ -560,6 +935,10 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
         interval_ms: u8,
         dir: Direction,
     ) -> Result<Endpoint<'d, T, D, SIZE>, EndpointAllocError> {
+        let iso = ep_type == EndpointType::Isochronous;
+        // the other direction's type: a PING to a bulk OUT whose number is iso on the IN side
+        // hangs the SIE (no endpoint answers after it)
+        let taken = if iso { self.other_nums } else { self.iso_nums };
         let allocated = match dir {
             Direction::Out => &mut self.allocated_out,
             Direction::In => &mut self.allocated_in,
@@ -580,15 +959,20 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
                 addr
             }
             None => {
-                // Find a free endpoint address; index 0 is the control endpoint
-                // endpoint 0 is the control pipe's (claimed in start())
-                let ep_num = allocated.next_false_index(1).ok_or(EndpointAllocError)?;
+                // Find a free endpoint address; endpoint 0 is the control pipe's
+                let ep_num = (1..MAX_NR_EP)
+                    .find(|&i| !allocated.get(i) && !taken.get(i))
+                    .ok_or(EndpointAllocError)?;
                 allocated.set(ep_num, true);
                 EndpointAddress::from_parts(ep_num, dir)
             }
         };
 
-        let iso = ep_type == EndpointType::Isochronous;
+        if iso {
+            self.iso_nums.set(addr.index(), true);
+        } else {
+            self.other_nums.set(addr.index(), true);
+        }
         let slots = match (iso, dir) {
             (false, _) => 1,
             (true, Direction::Out) => ISO_OUT_SLOTS,
@@ -602,6 +986,19 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
 
         let s = state(addr);
         s.iso.store(iso, Ordering::Relaxed);
+        if iso && dir == Direction::In && interval_ms == 0 {
+            ISO_IN_EVERY.store(
+                ISO_IN_EVERY.load(Ordering::Relaxed) | 1 << addr.index(),
+                Ordering::Relaxed,
+            );
+        }
+        s.max_len.store(max_packet_size, Ordering::Relaxed);
+        if iso && dir == Direction::Out {
+            ISO_OUT_EPS.store(
+                ISO_OUT_EPS.load(Ordering::Relaxed) | 1 << addr.index(),
+                Ordering::Relaxed,
+            );
+        }
         s.base.store(data.addr() as u32, Ordering::Relaxed);
         s.stride.store(SIZE as u16, Ordering::Relaxed);
         s.slots.store(slots as u8, Ordering::Relaxed);
@@ -794,7 +1191,19 @@ impl<'d, T: Instance> embassy_usb_driver::Bus for Bus<'d, T> {
             }
             match ep_addr.direction() {
                 Direction::Out => {
-                    d.ep_rx_dma(index - 1).write_value(s.slot_addr(0));
+                    if iso {
+                        // every slot marked, so arming one marks what its last packet covered
+                        let max = s.max_len.load(Ordering::Relaxed) as usize;
+                        for k in 0..s.slots.load(Ordering::Relaxed) {
+                            s.lens[k as usize].store(max as u16, Ordering::Relaxed);
+                        }
+                        s.min_len.store(max as u16, Ordering::Relaxed);
+                        for k in (0..s.slots.load(Ordering::Relaxed)).rev() {
+                            iso_out_arm(d, index, s.slot_addr(k), 0, max);
+                        }
+                    } else {
+                        d.ep_rx_dma(index - 1).write_value(s.slot_addr(0));
+                    }
                     d.ep_rx_ctrl(index).write(|v| {
                         v.set_mask_uep_r_tog(EpTog::DATA0);
                         // armed as soon as it's enabled: a host may send the first packet
@@ -811,6 +1220,7 @@ impl<'d, T: Instance> embassy_usb_driver::Bus for Bus<'d, T> {
                     d.ep_config().modify(|v| v.set_r_en(index - 1, enabled));
                 }
                 Direction::In => {
+                    PACED_LAST[index].store(NO_FRAME, Ordering::Relaxed);
                     d.ep_tx_dma(index - 1).write_value(s.slot_addr(0));
                     d.ep_t_len(index).write(|v| v.set_len(0));
                     d.ep_tx_ctrl(index).write(|v| {
@@ -842,26 +1252,33 @@ impl<'d, T: Instance> embassy_usb_driver::Bus for Bus<'d, T> {
                 d.ep_tx_ctrl(index)
                     .modify(|v| v.set_mask_uep_t_res(EpTxResponse::STALL));
             }
-            (Direction::Out, false) => d.ep_rx_ctrl(index).write(|v| {
-                // a read still waiting stays armed (or it would NAK forever)
-                v.set_mask_uep_r_res(if iso {
-                    EpRxResponse::NYET
-                } else if s.armed.load(Ordering::Relaxed) {
-                    EpRxResponse::ACK
-                } else {
-                    EpRxResponse::NAK
-                });
-                v.set_mask_uep_r_tog(EpTog::DATA0);
-                v.set_r_tog_auto(index != 0 && !iso);
-            }),
-            (Direction::In, false) => d.ep_tx_ctrl(index).write(|v| {
-                v.set_mask_uep_t_res(if iso { TX_RES_ISO } else { EpTxResponse::NAK });
-                v.set_mask_uep_t_tog(EpTog::DATA0);
-                v.set_t_tog_auto(index != 0 && !iso);
-            }),
+            (Direction::Out, false) => {
+                s.tog.store(false, Ordering::Relaxed);
+                d.ep_rx_ctrl(index).write(|v| {
+                    // a read still waiting stays armed (or it would NAK forever)
+                    v.set_mask_uep_r_res(if iso {
+                        EpRxResponse::NYET
+                    } else if s.armed.load(Ordering::Relaxed) {
+                        EpRxResponse::ACK
+                    } else {
+                        EpRxResponse::NAK
+                    });
+                    v.set_mask_uep_r_tog(EpTog::DATA0);
+                    v.set_r_tog_auto(index != 0 && !iso);
+                })
+            }
+            (Direction::In, false) => {
+                s.tog.store(false, Ordering::Relaxed);
+                d.ep_tx_ctrl(index).write(|v| {
+                    v.set_mask_uep_t_res(if iso { TX_RES_ISO } else { EpTxResponse::NAK });
+                    v.set_mask_uep_t_tog(EpTog::DATA0);
+                    v.set_t_tog_auto(index != 0 && !iso);
+                })
+            }
         });
         if !stalled && ep_addr.direction() == Direction::In && !iso {
             // a write waiting on the stalled endpoint finishes (its data is dropped)
+            s.armed.store(false, Ordering::Relaxed);
             s.ready.store(true, Ordering::Release);
         }
         s.waker.wake();

@@ -165,6 +165,7 @@ impl<'d, T: Instance, const SIZE: usize> EndpointIn for Endpoint<'d, T, In, SIZE
         self.data.buffer.write_volatile(buf);
         let d = T::dregs();
         critical_section::with(|_| {
+            s.armed.store(true, Ordering::Relaxed);
             d.ep_t_len(index).write(|v| v.set_len(buf.len() as u16));
             d.ep_tx_ctrl(index).modify(|v| v.set_mask_uep_t_res(EpTxResponse::ACK));
         });
