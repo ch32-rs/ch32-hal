@@ -52,7 +52,7 @@ async fn main(spawner: Spawner) -> ! {
     // The built-in PHY driver selects its fixed SMI address automatically.
     let phy = InternalPhy::new();
 
-    let device = Ethernet::new(p.ETH, Irqs, queue, mac_addr, phy, PhyInterface::Internal10M, 144);
+    let device = Ethernet::new(p.ETH, Irqs, queue, mac_addr, phy, PhyInterface::Internal10M);
 
     println!(
         "MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",

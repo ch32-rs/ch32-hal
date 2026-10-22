@@ -99,7 +99,6 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
     /// * `mac_addr` - 6-byte MAC address
     /// * `phy` - PHY driver instance
     /// * `phy_interface` - MII or RMII mode
-    /// * `hclk_mhz` - AHB clock frequency in MHz (for SMI clock divider)
     ///
     /// # Panics
     ///
@@ -111,7 +110,6 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         mac_addr: [u8; 6],
         mut phy: P,
         phy_interface: PhyInterface,
-        hclk_mhz: u32,
     ) -> Self {
         T::enable_and_reset();
 
@@ -154,9 +152,10 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         }
 
         // 4. Select SMI clock divider — div42 for HCLK 60-100MHz+
-        let clock_range: u8 = if hclk_mhz < 35 {
+        let hclk = crate::rcc::clocks().hclk.0;
+        let clock_range: u8 = if hclk < 35_000_000 {
             0b010 // div16
-        } else if hclk_mhz < 60 {
+        } else if hclk < 60_000_000 {
             0b011 // div26
         } else {
             0b000 // div42
