@@ -41,7 +41,7 @@ mod pins;
 mod smi;
 
 pub use dma::{PacketQueue, RDes, RDesRing, RxToken, TDes, TDesRing, TxToken};
-pub use phy::{GenericPhy, Phy};
+pub use phy::{GenericPhy, InternalPhy, Phy};
 pub use pins::init_rmii_pins;
 pub use smi::Smi;
 
