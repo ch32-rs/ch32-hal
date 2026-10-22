@@ -26,6 +26,7 @@
 //! | RMII_TXD0        | PB12 | Output    |
 //! | RMII_TXD1        | PB13 | Output    |
 
+use core::marker::PhantomData;
 use core::sync::atomic::{fence, Ordering};
 use core::task::Context;
 
@@ -167,13 +168,14 @@ impl RDes {
 // ============================================================================
 
 /// A TX DMA descriptor ring.
-pub struct TDesRing<'d, const N: usize> {
+pub struct TDesRing<'d, T: Instance, const N: usize> {
     desc: &'d mut [TDes; N],
     buf: &'d mut [[u8; TX_BUF_SIZE]; N],
     index: usize,
+    _phantom: PhantomData<T>,
 }
 
-impl<'d, const N: usize> TDesRing<'d, N> {
+impl<'d, T: Instance, const N: usize> TDesRing<'d, T, N> {
     fn new(desc: &'d mut [TDes; N], buf: &'d mut [[u8; TX_BUF_SIZE]; N]) -> Self {
         // Set up chained descriptors
         for i in 0..N {
@@ -191,9 +193,16 @@ impl<'d, const N: usize> TDesRing<'d, N> {
         // Last descriptor chains back to first (already set in loop above).
 
         // Tell DMA where the TX descriptor ring starts
-        eth().dmatdlar().write(|w| w.set_stl(&desc[0] as *const TDes as u32));
+        T::regs()
+            .dmatdlar()
+            .write(|w| w.set_stl(&desc[0] as *const TDes as u32));
 
-        Self { desc, buf, index: 0 }
+        Self {
+            desc,
+            buf,
+            index: 0,
+            _phantom: PhantomData,
+        }
     }
 
     /// Returns a mutable slice of the next available TX buffer, or None if DMA owns it.
@@ -223,7 +232,7 @@ impl<'d, const N: usize> TDesRing<'d, N> {
         self.index = (self.index + 1) % N;
 
         // Poll transmit demand
-        eth().dmatpdr().write(|w| w.set_tpd(0));
+        T::regs().dmatpdr().write(|w| w.set_tpd(0));
     }
 
     /// Number of descriptors in the ring.
@@ -233,13 +242,14 @@ impl<'d, const N: usize> TDesRing<'d, N> {
 }
 
 /// An RX DMA descriptor ring.
-pub struct RDesRing<'d, const N: usize> {
+pub struct RDesRing<'d, T: Instance, const N: usize> {
     desc: &'d mut [RDes; N],
     buf: &'d mut [[u8; RX_BUF_SIZE]; N],
     index: usize,
+    _phantom: PhantomData<T>,
 }
 
-impl<'d, const N: usize> RDesRing<'d, N> {
+impl<'d, T: Instance, const N: usize> RDesRing<'d, T, N> {
     fn new(desc: &'d mut [RDes; N], buf: &'d mut [[u8; RX_BUF_SIZE]; N]) -> Self {
         for i in 0..N {
             let next = if i + 1 < N {
@@ -256,15 +266,22 @@ impl<'d, const N: usize> RDesRing<'d, N> {
         // Last descriptor chains back to first (already set in loop above).
 
         // Tell DMA where the RX descriptor ring starts
-        eth().dmardlar().write(|w| w.set_srl(&desc[0] as *const RDes as u32));
+        T::regs()
+            .dmardlar()
+            .write(|w| w.set_srl(&desc[0] as *const RDes as u32));
 
-        Self { desc, buf, index: 0 }
+        Self {
+            desc,
+            buf,
+            index: 0,
+            _phantom: PhantomData,
+        }
     }
 
     /// Returns a reference to the received frame data if a complete frame is available.
     pub fn available(&mut self) -> Option<&mut [u8]> {
         // If DMA RX is stopped, demand poll to restart
-        if eth().dmasr().read().rps() == 0b100 {
+        if T::regs().dmasr().read().rps() == 0b100 {
             self.demand_poll();
         }
 
@@ -308,7 +325,7 @@ impl<'d, const N: usize> RDesRing<'d, N> {
     }
 
     fn demand_poll(&self) {
-        eth().dmarpdr().write(|w| w.set_rpd(0));
+        T::regs().dmarpdr().write(|w| w.set_rpd(0));
     }
 }
 
@@ -458,32 +475,16 @@ impl Phy for GenericPhy {
     }
 }
 
-// ============================================================================
-// Interrupt handler
-// ============================================================================
+struct State {
+    waker: AtomicWaker,
+}
 
-static WAKER: AtomicWaker = AtomicWaker::new();
-
-/// Interrupt handler for the Ethernet MAC.
-///
-/// Users must bind this to the ETH interrupt via `#[interrupt] fn ETH()`.
-///
-/// # Safety
-///
-/// This function is called from interrupt context.
-pub unsafe fn on_interrupt() {
-    WAKER.wake();
-
-    // Clear TX, RX, and normal interrupt summary flags (W1C)
-    eth().dmasr().write(|w| {
-        w.set_ts(true);
-        w.set_rs(true);
-        w.set_nis(true);
-    });
-
-    // Two dummy reads for peripheral clock sync (per reference manual)
-    eth().dmasr().read();
-    eth().dmasr().read();
+impl State {
+    const fn new() -> Self {
+        Self {
+            waker: AtomicWaker::new(),
+        }
+    }
 }
 
 // ============================================================================
@@ -541,16 +542,17 @@ pub fn init_rmii_pins(
 /// Ethernet MAC driver.
 ///
 /// `TX` and `RX` are the number of DMA descriptors (and buffers) in each ring.
-pub struct Ethernet<'d, const TX: usize, const RX: usize, P: Phy> {
-    tx: TDesRing<'d, TX>,
-    rx: RDesRing<'d, RX>,
+pub struct Ethernet<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> {
+    tx: TDesRing<'d, T, TX>,
+    rx: RDesRing<'d, T, RX>,
     phy: P,
     smi: Smi,
     mac_addr: [u8; 6],
     phy_interface: PhyInterface,
+    _phantom: PhantomData<T>,
 }
 
-impl<'d, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, TX, RX, P> {
+impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, TX, RX, P> {
     /// Create and initialize a new Ethernet MAC driver.
     ///
     /// # Arguments
@@ -565,20 +567,17 @@ impl<'d, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, TX, RX, P> {
     ///
     /// Panics if the DMA soft reset doesn't complete within ~1ms.
     pub fn new(
+        _peri: Peri<'d, T>,
+        _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         queue: &'d mut PacketQueue<TX, RX>,
         mac_addr: [u8; 6],
         mut phy: P,
         phy_interface: PhyInterface,
         hclk_mhz: u32,
     ) -> Self {
-        let e = eth();
+        T::enable_and_reset();
 
-        // 1. Enable RCC clocks for ETH MAC, TX, and RX
-        pac::RCC.ahbpcenr().modify(|w| {
-            w.set_ethmacen(true);
-            w.set_ethmactxen(true);
-            w.set_ethmacrxen(true);
-        });
+        let e = T::regs();
 
         // 2. Interface-specific setup
         if phy_interface == PhyInterface::Internal10M {
@@ -724,6 +723,7 @@ impl<'d, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, TX, RX, P> {
             smi,
             mac_addr,
             phy_interface,
+            _phantom: PhantomData,
         }
     }
 
@@ -738,9 +738,9 @@ impl<'d, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, TX, RX, P> {
     }
 }
 
-impl<'d, const TX: usize, const RX: usize, P: Phy> Drop for Ethernet<'d, TX, RX, P> {
+impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Drop for Ethernet<'d, T, TX, RX, P> {
     fn drop(&mut self) {
-        let e = eth();
+        let e = T::regs();
 
         // Stop DMA TX
         e.dmaomr().modify(|w| w.set_st(false));
@@ -763,11 +763,61 @@ impl<'d, const TX: usize, const RX: usize, P: Phy> Drop for Ethernet<'d, TX, RX,
         }
 
         // Disable RCC clocks
-        pac::RCC.ahbpcenr().modify(|w| {
-            w.set_ethmacen(false);
-            w.set_ethmactxen(false);
-            w.set_ethmacrxen(false);
+        T::disable();
+    }
+}
+
+trait SealedInstance: crate::peripheral::RccPeripheral {
+    fn regs() -> pac::emac::Eth;
+    fn state() -> &'static State;
+}
+
+#[allow(private_bounds)]
+pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + 'static {
+    /// Interrupt for this instance
+    type Interrupt: crate::interrupt::typelevel::Interrupt;
+}
+
+foreach_peripheral!(
+    (emac, $inst:ident) => {
+        impl SealedInstance for crate::peripherals::$inst {
+            fn regs() -> pac::emac::Eth {
+                pac::$inst
+            }
+
+            fn state() -> &'static State {
+                static STATE: State = State::new();
+                &STATE
+            }
+        }
+
+        impl Instance for crate::peripherals::$inst {
+            type Interrupt = crate::_generated::peripheral_interrupts::$inst::GLOBAL;
+        }
+    };
+);
+
+pub struct InterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        let r = T::regs();
+        let s = T::state();
+
+        s.waker.wake();
+
+        // Clear TX, RX, and normal interrupt summary flags (W1C)
+        r.dmasr().write(|w| {
+            w.set_ts(true);
+            w.set_rs(true);
+            w.set_nis(true);
         });
+
+        // Two dummy reads for peripheral clock sync (per reference manual)
+        r.dmasr().read();
+        r.dmasr().read();
     }
 }
 
@@ -776,16 +826,16 @@ impl<'d, const TX: usize, const RX: usize, P: Phy> Drop for Ethernet<'d, TX, RX,
 // ============================================================================
 
 /// Token for receiving a single packet from the DMA ring.
-pub struct RxToken<'a, 'd, const N: usize> {
-    rx: &'a mut RDesRing<'d, N>,
+pub struct RxToken<'a, 'd, T: Instance, const N: usize> {
+    rx: &'a mut RDesRing<'d, T, N>,
 }
 
 /// Token for transmitting a single packet via the DMA ring.
-pub struct TxToken<'a, 'd, const N: usize> {
-    tx: &'a mut TDesRing<'d, N>,
+pub struct TxToken<'a, 'd, T: Instance, const N: usize> {
+    tx: &'a mut TDesRing<'d, T, N>,
 }
 
-impl<'a, 'd, const N: usize> embassy_net_driver::RxToken for RxToken<'a, 'd, N> {
+impl<'a, 'd, T: Instance, const N: usize> embassy_net_driver::RxToken for RxToken<'a, 'd, T, N> {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, f: F) -> R {
         let pkt = self.rx.available().expect("RxToken created without available packet");
         let r = f(pkt);
@@ -794,7 +844,7 @@ impl<'a, 'd, const N: usize> embassy_net_driver::RxToken for RxToken<'a, 'd, N> 
     }
 }
 
-impl<'a, 'd, const N: usize> embassy_net_driver::TxToken for TxToken<'a, 'd, N> {
+impl<'a, 'd, T: Instance, const N: usize> embassy_net_driver::TxToken for TxToken<'a, 'd, T, N> {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
         let pkt = self.tx.available().expect("TxToken created without available buffer");
         let r = f(&mut pkt[..len]);
@@ -803,18 +853,21 @@ impl<'a, 'd, const N: usize> embassy_net_driver::TxToken for TxToken<'a, 'd, N> 
     }
 }
 
-impl<'d, const TX: usize, const RX: usize, P: Phy> embassy_net_driver::Driver for Ethernet<'d, TX, RX, P> {
+impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driver::Driver
+    for Ethernet<'d, T, TX, RX, P>
+{
     type RxToken<'a>
-        = RxToken<'a, 'd, RX>
+        = RxToken<'a, 'd, T, RX>
     where
         Self: 'a;
     type TxToken<'a>
-        = TxToken<'a, 'd, TX>
+        = TxToken<'a, 'd, T, TX>
     where
         Self: 'a;
 
     fn receive(&mut self, cx: &mut Context) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        WAKER.register(cx.waker());
+        let s = T::state();
+        s.waker.register(cx.waker());
         if self.rx.available().is_some() && self.tx.available().is_some() {
             // rx and tx are disjoint struct fields, Rust permits simultaneous &mut borrows.
             Some((RxToken { rx: &mut self.rx }, TxToken { tx: &mut self.tx }))
@@ -824,7 +877,8 @@ impl<'d, const TX: usize, const RX: usize, P: Phy> embassy_net_driver::Driver fo
     }
 
     fn transmit(&mut self, cx: &mut Context) -> Option<Self::TxToken<'_>> {
-        WAKER.register(cx.waker());
+        let s = T::state();
+        s.waker.register(cx.waker());
         if self.tx.available().is_some() {
             Some(TxToken { tx: &mut self.tx })
         } else {
