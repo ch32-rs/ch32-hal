@@ -1,12 +1,13 @@
 use core::future::poll_fn;
 use core::marker::PhantomData;
+use core::sync::atomic::Ordering;
 use core::task::Poll;
 
-use ch32_metapac::usbhs::vals::{EpRxResponse, EpTog, EpTxResponse, UsbToken};
+use ch32_metapac::usbhs::vals::{EpRxResponse, EpTxResponse};
 use embassy_usb_driver::{Direction, EndpointError, EndpointIn, EndpointInfo, EndpointOut, EndpointType};
 
-use super::{EndpointData, Instance, EP_WAKERS};
-use crate::usb::{Dir, In, Out};
+use super::{iso_in_enqueue, state, EpState, Instance};
+use crate::usb::{Dir, EndpointData, In, Out};
 
 pub struct Endpoint<'d, T: Instance, D: Dir, const SIZE: usize> {
     _phantom: PhantomData<(&'d mut T, D)>,
@@ -35,9 +36,13 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
         }
     }
 
+    fn state(&self) -> &'static EpState {
+        state(self.info.addr)
+    }
+
     async fn wait_enabled_internal(&mut self) {
         poll_fn(|ctx| {
-            EP_WAKERS[self.info.addr.index() as usize].register(ctx.waker());
+            self.state().waker.register(ctx.waker());
             if self.is_enabled() {
                 Poll::Ready(())
             } else {
@@ -52,115 +57,6 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
             Direction::Out => T::dregs().ep_config().read().r_en(self.info.addr.index() - 1),
             Direction::In => T::dregs().ep_config().read().t_en(self.info.addr.index() - 1),
         }
-    }
-
-    pub(crate) async fn data_out(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
-        let r = T::regs();
-        let d = T::dregs();
-        let index = self.info.addr.index();
-
-        poll_fn(|ctx| {
-            super::EP_WAKERS[index].register(ctx.waker());
-
-            // EP0 has no enable bits (CH32FV2x_V3xRM R32_UEP_CONFIG: "the
-            // transceiver enable signal of endpoint 0 is always valid"), so
-            // is_enabled() is only meaningful for index >= 1.
-            if index != 0 && !self.is_enabled() {
-                return Poll::Ready(Err(EndpointError::Disabled));
-            }
-
-            let transfer = d.int_fg().read().transfer();
-            let status = r.int_st().read();
-            if transfer && status.endp() == index as u8 {
-                let res = match status.token() {
-                    UsbToken::OUT => {
-                        let len = r.rx_len().read() as usize;
-                        if len <= buf.len() {
-                            self.data.buffer.read_volatile(&mut buf[..len]);
-                            Poll::Ready(Ok(len))
-                        } else {
-                            Poll::Ready(Err(EndpointError::BufferOverflow))
-                        }
-                    }
-                    token => {
-                        error!("unexpected USB Token {}, aborting", token.to_bits());
-                        Poll::Ready(Err(EndpointError::Disabled))
-                    }
-                };
-
-                d.ep_rx_ctrl(index).modify(|v| {
-                    v.set_mask_uep_r_res(EpRxResponse::NAK);
-                    v.set_mask_uep_r_tog(if let EpTog::DATA0 = v.mask_uep_r_tog() {
-                        EpTog::DATA1
-                    } else {
-                        EpTog::DATA0
-                    });
-                });
-
-                d.int_fg().write(|w| w.set_transfer(true));
-                critical_section::with(|_| d.int_en().modify(|w| w.set_transfer(true)));
-                res
-            } else {
-                Poll::Pending
-            }
-        })
-        .await
-    }
-
-    pub(crate) fn data_in_write_buffer(&mut self, data: &[u8]) -> Result<(), EndpointError> {
-        let d = T::dregs();
-        let index = self.info.addr.index();
-
-        if data.len() > self.data.max_packet_size as usize {
-            return Err(EndpointError::BufferOverflow);
-        }
-
-        self.data.buffer.write_volatile(data);
-
-        d.ep_t_len(index).write(|v| v.set_len(data.len() as u16));
-        Ok(())
-    }
-
-    pub(crate) async fn data_in_transfer(&mut self) -> Result<(), EndpointError> {
-        let d = T::dregs();
-        let r = T::regs();
-        let index = self.info.addr.index();
-
-        poll_fn(|ctx| {
-            EP_WAKERS[index].register(ctx.waker());
-
-            // EP0 has no enable bits (see data_out), so skip the check here.
-            if index != 0 && !self.is_enabled() {
-                return Poll::Ready(Err(EndpointError::Disabled));
-            }
-
-            let transfer = d.int_fg().read().transfer();
-            let status = r.int_st().read();
-            if transfer && status.endp() == index as u8 {
-                let res = match status.token() {
-                    UsbToken::IN => Poll::Ready(Ok(())),
-                    token => {
-                        error!("unexpected USB Token {}, aborting", token.to_bits());
-                        Poll::Ready(Err(EndpointError::Disabled))
-                    }
-                };
-                d.ep_tx_ctrl(index).modify(|v| {
-                    v.set_mask_uep_t_res(EpTxResponse::NAK);
-                    v.set_mask_uep_t_tog(if let EpTog::DATA0 = v.mask_uep_t_tog() {
-                        EpTog::DATA1
-                    } else {
-                        EpTog::DATA0
-                    });
-                });
-
-                d.int_fg().write(|w| w.set_transfer(true));
-                critical_section::with(|_| d.int_en().modify(|w| w.set_transfer(true)));
-                res
-            } else {
-                Poll::Pending
-            }
-        })
-        .await
     }
 }
 
@@ -177,43 +73,113 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> embassy_usb_driver::Endpoint fo
 impl<'d, T: Instance, const SIZE: usize> EndpointOut for Endpoint<'d, T, Out, SIZE> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
         if !self.is_enabled() {
-            error!("read from disabled ep {}", self.info.addr.index());
             return Err(EndpointError::Disabled);
         }
-
-        let d = T::dregs();
-        let index = self.info.addr.index();
-
         // The buffer must be at least as large as the endpoint's max_packet_size
         // to avoid potential buffer overflow when receiving data
         if buf.len() < self.data.max_packet_size as usize {
             return Err(EndpointError::BufferOverflow);
         }
 
-        d.ep_rx_ctrl(index).modify(|v| {
-            v.set_mask_uep_r_res(EpRxResponse::ACK);
+        let s = self.state();
+        let index = self.info.addr.index();
+
+        if s.iso.load(Ordering::Relaxed) {
+            // drain the ring the interrupt fills
+            return poll_fn(|ctx| {
+                s.waker.register(ctx.waker());
+                if !self.is_enabled() {
+                    return Poll::Ready(Err(EndpointError::Disabled));
+                }
+                match super::iso_out_take(index, |p| {
+                    let len = p.len().min(buf.len());
+                    buf[..len].copy_from_slice(&p[..len]);
+                    len
+                }) {
+                    Some(len) => Poll::Ready(Ok(len)),
+                    None => Poll::Pending,
+                }
+            })
+            .await;
+        }
+
+        // arm: ACK until the interrupt has one packet, then NAK until the next read
+        critical_section::with(|_| {
+            if !s.ready.load(Ordering::Acquire) {
+                s.armed.store(true, Ordering::Relaxed);
+                T::dregs()
+                    .ep_rx_ctrl(index)
+                    .modify(|v| v.set_mask_uep_r_res(EpRxResponse::ACK));
+            }
         });
 
-        self.data_out(buf).await
+        poll_fn(|ctx| {
+            s.waker.register(ctx.waker());
+            if s.ready.load(Ordering::Acquire) {
+                s.ready.store(false, Ordering::Relaxed);
+                let len = s.len.load(Ordering::Relaxed) as usize;
+                if len > buf.len() {
+                    return Poll::Ready(Err(EndpointError::BufferOverflow));
+                }
+                self.data.buffer.read_volatile(&mut buf[..len]);
+                Poll::Ready(Ok(len))
+            } else if !self.is_enabled() {
+                Poll::Ready(Err(EndpointError::Disabled))
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
     }
 }
 
 impl<'d, T: Instance, const SIZE: usize> EndpointIn for Endpoint<'d, T, In, SIZE> {
     async fn write(&mut self, buf: &[u8]) -> Result<(), EndpointError> {
         if !self.is_enabled() {
-            error!("write to disabled ep {}", self.info.addr.index());
             return Err(EndpointError::Disabled);
         }
+        if buf.len() > self.data.max_packet_size as usize {
+            return Err(EndpointError::BufferOverflow);
+        }
 
-        let d = T::dregs();
+        let s = self.state();
         let index = self.info.addr.index();
 
-        self.data_in_write_buffer(buf)?;
+        if s.iso.load(Ordering::Relaxed) {
+            // queue it; wait while the ring is full
+            return poll_fn(|ctx| {
+                s.waker.register(ctx.waker());
+                if !self.is_enabled() {
+                    return Poll::Ready(Err(EndpointError::Disabled));
+                }
+                if iso_in_enqueue(index, buf) {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+        }
 
-        d.ep_tx_ctrl(index).modify(|v| {
-            v.set_mask_uep_t_res(EpTxResponse::ACK);
+        s.ready.store(false, Ordering::Relaxed);
+        self.data.buffer.write_volatile(buf);
+        let d = T::dregs();
+        critical_section::with(|_| {
+            d.ep_t_len(index).write(|v| v.set_len(buf.len() as u16));
+            d.ep_tx_ctrl(index).modify(|v| v.set_mask_uep_t_res(EpTxResponse::ACK));
         });
 
-        self.data_in_transfer().await
+        poll_fn(|ctx| {
+            s.waker.register(ctx.waker());
+            if s.ready.load(Ordering::Acquire) {
+                s.ready.store(false, Ordering::Relaxed);
+                Poll::Ready(Ok(()))
+            } else if !self.is_enabled() {
+                Poll::Ready(Err(EndpointError::Disabled))
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
     }
 }
