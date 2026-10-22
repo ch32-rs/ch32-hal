@@ -1,19 +1,21 @@
 use core::task::Context;
 
-use super::Smi;
+use super::{Smi, SmiError};
 
 // ============================================================================
 // PHY trait
 // ============================================================================
 
 /// Trait for Ethernet PHY drivers.
+///
+/// Methods propagate errors from PHY management transactions.
 pub trait Phy {
     /// Reset the PHY and wait for it to come out of reset.
-    fn phy_reset(&mut self, smi: &mut Smi);
+    fn phy_reset(&mut self, smi: &mut Smi) -> Result<(), SmiError>;
     /// Initialize the PHY (enable autonegotiation, etc).
-    fn phy_init(&mut self, smi: &mut Smi);
+    fn phy_init(&mut self, smi: &mut Smi) -> Result<(), SmiError>;
     /// Poll the link state. Returns true if link is up.
-    fn poll_link(&mut self, smi: &mut Smi, cx: &mut Context) -> bool;
+    fn poll_link(&mut self, smi: &mut Smi, cx: &mut Context) -> Result<bool, SmiError>;
 }
 
 /// MII PHY register constants.
@@ -45,24 +47,25 @@ impl GenericPhy {
 }
 
 impl Phy for GenericPhy {
-    fn phy_reset(&mut self, smi: &mut Smi) {
-        smi.write(self.phy_addr, phy_regs::BCR, phy_regs::BCR_RESET);
+    fn phy_reset(&mut self, smi: &mut Smi) -> Result<(), SmiError> {
+        smi.write(self.phy_addr, phy_regs::BCR, phy_regs::BCR_RESET)?;
         // Wait for reset bit to self-clear
-        while smi.read(self.phy_addr, phy_regs::BCR) & phy_regs::BCR_RESET != 0 {}
+        while smi.read(self.phy_addr, phy_regs::BCR)? & phy_regs::BCR_RESET != 0 {}
+        Ok(())
     }
 
-    fn phy_init(&mut self, smi: &mut Smi) {
+    fn phy_init(&mut self, smi: &mut Smi) -> Result<(), SmiError> {
         // Start auto-negotiation
         smi.write(
             self.phy_addr,
             phy_regs::BCR,
             phy_regs::BCR_AUTONEG | phy_regs::BCR_AUTONEG_RESTART,
-        );
+        )
     }
 
-    fn poll_link(&mut self, smi: &mut Smi, _cx: &mut Context) -> bool {
-        let bsr = smi.read(self.phy_addr, phy_regs::BSR);
-        bsr & phy_regs::BSR_LINK_UP != 0
+    fn poll_link(&mut self, smi: &mut Smi, _cx: &mut Context) -> Result<bool, SmiError> {
+        let bsr = smi.read(self.phy_addr, phy_regs::BSR)?;
+        Ok(bsr & phy_regs::BSR_LINK_UP != 0)
     }
 }
 
@@ -87,17 +90,17 @@ impl InternalPhy {
 }
 
 impl Phy for InternalPhy {
-    fn phy_reset(&mut self, smi: &mut Smi) {
-        self.phy.phy_reset(smi);
+    fn phy_reset(&mut self, smi: &mut Smi) -> Result<(), SmiError> {
+        self.phy.phy_reset(smi)
     }
 
-    fn phy_init(&mut self, smi: &mut Smi) {
+    fn phy_init(&mut self, smi: &mut Smi) -> Result<(), SmiError> {
         // Auto PN polarity detection is required for reliable link establishment.
-        smi.write(Self::PHY_ADDR, Self::MDIX, Self::MDIX_PN_AUTO);
-        self.phy.phy_init(smi);
+        smi.write(Self::PHY_ADDR, Self::MDIX, Self::MDIX_PN_AUTO)?;
+        self.phy.phy_init(smi)
     }
 
-    fn poll_link(&mut self, smi: &mut Smi, cx: &mut Context) -> bool {
+    fn poll_link(&mut self, smi: &mut Smi, cx: &mut Context) -> Result<bool, SmiError> {
         self.phy.poll_link(smi, cx)
     }
 }
