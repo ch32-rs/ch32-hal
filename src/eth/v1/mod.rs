@@ -43,7 +43,7 @@ mod smi;
 pub use dma::{PacketQueue, RDes, RDesRing, RxToken, TDes, TDesRing, TxToken};
 pub use phy::{GenericPhy, InternalPhy, Phy};
 pub use pins::init_rmii_pins;
-pub use smi::Smi;
+pub use smi::{Smi, SmiError};
 
 use dma::MTU;
 
@@ -77,6 +77,21 @@ pub enum PhyInterface {
     Internal10M,
 }
 
+/// An error while initializing the Ethernet MAC or PHY.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitError {
+    /// The DMA software reset did not complete within the polling budget.
+    DmaResetTimeout,
+    /// A PHY management transaction failed.
+    Smi(SmiError),
+}
+
+impl From<SmiError> for InitError {
+    fn from(error: SmiError) -> Self {
+        Self::Smi(error)
+    }
+}
+
 /// Ethernet MAC driver.
 ///
 /// `TX` and `RX` are the number of DMA descriptors (and buffers) in each ring.
@@ -100,9 +115,9 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
     /// * `phy` - PHY driver instance
     /// * `phy_interface` - MII or RMII mode
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the DMA soft reset doesn't complete within ~1ms.
+    /// Returns an error if DMA reset or a PHY management transaction times out.
     pub fn new(
         _peri: Peri<'d, T>,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
@@ -110,7 +125,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         mac_addr: [u8; 6],
         mut phy: P,
         phy_interface: PhyInterface,
-    ) -> Self {
+    ) -> Result<Self, InitError> {
         T::enable_and_reset();
 
         let e = T::regs();
@@ -148,7 +163,9 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
                 qingke::riscv::asm::nop();
             }
             timeout -= 1;
-            assert!(timeout > 0, "EMAC DMA soft reset timeout");
+            if timeout == 0 {
+                return Err(InitError::DmaResetTimeout);
+            }
         }
 
         // 4. Select SMI clock divider — div42 for HCLK 60-100MHz+
@@ -213,6 +230,10 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             w.set_tsf(true);
         });
 
+        // Complete fallible PHY setup before DMA can access the packet queue.
+        phy.phy_reset(&mut smi)?;
+        phy.phy_init(&mut smi)?;
+
         // 12. Initialize DMA descriptor rings
         let tx = TDesRing::new(&mut queue.tx_desc, &mut queue.tx_buf);
         let rx = RDesRing::new(&mut queue.rx_desc, &mut queue.rx_buf);
@@ -244,16 +265,12 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             w.set_rbuie(true); // RX buffer unavailable
         });
 
-        // 16. Reset and initialize PHY
-        phy.phy_reset(&mut smi);
-        phy.phy_init(&mut smi);
-
         // 17. Enable ETH interrupt in PFIC
         unsafe {
             qingke::pfic::enable_interrupt(pac::Interrupt::ETH as u8);
         }
 
-        Self {
+        Ok(Self {
             tx,
             rx,
             phy,
@@ -261,7 +278,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             mac_addr,
             phy_interface,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Get the SMI interface for direct PHY register access.
@@ -403,7 +420,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driv
     }
 
     fn link_state(&mut self, cx: &mut Context) -> LinkState {
-        if self.phy.poll_link(&mut self.smi, cx) {
+        if self.phy.poll_link(&mut self.smi, cx).unwrap_or(false) {
             LinkState::Up
         } else {
             LinkState::Down
