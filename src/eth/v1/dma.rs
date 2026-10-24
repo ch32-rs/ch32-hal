@@ -236,10 +236,7 @@ impl<'d, T: Instance, const N: usize> RDesRing<'d, T, N> {
 
     /// Returns a reference to the received frame data if a complete frame is available.
     pub fn available(&mut self) -> Option<&mut [u8]> {
-        // If DMA RX is stopped, demand poll to restart
-        if T::regs().dmasr().read().rps() == 0b100 {
-            self.demand_poll();
-        }
+        self.resume_rx();
 
         let d = &self.desc[self.index];
         let rdes0 = d.rdes0();
@@ -275,9 +272,26 @@ impl<'d, T: Instance, const N: usize> RDesRing<'d, T, N> {
     /// Release the current RX descriptor back to DMA ownership.
     pub fn pop_packet(&mut self) {
         let d = &mut self.desc[self.index];
+
+        fence(Ordering::Release);
         d.set_rdes0(RDES0_OWN);
-        self.demand_poll();
+
+        // Publish ownership before notifying DMA that buffers are available.
+        fence(Ordering::SeqCst);
+        self.resume_rx();
         self.index = (self.index + 1) % N;
+    }
+
+    fn resume_rx(&self) {
+        let r = T::regs();
+        let status = r.dmasr().read();
+
+        // The interrupt handler may already have cleared RBUS. The process
+        // state still tells us whether RX DMA is suspended waiting for buffers.
+        if status.rps() == 0b100 {
+            r.dmasr().write(|w| w.set_rbus(status.rbus()));
+            self.demand_poll();
+        }
     }
 
     fn demand_poll(&self) {
