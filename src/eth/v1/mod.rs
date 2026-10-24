@@ -418,23 +418,27 @@ impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for Interru
     unsafe fn on_interrupt() {
         let r = T::regs();
         let s = T::state();
+        let status = r.dmasr().read();
+        // Descriptor processing and RX recovery run in the executor.
+        let wake = status.ts() || status.rs() || status.rbus();
 
-        s.waker.wake();
-
-        // Acknowledge every enabled DMA interrupt source and both summaries
-        // (W1C). Leaving RBUS/AIS pending would starve the executor, preventing
-        // it from returning RX buffers to DMA.
+        // Acknowledge observed sources and their summaries (W1C).
+        // These correspond to the DMA interrupt sources enabled during setup.
         r.dmasr().write(|w| {
-            w.set_ts(true);
-            w.set_rs(true);
-            w.set_nis(true);
-            w.set_rbus(true);
-            w.set_ais(true);
+            w.set_ts(status.ts());
+            w.set_rs(status.rs());
+            w.set_rbus(status.rbus());
+            w.set_nis(status.nis());
+            w.set_ais(status.ais());
         });
 
         // Two dummy reads for peripheral clock sync (per reference manual)
         r.dmasr().read();
         r.dmasr().read();
+
+        if wake {
+            s.waker.wake();
+        }
     }
 }
 
