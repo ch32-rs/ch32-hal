@@ -421,11 +421,15 @@ impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for Interru
 
         s.waker.wake();
 
-        // Clear TX, RX, and normal interrupt summary flags (W1C)
+        // Acknowledge every enabled DMA interrupt source and both summaries
+        // (W1C). Leaving RBUS/AIS pending would starve the executor, preventing
+        // it from returning RX buffers to DMA.
         r.dmasr().write(|w| {
             w.set_ts(true);
             w.set_rs(true);
             w.set_nis(true);
+            w.set_rbus(true);
+            w.set_ais(true);
         });
 
         // Two dummy reads for peripheral clock sync (per reference manual)
