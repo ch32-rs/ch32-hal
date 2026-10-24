@@ -267,10 +267,19 @@ fn main() {
             let rst = match &rcc.reset {
                 Some(rst) => {
                     let rst_reg = format_ident!("{}", rst.register.to_ascii_lowercase());
-                    let set_rst_field = format_ident!("set_{}", rst.field.to_ascii_lowercase());
+                    let set_rst_fields: Vec<_> = rst
+                        .fields
+                        .iter()
+                        .map(|field| format_ident!("set_{}", field.to_ascii_lowercase()))
+                        .collect();
+
                     quote! {
-                        crate::pac::RCC.#rst_reg().modify(|w| w.#set_rst_field(true));
-                        crate::pac::RCC.#rst_reg().modify(|w| w.#set_rst_field(false));
+                        crate::pac::RCC.#rst_reg().modify(|w| {
+                            #( w.#set_rst_fields(true); )*
+                        });
+                        crate::pac::RCC.#rst_reg().modify(|w| {
+                            #( w.#set_rst_fields(false); )*
+                        });
                     }
                 }
                 None => TokenStream::new(),
@@ -279,7 +288,11 @@ fn main() {
             // let ptype = if let Some(reg) = &p.registers { reg.kind } else { "" };
 
             let en_reg = format_ident!("{}", en.register.to_ascii_lowercase());
-            let set_en_field = format_ident!("set_{}", en.field.to_ascii_lowercase());
+            let set_en_fields: Vec<_> = en
+                .fields
+                .iter()
+                .map(|field| format_ident!("set_{}", field.to_ascii_lowercase()))
+                .collect();
 
             let clk = format_ident!("{}", rcc.bus_clock.to_ascii_lowercase());
 
@@ -289,11 +302,15 @@ fn main() {
                         crate::rcc::clocks().#clk
                     }
                     fn enable_and_reset_with_cs(_cs: critical_section::CriticalSection) {
-                        crate::pac::RCC.#en_reg().modify(|w| w.#set_en_field(true));
+                        crate::pac::RCC.#en_reg().modify(|w| {
+                            #( w.#set_en_fields(true); )*
+                        });
                         #rst
                     }
                     fn disable_with_cs(_cs: critical_section::CriticalSection) {
-                        crate::pac::RCC.#en_reg().modify(|w| w.#set_en_field(false));
+                        crate::pac::RCC.#en_reg().modify(|w| {
+                            #( w.#set_en_fields(false); )*
+                        });
                     }
                 }
 
@@ -338,10 +355,15 @@ fn main() {
                 if let Some(rcc) = &p.rcc {
                     let en = rcc.enable.as_ref().unwrap();
                     let en_reg = format_ident!("{}", en.register.to_ascii_lowercase());
-                    let set_en_field = format_ident!("set_{}", en.field.to_ascii_lowercase());
+                    let set_en_fields = en
+                        .fields
+                        .iter()
+                        .map(|field| format_ident!("set_{}", field.to_ascii_lowercase()));
 
                     gg.extend(quote! {
-                        crate::pac::RCC.#en_reg().modify(|w| w.#set_en_field(true));
+                        crate::pac::RCC.#en_reg().modify(|w| {
+                            #( w.#set_en_fields(true); )*
+                        });
                     })
                 }
             }
