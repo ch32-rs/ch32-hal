@@ -1,0 +1,10 @@
+[build]
+# Start with the stock soft-float target; no A extension or Xwchc required.
+target = "riscv32imc-unknown-none-elf"
+
+[target.riscv32imc-unknown-none-elf]
+# Requires a probe-rs build with V4x7 WCH-Link and target/flash support.
+runner = "probe-rs run --chip CH32V467WEU6"
+
+[env]
+DEFMT_LOG = "info"

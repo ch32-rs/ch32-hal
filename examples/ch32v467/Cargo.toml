@@ -1,0 +1,27 @@
+[package]
+name = "ch32v467-examples"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Local generated PAC: V4x7 is not supported by the released HAL yet.
+ch32-metapac = { path = "../../../ch32-data/build/ch32-metapac", features = ["rt", "memory-x"] }
+qingke = { version = "0.8.2", features = ["v4f", "critical-section-impl"] }
+qingke-rt = { version = "0.8.2", features = ["v4f"] }
+panic-halt = "1.0"
+defmt = "1.0"
+# Keep the LED/heartbeat running even if the debugger disconnects.
+defmt-rtt = { version = "1.3.0", features = ["disable-blocking-mode"] }
+
+[features]
+default = ["ch32v467weu6"]
+ch32v467ret6 = ["ch32-metapac/ch32v467ret6"]
+ch32v467vet6 = ["ch32-metapac/ch32v467vet6"]
+ch32v467weu6 = ["ch32-metapac/ch32v467weu6"]
+
+[profile.release]
+debug = 2
+strip = false
+lto = true
+opt-level = "s"
