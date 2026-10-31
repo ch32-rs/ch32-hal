@@ -10,7 +10,9 @@ use embassy_time::Timer;
 use panic_halt as _;
 use usbpd::protocol_layer::message::data::request::{self, CurrentRequest, VoltageRequest};
 use usbpd::protocol_layer::message::data::source_capabilities::SourceCapabilities;
-use usbpd::sink::device_policy_manager::{DevicePolicyManager, Event};
+use usbpd::sink::device_policy_manager::{
+    DevicePolicyManager, DrpDevicePolicyManager, EprDevicePolicyManager, Event, SinkDpm,
+};
 use usbpd::sink::policy_engine::Sink;
 use usbpd::timers::Timer as SinkTimer;
 use usbpd_traits::Driver as SinkDriver;
@@ -106,6 +108,13 @@ impl SinkDriver for UsbpdSinkDriver<'_> {
 }
 
 struct Device {}
+
+impl SinkDpm for Device {}
+
+// This device does not have EPR or DRP capabilities, so
+// the trait implementations for both remain empty (default)
+impl EprDevicePolicyManager for Device {}
+impl DrpDevicePolicyManager for Device {}
 
 impl DevicePolicyManager for Device {
     async fn request(&mut self, source_capabilities: &SourceCapabilities) -> request::PowerSource {
