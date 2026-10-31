@@ -27,7 +27,7 @@ mipidsi = "0.7.1"
 embedded-graphics = "0.8.1"
 embedded-hal = "1.0.0"
 heapless = "0.8.0"
-usbpd = "2.0.0"
+usbpd = "3.0.0"
 usbpd-traits = "2.0.0"
 
 
