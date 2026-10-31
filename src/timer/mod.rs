@@ -16,6 +16,7 @@ use crate::interrupt;
 
 pub mod complementary_pwm;
 pub mod low_level;
+pub mod qei;
 pub mod simple_pwm;
 
 /// Timer channel.
