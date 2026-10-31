@@ -7,8 +7,8 @@ publish = false
 [dependencies]
 # Local generated PAC: V4x7 is not supported by the released HAL yet.
 ch32-metapac = { path = "../../../ch32-data/build/ch32-metapac", features = ["rt", "memory-x"] }
-qingke = { version = "0.8.2", features = ["v4f", "critical-section-impl"] }
-qingke-rt = { version = "0.8.2", features = ["v4f"] }
+qingke = { path = "../../../qingke", features = ["v3v", "critical-section-impl"] }
+qingke-rt = { path = "../../../qingke/qingke-rt", features = ["v3v"] }
 panic-halt = "1.0"
 defmt = "1.0"
 # Keep the LED/heartbeat running even if the debugger disconnects.
