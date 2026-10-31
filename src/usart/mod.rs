@@ -27,6 +27,9 @@ use crate::mode::{Async, Blocking, Mode};
 use crate::time::Hertz;
 use crate::{interrupt, pac, peripherals, Peri};
 
+mod ringbuffered;
+pub use ringbuffered::RingBufferedUartRx;
+
 /// Interrupt handler.
 pub struct InterruptHandler<T: Instance> {
     _phantom: PhantomData<T>,

@@ -398,6 +398,28 @@ impl AnyChannel {
         }
     }
 
+    /// Clear only EN: the configuration stays, so `start` resumes the channel.
+    fn request_pause(&self) {
+        let info = self.info();
+        match self.info().dma {
+            #[cfg(not(ch32h4))]
+            DmaInfo::Dma(r) => r.ch(info.num).cr().modify(|w| w.set_en(false)),
+            #[cfg(ch32h4)]
+            DmaInfo::Dma(r) => r.ch(info.num).cfgr().modify(|w| w.set_en(false)),
+        }
+    }
+
+    /// Reload the transfer count (the channel must be disabled).
+    fn set_count(&self, count: u16) {
+        let info = self.info();
+        match self.info().dma {
+            #[cfg(not(ch32h4))]
+            DmaInfo::Dma(r) => r.ch(info.num).ndtr().write(|w| w.set_ndt(count)),
+            #[cfg(ch32h4)]
+            DmaInfo::Dma(r) => r.ch(info.num).cntr().write(|w| w.set_ndt(count)),
+        }
+    }
+
     fn is_running(&self) -> bool {
         let info = self.info();
         match self.info().dma {
@@ -708,6 +730,19 @@ impl<'a, W: Word> ReadableRingBuffer<'a, W> {
     /// Clear all data in the ring buffer.
     pub fn clear(&mut self) {
         self.ringbuf.clear(&mut DmaCtrlImpl(self.channel.reborrow()));
+    }
+
+    /// Stop the channel but keep its configuration: [`start`](Self::start) resumes it
+    /// ([`request_stop`](Self::request_stop) clears the configuration).
+    pub fn request_pause(&mut self) {
+        self.channel.request_pause()
+    }
+
+    /// Empty a paused ring buffer: the next [`start`](Self::start) fills it from the
+    /// beginning.
+    pub fn reset(&mut self) {
+        self.channel.set_count(self.ringbuf.cap() as u16);
+        self.clear();
     }
 
     /// Read elements from the ring buffer
