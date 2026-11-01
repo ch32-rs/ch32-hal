@@ -384,6 +384,12 @@ where
         );
         let regs = T::regs();
 
+        // Reset data toggle to DATA0
+        match ep_addr.direction() {
+            Direction::In => regs::ep_tx_ctrl_set_tog(regs, ep_addr.index(), false),
+            Direction::Out => regs::ep_rx_ctrl_set_tog(regs, ep_addr.index(), false),
+        }
+
         match (ep_addr.index(), ep_addr.direction()) {
             (4, Direction::In) => regs.uep4_1_mod().modify(|v| {
                 v.set_uep4_tx_en(enabled);

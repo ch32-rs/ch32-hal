@@ -140,6 +140,10 @@ mod imp {
         regs.uep_tx_ctrl(ep).modify(|v| v.set_mask_t_res(res));
     }
 
+    pub(crate) fn ep_tx_ctrl_set_tog(regs: Regs, ep: usize, tog: bool) {
+        regs.uep_tx_ctrl(ep).modify(|v| v.set_t_tog(tog));
+    }
+
     pub(crate) fn ep_rx_ctrl_write(regs: Regs, ep: usize, tog: bool, res: EpRxResponse) {
         regs.uep_rx_ctrl(ep).write(|v| {
             v.set_r_tog(tog);
@@ -156,6 +160,10 @@ mod imp {
 
     pub(crate) fn ep_rx_ctrl_set_res(regs: Regs, ep: usize, res: EpRxResponse) {
         regs.uep_rx_ctrl(ep).modify(|v| v.set_mask_r_res(res));
+    }
+
+    pub(crate) fn ep_rx_ctrl_set_tog(regs: Regs, ep: usize, tog: bool) {
+        regs.uep_rx_ctrl(ep).modify(|v| v.set_r_tog(tog));
     }
 }
 
@@ -268,6 +276,10 @@ mod imp {
         regs.uep_tx_ctrl(ep).modify(|v| v.set_mask_uep_t_res(res));
     }
 
+    pub(crate) fn ep_tx_ctrl_set_tog(regs: Regs, ep: usize, tog: bool) {
+        regs.uep_tx_ctrl(ep).modify(|v| v.set_uep_t_tog(tog));
+    }
+
     pub(crate) fn ep_rx_ctrl_write(regs: Regs, ep: usize, tog: bool, res: EpRxResponse) {
         regs.uep_rx_ctrl(ep).write(|v| {
             v.set_uep_r_tog(tog);
@@ -284,6 +296,10 @@ mod imp {
 
     pub(crate) fn ep_rx_ctrl_set_res(regs: Regs, ep: usize, res: EpRxResponse) {
         regs.uep_rx_ctrl(ep).modify(|v| v.set_mask_uep_r_res(res));
+    }
+
+    pub(crate) fn ep_rx_ctrl_set_tog(regs: Regs, ep: usize, tog: bool) {
+        regs.uep_rx_ctrl(ep).modify(|v| v.set_uep_r_tog(tog));
     }
 }
 

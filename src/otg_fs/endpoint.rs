@@ -89,7 +89,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointIn for Endp
         // Write buffer, txLen, and ACK
         self.data.buffer.write_volatile(buf);
         regs::set_ep_t_len(regs, ep, buf.len() as u16);
-        regs::ep_tx_ctrl_flip_tog(regs, ep, EpTxResponse::ACK);
+        regs::ep_tx_ctrl_set_res(regs, ep, EpTxResponse::ACK);
 
         // Wait for TX complete
         let tx_result = poll_fn(|ctx| {
@@ -101,7 +101,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointIn for Endp
                     let token = status.token;
                     let ret = match token {
                         UsbToken::IN => {
-                            regs::ep_tx_ctrl_set_res(regs, ep, EpTxResponse::NAK);
+                            regs::ep_tx_ctrl_flip_tog(regs, ep, EpTxResponse::NAK);
                             Poll::Ready(Ok(()))
                         }
                         token => {
@@ -139,7 +139,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
 
         // Tx Ctrl should be NAK
 
-        regs::ep_rx_ctrl_flip_tog(regs, ep, EpRxResponse::ACK);
+        regs::ep_rx_ctrl_set_res(regs, ep, EpRxResponse::ACK);
 
         // poll for packet
         let bytes_read = poll_fn(|ctx| {
@@ -162,7 +162,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
                         }
                     };
 
-                    regs::ep_rx_ctrl_set_res(regs, ep, EpRxResponse::NAK);
+                    regs::ep_rx_ctrl_flip_tog(regs, ep, EpRxResponse::NAK);
                     regs::clear_transfer(regs);
                     ret
                 } else {
