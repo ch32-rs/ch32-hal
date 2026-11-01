@@ -92,7 +92,6 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointIn for Endp
         self.data.buffer.write_volatile(buf);
         regs.uep_t_len(ep).write_value(buf.len() as u8);
         regs.uep_tx_ctrl(ep).modify(|v| {
-            v.set_t_tog(!v.t_tog());
             v.set_mask_t_res(EpTxResponse::ACK);
         });
 
@@ -107,6 +106,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointIn for Endp
                     let ret = match token {
                         UsbToken::IN => {
                             regs.uep_tx_ctrl(ep).modify(|v| {
+                                v.set_t_tog(!v.t_tog());
                                 v.set_mask_t_res(EpTxResponse::NAK);
                             });
                             Poll::Ready(Ok(()))
@@ -147,7 +147,6 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
         // Tx Ctrl should be NAK
 
         regs.uep_rx_ctrl(ep).modify(|v| {
-            v.set_r_tog(!v.r_tog());
             v.set_mask_r_res(EpRxResponse::ACK);
         });
 
@@ -164,6 +163,9 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
                             let len = regs.rx_len().read().0 as usize;
 
                             self.data.buffer.read_volatile(&mut buf[..len]);
+                            regs.uep_rx_ctrl(ep).modify(|v| {
+                                v.set_r_tog(!v.r_tog());
+                            });
                             Poll::Ready(Ok(len))
                         }
                         token => {
