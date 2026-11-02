@@ -108,6 +108,10 @@ required-features = ["embassy"]
 name = "hal_flash"
 required-features = ["hal"]
 
+[[bin]]
+name = "hal_can"
+required-features = ["embassy"]
+
 [profile.release]
 debug = 2
 strip = false

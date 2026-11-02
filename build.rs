@@ -434,7 +434,7 @@ fn main() {
         pin_signals.retain(|key, _| !matches!(key.0, "spi" | "can" | "usbhs"));
     }
     if v4 {
-        pin_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "spi"));
+        pin_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "spi" | "can"));
     }
 
     for p in METADATA.peripherals {

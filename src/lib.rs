@@ -146,6 +146,9 @@ pub mod usbpd;
 
 #[cfg(all(can, not(any(ch32h4, ch32v4))))]
 pub mod can;
+#[cfg(can_v4x7)]
+#[path = "can/v4x7.rs"]
+pub mod can;
 #[cfg(all(any(eth, emac), not(ch32v4)))]
 pub mod eth;
 
