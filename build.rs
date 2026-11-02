@@ -434,7 +434,7 @@ fn main() {
         pin_signals.retain(|key, _| !matches!(key.0, "spi" | "can" | "usbhs"));
     }
     if v4 {
-        pin_signals.retain(|key, _| false);
+        pin_signals.retain(|key, _| matches!(key.0, "usart"));
     }
 
     for p in METADATA.peripherals {
@@ -525,7 +525,7 @@ fn main() {
         dma_signals.retain(|key, _| !matches!(key.0, "spi" | "dac"));
     }
     if v4 {
-        dma_signals.retain(|key, _| false);
+        dma_signals.retain(|key, _| matches!(key.0, "usart"));
     }
 
     for p in METADATA.peripherals {

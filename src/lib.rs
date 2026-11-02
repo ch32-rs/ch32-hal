@@ -123,7 +123,6 @@ pub mod signature;
 pub mod spi;
 #[cfg(any(timer_x0, timer_v3, timer_h4))]
 pub mod timer;
-#[cfg(not(ch32v4))]
 pub mod usart;
 
 /// Common structures for USB drivers
