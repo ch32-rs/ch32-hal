@@ -25,12 +25,14 @@
 //! - [ ] Remote wakeup
 //!
 
+use core::cell::{Cell, RefCell};
 use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
 use bitmaps::Bitmap;
 use ch32_metapac::otg::vals::{EpRxResponse, EpTxResponse, UsbToken};
+use critical_section::Mutex;
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_usb_driver::{Direction, EndpointAddress, EndpointInfo, EndpointType, Event};
 use endpoint::{ControlPipe, Endpoint};
@@ -50,6 +52,20 @@ const NEW_AW: AtomicWaker = AtomicWaker::new();
 static BUS_WAKER: AtomicWaker = NEW_AW;
 static EP_WAKERS: [AtomicWaker; MAX_NR_EP] = [NEW_AW; MAX_NR_EP];
 
+pub(crate) static TX_SPARE: [Mutex<RefCell<EndpointDataBuffer<{ EP_MAX_PACKET_SIZE as usize }>>>; MAX_NR_EP] =
+    [const { Mutex::new(RefCell::new(EndpointDataBuffer::new())) }; MAX_NR_EP];
+
+/// Packet (buffer address, length) to send after the current one
+pub(crate) static TX_PENDING: [Mutex<Cell<Option<(u32, u8)>>>; MAX_NR_EP] =
+    [const { Mutex::new(Cell::new(None)) }; MAX_NR_EP];
+
+pub(crate) fn arm_tx<T: Instance>(ep: usize, addr: u32, len: u8) {
+    let regs = T::regs();
+    regs.uep_dma(ep).write_value(addr);
+    regs.uep_t_len(ep).write_value(len);
+    regs.uep_tx_ctrl(ep).modify(|v| v.set_mask_t_res(EpTxResponse::ACK));
+}
+
 pub struct InterruptHandler<T: Instance> {
     _phantom: PhantomData<T>,
 }
@@ -63,8 +79,25 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             panic!("overflow");
         }
 
+        // Send the next IN packet straight away; a NAK in between makes the host back off
+        let mut transfer = int_fg.transfer();
+        if transfer {
+            let status = regs.int_st().read();
+            let ep = status.mask_uis_endp() as usize;
+            if status.mask_token() == UsbToken::IN && ep != 0 && ep < MAX_NR_EP {
+                regs.uep_tx_ctrl(ep).modify(|v| v.set_t_tog(!v.t_tog()));
+                match critical_section::with(|cs| TX_PENDING[ep].borrow(cs).take()) {
+                    Some((addr, len)) => arm_tx::<T>(ep, addr, len),
+                    None => regs.uep_tx_ctrl(ep).modify(|v| v.set_mask_t_res(EpTxResponse::NAK)),
+                }
+                regs.int_fg().write(|v| v.set_transfer(true));
+                EP_WAKERS[ep].wake();
+                transfer = false;
+            }
+        }
+
         // All the interrupt we handle
-        if int_fg.suspend() || int_fg.transfer() || int_fg.bus_rst() {
+        if int_fg.suspend() || transfer || int_fg.bus_rst() {
             T::Interrupt::disable();
 
             // Bus stuff we wakup bus
@@ -72,7 +105,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 BUS_WAKER.wake();
             }
 
-            if int_fg.transfer() {
+            if transfer {
                 let status = regs.int_st().read();
 
                 let token = status.mask_token();
@@ -397,7 +430,14 @@ where
 
         // Reset data toggle to DATA0
         match ep_addr.direction() {
-            Direction::In => regs.uep_tx_ctrl(ep_addr.index()).modify(|v| v.set_t_tog(false)),
+            Direction::In => {
+                // Drop any packet still waiting to be sent
+                critical_section::with(|cs| TX_PENDING[ep_addr.index()].borrow(cs).set(None));
+                regs.uep_tx_ctrl(ep_addr.index()).modify(|v| {
+                    v.set_t_tog(false);
+                    v.set_mask_t_res(EpTxResponse::NAK);
+                })
+            }
             Direction::Out => regs.uep_rx_ctrl(ep_addr.index()).modify(|v| v.set_r_tog(false)),
         }
 
