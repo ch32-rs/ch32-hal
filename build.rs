@@ -434,7 +434,7 @@ fn main() {
         pin_signals.retain(|key, _| !matches!(key.0, "spi" | "can" | "usbhs"));
     }
     if v4 {
-        pin_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "spi" | "can" | "usbhs"));
+        pin_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "spi" | "can" | "usbhs" | "sdio"));
     }
 
     for p in METADATA.peripherals {
@@ -526,7 +526,7 @@ fn main() {
         dma_signals.retain(|key, _| !matches!(key.0, "spi" | "dac"));
     }
     if v4 {
-        dma_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "spi" | "dac"));
+        dma_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "spi" | "sdio" | "dac"));
         dma_signals.insert(("adc", "ADC1"), quote!(crate::adc::RxDma));
         dma_signals.insert(("adc", "ADC2"), quote!(crate::adc::RxDma));
     }

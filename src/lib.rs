@@ -121,6 +121,9 @@ pub mod i2c;
 pub mod rng;
 #[cfg(sdio_v3)]
 pub mod sdio;
+#[cfg(sdio_v4x7)]
+#[path = "sdio/v4x7.rs"]
+pub mod sdio;
 pub mod signature;
 #[cfg(all(spi, not(ch32h4)))]
 pub mod spi;

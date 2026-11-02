@@ -46,6 +46,10 @@ adc-loopback = ["embassy"]
 flash-write-test = ["hal", "ch32-hal/memory-split-usr", "dep:embedded-storage"]
 usbhs = ["embassy", "dep:embassy-usb"]
 usbhs2 = ["usbhs"]
+sdio-4bit = ["embassy"]
+sdio-remap = ["embassy"]
+sdio-high-speed = ["embassy"]
+sdio-bypass = ["embassy"]
 
 [[bin]]
 name = "hal_init"
@@ -118,6 +122,10 @@ required-features = ["embassy"]
 [[bin]]
 name = "hal_usbhs"
 required-features = ["usbhs"]
+
+[[bin]]
+name = "hal_sdio"
+required-features = ["embassy"]
 
 [profile.release]
 debug = 2
