@@ -2,6 +2,7 @@
 
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, Ordering};
+
 use critical_section::CriticalSection;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
@@ -72,7 +73,13 @@ impl SystickDriver {
     #[inline]
     fn raw_cnt(&self) -> u64 {
         let r = crate::pac::SYSTICK;
-        return r.cnt().read();
+        loop {
+            let high = r.cnth().read();
+            let low = r.cntl().read();
+            if r.cnth().read() == high {
+                return (u64::from(high) << 32) | u64::from(low);
+            }
+        }
     }
 
     fn trigger_alarm(&self, cs: CriticalSection) {
