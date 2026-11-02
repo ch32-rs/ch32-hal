@@ -464,7 +464,7 @@ fn main() {
                 // src/dac.rs. Those modules are `not(ch32h4)` (their V3-style
                 // register layout doesn't match H4) so the macros aren't in
                 // scope — skip the emission too.
-                if regs.kind == "adc" && !h4 && !v4 {
+                if regs.kind == "adc" && !h4 {
                     if p.rcc.is_none() {
                         continue;
                     }
@@ -527,6 +527,8 @@ fn main() {
     }
     if v4 {
         dma_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "spi" | "dac"));
+        dma_signals.insert(("adc", "ADC1"), quote!(crate::adc::RxDma));
+        dma_signals.insert(("adc", "ADC2"), quote!(crate::adc::RxDma));
     }
 
     for p in METADATA.peripherals {

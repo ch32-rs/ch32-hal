@@ -104,6 +104,9 @@ pub mod dma;
 // H4 driver is ported.
 #[cfg(all(adc, not(any(ch32h4, ch32v4))))]
 pub mod adc;
+#[cfg(adc_v4x7)]
+#[path = "adc/v4x7.rs"]
+pub mod adc;
 #[cfg(all(dac, not(ch32h4)))]
 pub mod dac;
 pub mod exti;

@@ -39,6 +39,8 @@ usart-loopback = ["embassy"]
 i2c-eeprom = ["embassy"]
 spi-loopback = ["embassy"]
 rng-usbhs-pll = ["embassy"]
+adc-usbhs-pll = ["embassy"]
+adc-loopback = ["embassy"]
 
 [[bin]]
 name = "hal_init"
@@ -94,6 +96,10 @@ required-features = ["embassy"]
 
 [[bin]]
 name = "hal_rng"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_adc"
 required-features = ["embassy"]
 
 [profile.release]

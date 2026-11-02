@@ -28,6 +28,7 @@ Available HAL examples in this commit:
 - `hal_spi`
 - `hal_dac`
 - `hal_rng`
+- `hal_adc`
 
 Driver builds and host tests do not establish hardware acceptance. GPIO input
 requires external wiring. Natural SysTick rollover and peripheral board tests
