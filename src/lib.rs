@@ -119,7 +119,7 @@ pub mod rng;
 #[cfg(sdio_v3)]
 pub mod sdio;
 pub mod signature;
-#[cfg(all(spi, not(any(ch32h4, ch32v4))))]
+#[cfg(all(spi, not(ch32h4)))]
 pub mod spi;
 #[cfg(any(timer_x0, timer_v3, timer_h4, timer_v4x7))]
 pub mod timer;
