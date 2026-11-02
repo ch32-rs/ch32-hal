@@ -2,11 +2,72 @@
 #![macro_use]
 
 use core::marker::PhantomData;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use crate::dma::NoDma;
-pub use crate::pac::dac::vals::TrigSel as TriggerSel;
+use crate::gpio::{AnyPin, SealedPin};
+use crate::internal::drop::OnDrop;
+pub use crate::pac::dac::vals::{TrigSel as TriggerSel, Wave as Waveform};
 use crate::peripheral::RccPeripheral;
 use crate::{peripherals, Peri, PeripheralType};
+
+#[cfg(test)]
+#[path = "dac/tests.rs"]
+mod tests;
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Error {
+    /// The DMA transfer counter cannot represent the buffer length.
+    BufferTooLong,
+    /// DMA requires an enabled hardware trigger, excluding software trigger.
+    TriggerNotConfigured,
+    /// Waveform amplitude must be in the range 0..=11.
+    InvalidAmplitude,
+}
+
+struct State {
+    users: AtomicU8,
+}
+
+fn validate_dma(control: &crate::pac::dac::regs::Cr, channel: usize, length: usize) -> Result<(), Error> {
+    if length == 0 {
+        return Ok(());
+    }
+    if length > u16::MAX as usize {
+        return Err(Error::BufferTooLong);
+    }
+    if !control.ten(channel) || control.tsel(channel) == TriggerSel::SOFTWARE {
+        return Err(Error::TriggerNotConfigured);
+    }
+    Ok(())
+}
+
+fn acquire<T: Instance>(channels: u8) {
+    critical_section::with(|cs| {
+        let users = T::state().users.load(Ordering::Relaxed);
+        assert!(users + channels <= 2);
+        if users == 0 {
+            T::enable_and_reset_with_cs(cs);
+        }
+        T::state().users.store(users + channels, Ordering::Relaxed);
+    });
+}
+
+fn release<T: Instance>(channel: usize) {
+    critical_section::with(|cs| {
+        T::regs().cr().modify(|reg| {
+            reg.set_en(channel, false);
+            reg.set_dmaen(channel, false);
+            reg.set_ten(channel, false);
+        });
+        let users = T::state().users.load(Ordering::Relaxed);
+        T::state().users.store(users - 1, Ordering::Relaxed);
+        if users == 1 {
+            T::disable_with_cs(cs);
+        }
+    });
+}
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -16,7 +77,7 @@ use crate::{peripherals, Peri, PeripheralType};
 pub enum Value {
     /// 8 bit value
     Bit8(u8),
-    /// 12 bit value stored in a u16, left-aligned
+    /// Unshifted 12-bit value, written through the left-aligned register.
     Bit12Left(u16),
     /// 12 bit value stored in a u16, right-aligned
     Bit12Right(u16),
@@ -30,7 +91,7 @@ pub enum Value {
 pub enum DualValue {
     /// 8 bit value
     Bit8(u8, u8),
-    /// 12 bit value stored in a u16, left-aligned
+    /// Unshifted 12-bit values, written through the left-aligned register.
     Bit12Left(u16, u16),
     /// 12 bit value stored in a u16, right-aligned
     Bit12Right(u16, u16),
@@ -42,7 +103,7 @@ pub enum DualValue {
 pub enum ValueArray<'a> {
     /// 8 bit values
     Bit8(&'a [u8]),
-    /// 12 bit value stored in a u16, left-aligned
+    /// DMA words with each 12-bit sample already aligned to bits 15:4.
     Bit12Left(&'a [u16]),
     /// 12 bit values stored in a u16, right-aligned
     Bit12Right(&'a [u16]),
@@ -54,6 +115,7 @@ pub enum ValueArray<'a> {
 /// create a [`Dac`] first and use it to access each channel.
 pub struct DacChannel<'d, T: Instance, const N: u8, DMA: PeripheralType = NoDma> {
     phantom: PhantomData<&'d mut T>,
+    pin: Peri<'d, AnyPin>,
     #[allow(unused)]
     dma: Peri<'d, DMA>,
 }
@@ -71,20 +133,18 @@ impl<'d, T: Instance, const N: u8, DMA: PeripheralType> DacChannel<'d, T, N, DMA
     /// If you're not using DMA, pass [`dma::NoDma`] for the `dma` argument.
     ///
     /// The channel is enabled on creation and begin to drive the output pin.
-    /// Note that some methods, such as `set_trigger()` and `set_mode()`, will
+    /// Note that methods such as `set_trigger()` will
     /// disable the channel; you must re-enable it with `enable()`.
     ///
     /// By default, triggering is disabled, but it can be enabled using
     /// [`DacChannel::set_trigger()`].
-    pub fn new(
-        _peri: Peri<'d, T>,
-        dma: Peri<'d, DMA>,
-        pin: Peri<'d, impl DacPin<T, N> + crate::gpio::Pin>,
-    ) -> Self {
+    pub fn new(_peri: Peri<'d, T>, dma: Peri<'d, DMA>, pin: Peri<'d, impl DacPin<T, N> + crate::gpio::Pin>) -> Self {
+        assert!(N == 1 || N == 2);
         pin.set_as_analog();
-        T::enable_and_reset();
+        acquire::<T>(1);
         let mut dac = Self {
             phantom: PhantomData,
+            pin: pin.into(),
             dma,
         };
         dac.enable();
@@ -108,6 +168,27 @@ impl<'d, T: Instance, const N: u8, DMA: PeripheralType> DacChannel<'d, T, N, DMA
     /// Disable this channel.
     pub fn disable(&mut self) {
         self.set_enable(false)
+    }
+
+    /// Enable the output buffer, or bypass it for a high-impedance load.
+    pub fn set_buffering(&mut self, enabled: bool) {
+        critical_section::with(|_| {
+            T::regs().cr().modify(|reg| reg.set_boff(Self::IDX, !enabled));
+        });
+    }
+
+    /// Select noise or triangle generation and its mask/amplitude encoding.
+    pub fn set_waveform(&mut self, waveform: Waveform, amplitude: u8) -> Result<(), Error> {
+        if amplitude > 11 {
+            return Err(Error::InvalidAmplitude);
+        }
+        critical_section::with(|_| {
+            T::regs().cr().modify(|reg| {
+                reg.set_wave(Self::IDX, waveform);
+                reg.set_mamp(Self::IDX, amplitude);
+            });
+        });
+        Ok(())
     }
 
     /// Set the trigger source for this channel.
@@ -170,10 +251,36 @@ macro_rules! impl_dma_methods {
             /// interrupt is disabled.
             #[cfg(not(gpdma))]
             pub async fn write(&mut self, data: ValueArray<'_>, circular: bool) {
-                // Enable DAC and DMA
-                T::regs().cr().modify(|w| {
-                    w.set_en(Self::IDX, true);
-                    w.set_dmaen(Self::IDX, true);
+                self.try_write(data, circular)
+                    .await
+                    .expect("invalid DAC DMA configuration");
+            }
+
+            /// DMA output, stopping the channel on cancellation.
+            ///
+            /// Requires triggering enabled with a timer or EXTI source. Circular
+            /// transfers run until cancelled. Empty buffers leave the DAC unchanged.
+            /// Completion means all samples reached the holding register; the last
+            /// sample may need another trigger to reach the output. The channel
+            /// stays enabled on completion, with its DMA request disabled.
+            #[cfg(not(gpdma))]
+            pub async fn try_write(&mut self, data: ValueArray<'_>, circular: bool) -> Result<(), Error> {
+                let length = match &data {
+                    ValueArray::Bit8(buffer) => buffer.len(),
+                    ValueArray::Bit12Left(buffer) | ValueArray::Bit12Right(buffer) => buffer.len(),
+                };
+                if length == 0 {
+                    return Ok(());
+                }
+                let control = T::regs().cr().read();
+                validate_dma(&control, Self::IDX, length)?;
+                let cleanup = OnDrop::new(|| {
+                    critical_section::with(|_| {
+                        T::regs().cr().modify(|w| {
+                            w.set_en(Self::IDX, false);
+                            w.set_dmaen(Self::IDX, false);
+                        });
+                    });
                 });
 
                 let tx_request = self.dma.request();
@@ -185,7 +292,6 @@ macro_rules! impl_dma_methods {
                     ..Default::default()
                 };
 
-                // Initiate the correct type of DMA transfer depending on what data is passed
                 let tx_f = match data {
                     ValueArray::Bit8(buf) => unsafe {
                         crate::dma::Transfer::new_write(
@@ -216,12 +322,19 @@ macro_rules! impl_dma_methods {
                     },
                 };
 
-                tx_f.await;
-
-                T::regs().cr().modify(|w| {
-                    w.set_en(Self::IDX, false);
-                    w.set_dmaen(Self::IDX, false);
+                critical_section::with(|_| {
+                    T::regs().cr().modify(|w| {
+                        w.set_en(Self::IDX, true);
+                        w.set_dmaen(Self::IDX, true);
+                    });
                 });
+
+                tx_f.await;
+                critical_section::with(|_| {
+                    T::regs().cr().modify(|w| w.set_dmaen(Self::IDX, false));
+                });
+                cleanup.defuse();
+                Ok(())
             }
         }
     };
@@ -232,7 +345,8 @@ impl_dma_methods!(2, DacDma2);
 
 impl<'d, T: Instance, const N: u8, DMA: PeripheralType> Drop for DacChannel<'d, T, N, DMA> {
     fn drop(&mut self) {
-        T::disable();
+        self.pin.set_as_disconnected();
+        release::<T>(Self::IDX);
     }
 }
 
@@ -244,7 +358,7 @@ impl<'d, T: Instance, const N: u8, DMA: PeripheralType> Drop for DacChannel<'d, 
 ///
 /// ```ignore
 /// // Pins may need to be changed for your specific device.
-/// let (dac_ch1, dac_ch2) = embassy_stm32::dac::Dac::new(p.DAC1, NoDma, NoDma, p.PA4, p.PA5).split();
+/// let (dac_ch1, dac_ch2) = ch32_hal::dac::Dac::new(p.DAC1, dma_ch1, dma_ch2, p.PA4, p.PA5).split();
 /// ```
 pub struct Dac<'d, T: Instance, DMACh1: PeripheralType = NoDma, DMACh2: PeripheralType = NoDma> {
     ch1: DacChannel<'d, T, 1, DMACh1>,
@@ -259,7 +373,7 @@ impl<'d, T: Instance, DMACh1: PeripheralType, DMACh2: PeripheralType> Dac<'d, T,
     /// the two channels together.
     ///
     /// The channels are enabled on creation and begin to drive their output pins.
-    /// Note that some methods, such as `set_trigger()` and `set_mode()`, will
+    /// Note that methods such as `set_trigger()` will
     /// disable the channel; you must re-enable them with `enable()`.
     ///
     /// By default, triggering is disabled, but it can be enabled using the `set_trigger()`
@@ -274,12 +388,11 @@ impl<'d, T: Instance, DMACh1: PeripheralType, DMACh2: PeripheralType> Dac<'d, T,
         pin_ch1.set_as_analog();
         pin_ch2.set_as_analog();
 
-        // Enable twice to increment the DAC refcount for each channel.
-        T::enable_and_reset();
-        T::enable_and_reset();
+        acquire::<T>(2);
 
         let mut ch1 = DacCh1 {
             phantom: PhantomData,
+            pin: pin_ch1.into(),
             dma: dma_ch1,
         };
         #[cfg(any(dac_v5, dac_v6, dac_v7))]
@@ -288,6 +401,7 @@ impl<'d, T: Instance, DMACh1: PeripheralType, DMACh2: PeripheralType> Dac<'d, T,
 
         let mut ch2 = DacCh2 {
             phantom: PhantomData,
+            pin: pin_ch2.into(),
             dma: dma_ch2,
         };
         #[cfg(any(dac_v5, dac_v6, dac_v7))]
@@ -314,6 +428,14 @@ impl<'d, T: Instance, DMACh1: PeripheralType, DMACh2: PeripheralType> Dac<'d, T,
         &mut self.ch2
     }
 
+    /// Trigger both channels in the same peripheral write.
+    pub fn trigger(&mut self) {
+        T::regs().swtrigr().write(|reg| {
+            reg.set_swtrig(0, true);
+            reg.set_swtrig(1, true);
+        });
+    }
+
     /// Simultaneously update channels 1 and 2 with a new value.
     ///
     /// If triggering is not enabled, the new values are immediately output;
@@ -338,6 +460,7 @@ impl<'d, T: Instance, DMACh1: PeripheralType, DMACh2: PeripheralType> Dac<'d, T,
 
 trait SealedInstance {
     fn regs() -> &'static crate::pac::dac::Dac;
+    fn state() -> &'static State;
 }
 
 /// DAC instance.
@@ -354,6 +477,11 @@ foreach_peripheral!(
         impl crate::dac::SealedInstance for peripherals::$inst {
             fn regs() -> &'static crate::pac::dac::Dac {
                 &crate::pac::$inst
+            }
+
+            fn state() -> &'static State {
+                static STATE: State = State { users: AtomicU8::new(0) };
+                &STATE
             }
         }
 

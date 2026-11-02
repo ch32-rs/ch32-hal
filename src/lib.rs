@@ -104,7 +104,7 @@ pub mod dma;
 // H4 driver is ported.
 #[cfg(all(adc, not(any(ch32h4, ch32v4))))]
 pub mod adc;
-#[cfg(all(dac, not(any(ch32h4, ch32v4))))]
+#[cfg(all(dac, not(ch32h4)))]
 pub mod dac;
 pub mod exti;
 pub mod gpio;
@@ -114,7 +114,7 @@ pub mod gpio;
 // as the V2/V3 families), so the existing V3 driver applies directly.
 #[cfg(i2c)]
 pub mod i2c;
-#[cfg(all(rng, not(any(ch32h4, ch32v4))))]
+#[cfg(all(rng, not(ch32h4)))]
 pub mod rng;
 #[cfg(sdio_v3)]
 pub mod sdio;

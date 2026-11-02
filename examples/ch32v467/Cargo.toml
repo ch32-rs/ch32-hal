@@ -38,6 +38,7 @@ clock-slow = ["hal"]
 usart-loopback = ["embassy"]
 i2c-eeprom = ["embassy"]
 spi-loopback = ["embassy"]
+rng-usbhs-pll = ["embassy"]
 
 [[bin]]
 name = "hal_init"
@@ -85,6 +86,14 @@ required-features = ["embassy"]
 
 [[bin]]
 name = "hal_spi"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_dac"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_rng"
 required-features = ["embassy"]
 
 [profile.release]

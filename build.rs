@@ -484,7 +484,7 @@ fn main() {
                     }
                 }
 
-                if regs.kind == "dac" && !h4 && !v4 {
+                if regs.kind == "dac" && !h4 {
                     let peri = format_ident!("{}", p.name);
                     let pin_name = format_ident!("{}", pin.pin);
                     let ch: u8 = pin.signal.strip_prefix("OUT").unwrap().parse().unwrap();
@@ -526,7 +526,7 @@ fn main() {
         dma_signals.retain(|key, _| !matches!(key.0, "spi" | "dac"));
     }
     if v4 {
-        dma_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "spi"));
+        dma_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "spi" | "dac"));
     }
 
     for p in METADATA.peripherals {
