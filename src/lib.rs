@@ -139,6 +139,9 @@ pub mod usbd;
 
 #[cfg(usbhs_v3)]
 pub mod usbhs;
+#[cfg(usbhs_v4x7)]
+#[path = "usbhs/v4x7.rs"]
+pub mod usbhs;
 
 // H4's USBPD register layout differs from V3 — gate out for now.
 #[cfg(all(usbpd, not(ch32h4)))]
