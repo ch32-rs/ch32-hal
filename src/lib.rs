@@ -157,6 +157,9 @@ pub mod can;
 pub mod can;
 #[cfg(all(any(eth, emac), not(ch32v4)))]
 pub mod eth;
+#[cfg(emac_v4x7)]
+#[path = "eth/v4x7.rs"]
+pub mod eth;
 
 #[cfg(all(flash, not(ch32h4)))]
 pub mod flash;
