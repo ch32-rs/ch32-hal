@@ -434,7 +434,7 @@ fn main() {
         pin_signals.retain(|key, _| !matches!(key.0, "spi" | "can" | "usbhs"));
     }
     if v4 {
-        pin_signals.retain(|key, _| matches!(key.0, "usart"));
+        pin_signals.retain(|key, _| matches!(key.0, "usart" | "timer"));
     }
 
     for p in METADATA.peripherals {
@@ -512,6 +512,7 @@ fn main() {
         (("timer", "CH2"), quote!(crate::timer::Ch2Dma)),
         (("timer", "CH3"), quote!(crate::timer::Ch3Dma)),
         (("timer", "CH4"), quote!(crate::timer::Ch4Dma)),
+        (("timer", "UP"), quote!(crate::timer::UpDma)),
         (("sdio", "SDIO"), quote!(crate::sdio::SdioDma)),
         (("dac", "CH1"), quote!(crate::dac::DacDma1)),
         (("dac", "CH2"), quote!(crate::dac::DacDma2)),
@@ -525,7 +526,7 @@ fn main() {
         dma_signals.retain(|key, _| !matches!(key.0, "spi" | "dac"));
     }
     if v4 {
-        dma_signals.retain(|key, _| matches!(key.0, "usart"));
+        dma_signals.retain(|key, _| matches!(key.0, "usart" | "timer"));
     }
 
     for p in METADATA.peripherals {

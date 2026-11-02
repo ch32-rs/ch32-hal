@@ -73,6 +73,10 @@ required-features = ["embassy"]
 name = "hal_usart"
 required-features = ["embassy"]
 
+[[bin]]
+name = "hal_timer"
+required-features = ["embassy"]
+
 [profile.release]
 debug = 2
 strip = false

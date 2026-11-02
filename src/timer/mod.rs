@@ -18,6 +18,9 @@ pub mod complementary_pwm;
 pub mod low_level;
 pub mod simple_pwm;
 
+#[cfg(test)]
+mod register_tests;
+
 /// Timer channel.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Channel {
