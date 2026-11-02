@@ -5,20 +5,68 @@ edition = "2021"
 publish = false
 
 [dependencies]
-# Local generated PAC: V4x7 is not supported by the released HAL yet.
-ch32-metapac = { path = "../../../ch32-data/build/ch32-metapac", features = ["rt", "memory-x"] }
-qingke = { path = "../../../qingke", features = ["v3v", "critical-section-impl"] }
-qingke-rt = { path = "../../../qingke/qingke-rt", features = ["v3v"] }
+ch32-hal = { path = "../..", optional = true, default-features = false, features = ["rt", "memory-x", "defmt"] }
+# Keep the PAC revision identical to the HAL dependency.
+ch32-metapac = { git = "https://github.com/ch32-rs/ch32-metapac", rev = "e150d5303c6980d4d1cc708944654d3b9f47295a", features = ["rt", "memory-x"] }
+qingke = { version = "0.8.3", features = ["v3v", "critical-section-impl"] }
+qingke-rt = { version = "0.8.3", features = ["v3v"] }
 panic-halt = "1.0"
 defmt = "1.0"
+embassy-futures = "0.1.2"
+embedded-hal = "1.0.0"
+nb = "1.1.0"
+embassy-executor = { version = "0.10.0", optional = true, features = ["platform-riscv32", "executor-thread"] }
+embassy-time = { version = "0.5.1", optional = true }
+critical-section = { version = "1.2.0", optional = true }
 # Keep the LED/heartbeat running even if the debugger disconnects.
 defmt-rtt = { version = "1.3.0", features = ["disable-blocking-mode"] }
 
 [features]
 default = ["ch32v467weu6"]
-ch32v467ret6 = ["ch32-metapac/ch32v467ret6"]
-ch32v467vet6 = ["ch32-metapac/ch32v467vet6"]
-ch32v467weu6 = ["ch32-metapac/ch32v467weu6"]
+ch32v467ret6 = ["ch32-metapac/ch32v467ret6", "ch32-hal?/ch32v467ret6"]
+ch32v467vet6 = ["ch32-metapac/ch32v467vet6", "ch32-hal?/ch32v467vet6"]
+ch32v467weu6 = ["ch32-metapac/ch32v467weu6", "ch32-hal?/ch32v467weu6"]
+hal = ["dep:ch32-hal"]
+embassy = ["hal", "ch32-hal/embassy", "dep:embassy-executor", "dep:embassy-time", "dep:critical-section"]
+exti = ["hal", "ch32-hal/exti"]
+clock-dividers = ["hal"]
+stress-disable-systick-irq = ["embassy"]
+stress-natural-wrap = ["embassy"]
+clock-hse = ["hal"]
+clock-pll = ["hal"]
+clock-slow = ["hal"]
+
+[[bin]]
+name = "hal_init"
+required-features = ["hal"]
+
+[[bin]]
+name = "hal_blinky"
+required-features = ["hal"]
+
+[[bin]]
+name = "hal_exti"
+required-features = ["exti"]
+
+[[bin]]
+name = "hal_embassy"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_systick_stress"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_rcc"
+required-features = ["hal"]
+
+[[bin]]
+name = "hal_time_scale"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_dma"
+required-features = ["embassy"]
 
 [profile.release]
 debug = 2

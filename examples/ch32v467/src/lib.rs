@@ -31,9 +31,7 @@ pub fn init() {
 pub fn delay_ms(ms: u32) {
     for _ in 0..ms {
         pac::SYSTICK.ctlr().modify(|w| w.set_ste(false));
-        pac::SYSTICK.cmph().write_value(0);
         pac::SYSTICK.cmpl().write_value(HCLK_HZ / 1_000 - 1);
-        pac::SYSTICK.cnth().write_value(0);
         pac::SYSTICK.cntl().write_value(0);
         pac::SYSTICK.sr().write(|w| w.set_cntif(false));
         pac::SYSTICK.ctlr().modify(|w| w.set_ste(true));
@@ -46,25 +44,29 @@ pub fn heartbeat(value: u32) {
     unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(HEARTBEAT), value) };
 }
 
-/// Board LED on PB12. Keep SDI/JTAG pins intact.
+/// Board LEDs on PE8 and PE9. Keep SDI/JTAG pins intact.
 pub fn init_led() {
-    pac::RCC.pb2pcenr().modify(|w| w.set_iopben(true));
+    pac::RCC.pb2pcenr().modify(|w| w.set_iopeen(true));
     let _ = pac::RCC.pb2pcenr().read();
     set_led_level(false);
-    pac::GPIOB.cfghr().modify(|w| {
-        // CFGHR indexes pins 8..15 as 0..7, so PB12 is index 4.
-        w.set_mode(4, pac::gpio::vals::Mode::OUTPUT_2MHZ);
-        w.set_cnf(4, pac::gpio::vals::Cnf::ANALOG_IN__PUSH_PULL_OUT);
+    pac::GPIOE.cfghr().modify(|w| {
+        // CFGHR indexes pins 8..15 as 0..7, so PE8/PE9 are indices 0/1.
+        for pin in 0..2 {
+            w.set_mode(pin, pac::gpio::vals::Mode::OUTPUT_2MHZ);
+            w.set_cnf(pin, pac::gpio::vals::Cnf::ANALOG_IN__PUSH_PULL_OUT);
+        }
     });
 }
 
-/// Set the electrical pin level; LED polarity does not affect blinking.
+/// Set PE8 to `high` and PE9 to the opposite level for alternating LEDs.
 pub fn set_led_level(high: bool) {
-    pac::GPIOB.bshr().write(|w| {
-        if high {
-            w.set_bs(12, true);
-        } else {
-            w.set_br(12, true);
+    pac::GPIOE.bshr().write(|w| {
+        for pin in 8..10 {
+            if high == (pin == 8) {
+                w.set_bs(pin, true);
+            } else {
+                w.set_br(pin, true);
+            }
         }
     });
 }

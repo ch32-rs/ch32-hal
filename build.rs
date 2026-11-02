@@ -39,6 +39,7 @@ fn main() {
     let qingke_ver = match &*chip_family {
         "ch32v0" | "ch32m0" | "ch641" => "qingke_v2",
         "ch32v1" => "qingke_v3",
+        "ch32v4" => "qingke_v3",
         "ch32v2" | "ch32v3" | "ch32l1" | "ch643" => "qingke_v4", // v4b, v4c, v4f
         _ => "qingke_v4",
     };
@@ -202,6 +203,10 @@ fn main() {
         _ => panic!("unknown time_driver {:?}", time_driver),
     };
 
+    if chip_family == "ch32v4" && !time_driver_singleton.is_empty() {
+        panic!("CH32V4x7 TIM time drivers are not supported yet; use the default SysTick driver");
+    }
+
     if !time_driver_singleton.is_empty() {
         println!("cargo:rustc-cfg=time_driver_{}", time_driver_singleton.to_lowercase());
         println!("cargo:rustc-cfg=time_driver_timer");
@@ -363,6 +368,7 @@ fn main() {
     // afterwards, so the list of modules is written once instead of wrapping
     // half the table in `if`.
     let h4 = chip_family == "ch32h4";
+    let v4 = chip_family == "ch32v4";
     let mut pin_signals: HashMap<(&str, &str), TokenStream> = [
         // Compiled on every family, H4 included: `pub mod usart` is ungated
         // (H4's block is `usart_h4`), and the timer and I2C drivers were brought
@@ -427,6 +433,9 @@ fn main() {
     if h4 {
         pin_signals.retain(|key, _| !matches!(key.0, "spi" | "can" | "usbhs"));
     }
+    if v4 {
+        pin_signals.retain(|key, _| false);
+    }
 
     for p in METADATA.peripherals {
         if let Some(regs) = &p.registers {
@@ -455,7 +464,7 @@ fn main() {
                 // src/dac.rs. Those modules are `not(ch32h4)` (their V3-style
                 // register layout doesn't match H4) so the macros aren't in
                 // scope — skip the emission too.
-                if regs.kind == "adc" && !h4 {
+                if regs.kind == "adc" && !h4 && !v4 {
                     if p.rcc.is_none() {
                         continue;
                     }
@@ -475,7 +484,7 @@ fn main() {
                     }
                 }
 
-                if regs.kind == "dac" && !h4 {
+                if regs.kind == "dac" && !h4 && !v4 {
                     let peri = format_ident!("{}", p.name);
                     let pin_name = format_ident!("{}", pin.pin);
                     let ch: u8 = pin.signal.strip_prefix("OUT").unwrap().parse().unwrap();
@@ -514,6 +523,9 @@ fn main() {
     // the row matches nothing and the module is never named.
     if h4 {
         dma_signals.retain(|key, _| !matches!(key.0, "spi" | "dac"));
+    }
+    if v4 {
+        dma_signals.retain(|key, _| false);
     }
 
     for p in METADATA.peripherals {
@@ -641,6 +653,7 @@ fn main() {
             let bi = dma_peri.registers.as_ref().unwrap();
 
             let dma_info = match bi.kind {
+                "dma" if v4 && bi.block == "DMA2" => quote!(crate::dma::DmaInfo::Dma2(crate::pac::#dma)),
                 "dma" => quote!(crate::dma::DmaInfo::Dma(crate::pac::#dma)),
                 "bdma" => quote!(crate::dma::DmaInfo::Bdma(crate::pac::#dma)),
                 "gpdma" => quote!(crate::pac::#dma),

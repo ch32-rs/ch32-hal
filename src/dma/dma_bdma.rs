@@ -1,6 +1,10 @@
 use core::future::{poll_fn, Future};
 use core::pin::Pin;
-use core::sync::atomic::{compiler_fence, fence, AtomicUsize, Ordering};
+#[cfg(not(dma_v4x7))]
+use core::sync::atomic::compiler_fence;
+#[cfg(dma_v4x7)]
+use core::sync::atomic::AtomicBool;
+use core::sync::atomic::{fence, AtomicUsize, Ordering};
 use core::task::{Context, Poll, Waker};
 
 use embassy_sync::waitqueue::AtomicWaker;
@@ -23,6 +27,8 @@ pub(crate) struct ChannelInfo {
 #[derive(Clone, Copy)]
 pub(crate) enum DmaInfo {
     Dma(pac::dma::Dma),
+    #[cfg(dma_v4x7)]
+    Dma2(pac::dma::Dma2),
 }
 
 /// DMA transfer options.
@@ -87,7 +93,7 @@ pub enum Priority {
 ///
 /// V1-style PACs expose this as `pac::dma::vals::Pl`; the H4 block has the
 /// same two bits but no value enum, so both sides go through this.
-fn priority_bits(priority: Priority) -> u8 {
+pub(super) fn priority_bits(priority: Priority) -> u8 {
     match priority {
         Priority::Low => 0,
         Priority::Medium => 1,
@@ -97,7 +103,7 @@ fn priority_bits(priority: Priority) -> u8 {
 }
 
 /// Register encoding of a [`WordSize`]: 0 = byte, 1 = half-word, 2 = word.
-fn size_bits(size: WordSize) -> u8 {
+pub(super) fn size_bits(size: WordSize) -> u8 {
     match size {
         WordSize::OneByte => 0,
         WordSize::TwoBytes => 1,
@@ -106,6 +112,7 @@ fn size_bits(size: WordSize) -> u8 {
 }
 
 /// `DIR` bit: set when the peripheral is written, clear when it is read.
+#[cfg(not(dma_v4x7))]
 fn dir_bit(dir: Dir) -> bool {
     matches!(dir, Dir::MemoryToPeripheral)
 }
@@ -124,7 +131,7 @@ fn mux_slot(info: &ChannelInfo) -> usize {
 /// The two PACs describe the same layout, but the V1 block names the
 /// registers `CR`/`NDTR`/`PAR`/`MAR` and types the fields as enums, while H4
 /// names them `CFGR`/`CNTR`/`PADDR`/`MADDR` and types them as raw values.
-#[cfg(not(ch32h4))]
+#[cfg(not(any(ch32h4, dma_v4x7)))]
 fn write_channel(
     ch: pac::dma::Ch,
     peri_addr: *const u32,
@@ -204,14 +211,26 @@ fn write_channel(
 }
 
 pub(crate) struct ChannelState {
-    waker: AtomicWaker,
-    complete_count: AtomicUsize,
+    pub(super) waker: AtomicWaker,
+    pub(super) complete_count: AtomicUsize,
+    #[cfg(dma_v4x7)]
+    pub(super) stop_at_complete: AtomicBool,
+    #[cfg(dma_v4x7)]
+    pub(super) report_error: AtomicBool,
+    #[cfg(dma_v4x7)]
+    pub(super) transfer_error: AtomicBool,
 }
 
 impl ChannelState {
     pub(crate) const NEW: Self = Self {
         waker: AtomicWaker::new(),
         complete_count: AtomicUsize::new(0),
+        #[cfg(dma_v4x7)]
+        stop_at_complete: AtomicBool::new(false),
+        #[cfg(dma_v4x7)]
+        report_error: AtomicBool::new(false),
+        #[cfg(dma_v4x7)]
+        transfer_error: AtomicBool::new(false),
     };
 }
 
@@ -223,11 +242,17 @@ impl ChannelState {
 /// `PFIC_IALLOCR`). Enabling all of them here would take them from the boot
 /// core. The channel IRQ is unmasked later, when this core starts a transfer
 /// on a channel it owns.
-pub(crate) unsafe fn init(
-    cs: critical_section::CriticalSection,
-    dma_priority: interrupt::Priority,
-    enable_irqs: bool,
-) {
+pub(crate) unsafe fn init(cs: critical_section::CriticalSection, dma_priority: interrupt::Priority, enable_irqs: bool) {
+    #[cfg(dma_v4x7)]
+    {
+        crate::_generated::init_dma();
+        for (id, info) in crate::_generated::DMA_CHANNELS.iter().enumerate() {
+            AnyChannel { id: id as u8 }.request_stop();
+            if let Some(irq) = info.irq {
+                qingke::pfic::unpend_interrupt(irq.number() as u8);
+            }
+        }
+    }
     foreach_interrupt! {
         ($peri:ident, dma, $block:ident, $signal_name:ident, $irq:ident) => {
             crate::interrupt::typelevel::$irq::set_priority_with_cs(cs, dma_priority);
@@ -236,9 +261,11 @@ pub(crate) unsafe fn init(
             }
         };
     }
+    #[cfg(not(dma_v4x7))]
     crate::_generated::init_dma();
 }
 
+#[cfg(not(dma_v4x7))]
 impl AnyChannel {
     /// Safety: Must be called with a matching set of parameters for a valid dma channel
     pub(crate) unsafe fn on_irq(&self) {
@@ -253,13 +280,25 @@ impl AnyChannel {
                 let (teif, htif, htie, tcif, tcie) = {
                     let isr = r.isr().read();
                     let cr = r.ch(info.num).cr().read();
-                    (isr.teif(info.num), isr.htif(info.num), cr.htie(), isr.tcif(info.num), cr.tcie())
+                    (
+                        isr.teif(info.num),
+                        isr.htif(info.num),
+                        cr.htie(),
+                        isr.tcif(info.num),
+                        cr.tcie(),
+                    )
                 };
                 #[cfg(ch32h4)]
                 let (teif, htif, htie, tcif, tcie) = {
                     let isr = r.intfr().read();
                     let cr = r.ch(info.num).cfgr().read();
-                    (isr.teif(info.num), isr.htif(info.num), cr.htie(), isr.tcif(info.num), cr.tcie())
+                    (
+                        isr.teif(info.num),
+                        isr.htif(info.num),
+                        cr.htie(),
+                        isr.tcif(info.num),
+                        cr.tcie(),
+                    )
                 };
 
                 if teif {
@@ -339,9 +378,7 @@ impl AnyChannel {
                 state.complete_count.store(0, Ordering::Release);
                 self.clear_irqs();
 
-                write_channel(
-                    ch, peri_addr, mem_addr, mem_len, incr_mem, data_size, dir, &options,
-                );
+                write_channel(ch, peri_addr, mem_addr, mem_len, incr_mem, data_size, dir, &options);
             }
         }
     }
@@ -460,6 +497,49 @@ pub struct Transfer<'a> {
 }
 
 impl<'a> Transfer<'a> {
+    /// Start a V4x7 read whose DMA errors are reported through `has_error`.
+    #[cfg(dma_v4x7)]
+    pub unsafe fn new_read_checked<W: Word>(
+        channel: Peri<'a, impl Channel>,
+        request: Request,
+        peri_addr: *mut W,
+        buf: &'a mut [W],
+        options: TransferOptions,
+    ) -> Self {
+        critical_section::with(|_| {
+            let transfer = Self::new_read(channel, request, peri_addr, buf, options);
+            STATE[transfer.channel.id as usize]
+                .report_error
+                .store(true, Ordering::Release);
+            transfer
+        })
+    }
+
+    /// Start a V4x7 write whose DMA errors are reported through `has_error`.
+    #[cfg(dma_v4x7)]
+    pub unsafe fn new_write_checked<W: Word>(
+        channel: Peri<'a, impl Channel>,
+        request: Request,
+        buf: &'a [W],
+        peri_addr: *mut W,
+        options: TransferOptions,
+    ) -> Self {
+        critical_section::with(|_| {
+            let transfer = Self::new_write(channel, request, buf, peri_addr, options);
+            STATE[transfer.channel.id as usize]
+                .report_error
+                .store(true, Ordering::Release);
+            transfer
+        })
+    }
+
+    /// Inspect a checked transfer after polling or waiting for completion.
+    /// A DMA error stops the channel and wakes its waiter; the future still returns `()`.
+    #[cfg(dma_v4x7)]
+    pub fn has_error(&self) -> bool {
+        self.channel.has_error()
+    }
+
     /// Create a new read DMA transfer (peripheral to memory).
     pub unsafe fn new_read<W: Word>(
         channel: Peri<'a, impl Channel>,

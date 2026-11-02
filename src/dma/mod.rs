@@ -1,6 +1,4 @@
 //! DMA
-//!
-//! TODO: DMA2 with CH8 to CH11, which are handled in Exxx registers
 
 #![macro_use]
 
@@ -15,12 +13,15 @@ use crate::{impl_peripheral, interrupt};
 // the accessors and adds the DMAMUX, both handled inside the driver.
 #[cfg(any(bdma, dma))]
 mod dma_bdma;
+#[cfg(dma_v4x7)]
+mod dma_v4x7;
 #[cfg(any(bdma, dma))]
 pub use dma_bdma::*;
 
 pub mod word;
 
 mod util;
+#[allow(unused_imports)]
 pub(crate) use util::*;
 
 pub(crate) mod ringbuffer;
