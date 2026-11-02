@@ -1,0 +1,18 @@
+[package]
+name = "ch32v4-i3c-host-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+critical-section = { version = "1.2.0", features = ["std"] }
+embassy-hal-internal = "0.5.0"
+embassy-sync = "0.8.0"
+embassy-time = { version = "0.5.1", features = ["std", "generic-queue-8"] }
+embedded-hal = "1.0"
+embedded-hal-async = "1.0"
+
+[features]
+default = ["embassy"]
+embassy = []
+defmt = []

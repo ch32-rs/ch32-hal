@@ -117,6 +117,8 @@ pub mod gpio;
 // as the V2/V3 families), so the existing V3 driver applies directly.
 #[cfg(i2c)]
 pub mod i2c;
+#[cfg(i3c_v4x7)]
+pub mod i3c;
 #[cfg(all(rng, not(ch32h4)))]
 pub mod rng;
 #[cfg(sdio_v3)]

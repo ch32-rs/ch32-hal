@@ -52,6 +52,10 @@ sdio-remap = ["embassy"]
 sdio-high-speed = ["embassy"]
 sdio-bypass = ["embassy"]
 eth = ["embassy", "dep:embassy-net-driver"]
+i3c-daa = ["embassy"]
+i3c-remap = ["embassy"]
+i3c-dma = ["embassy"]
+i3c-dma-loopback = ["i3c-dma", "i3c-daa"]
 
 [[bin]]
 name = "hal_init"
@@ -132,6 +136,10 @@ required-features = ["embassy"]
 [[bin]]
 name = "hal_eth"
 required-features = ["eth"]
+
+[[bin]]
+name = "hal_i3c"
+required-features = ["embassy"]
 
 [profile.release]
 debug = 2

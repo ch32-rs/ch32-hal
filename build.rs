@@ -393,6 +393,8 @@ fn main() {
         // the V3 driver applies as-is — keep its pin trait impls.
         (("i2c", "SDA"), quote!(crate::i2c::SdaPin)),
         (("i2c", "SCL"), quote!(crate::i2c::SclPin)),
+        (("i3c", "SDA"), quote!(crate::i3c::SdaPin)),
+        (("i3c", "SCL"), quote!(crate::i3c::SclPin)),
         // No H4 peripheral has these kinds, so the rows match nothing there and
         // the modules they name are never pulled in. The day one grows an
         // `sdio` block, the module gate in lib.rs has to grow with it.
@@ -434,7 +436,12 @@ fn main() {
         pin_signals.retain(|key, _| !matches!(key.0, "spi" | "can" | "usbhs"));
     }
     if v4 {
-        pin_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "spi" | "can" | "usbhs" | "sdio"));
+        pin_signals.retain(|key, _| {
+            matches!(
+                key.0,
+                "usart" | "timer" | "i2c" | "i3c" | "spi" | "can" | "usbhs" | "sdio"
+            )
+        });
     }
 
     for p in METADATA.peripherals {
@@ -508,6 +515,8 @@ fn main() {
         (("spi", "TX"), quote!(crate::spi::TxDma)),
         (("i2c", "RX"), quote!(crate::i2c::RxDma)),
         (("i2c", "TX"), quote!(crate::i2c::TxDma)),
+        (("i3c", "RX"), quote!(crate::i3c::RxDma)),
+        (("i3c", "TX"), quote!(crate::i3c::TxDma)),
         (("timer", "CH1"), quote!(crate::timer::Ch1Dma)),
         (("timer", "CH2"), quote!(crate::timer::Ch2Dma)),
         (("timer", "CH3"), quote!(crate::timer::Ch3Dma)),
@@ -526,7 +535,7 @@ fn main() {
         dma_signals.retain(|key, _| !matches!(key.0, "spi" | "dac"));
     }
     if v4 {
-        dma_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "spi" | "sdio" | "dac"));
+        dma_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "i3c" | "spi" | "dac" | "sdio"));
         dma_signals.insert(("adc", "ADC1"), quote!(crate::adc::RxDma));
         dma_signals.insert(("adc", "ADC2"), quote!(crate::adc::RxDma));
     }
