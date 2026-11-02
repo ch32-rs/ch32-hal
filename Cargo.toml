@@ -77,6 +77,7 @@ embassy = [
 ]
 defmt = ["dep:defmt", "embassy-usb-driver/defmt"]
 memory-x = ["ch32-metapac/memory-x"]
+memory-split-usr = ["memory-x", "ch32-metapac/memory-split-usr"]
 ## Built-in EXTI driver and interrupt handlers. Disable to provide your own.
 exti = []
 

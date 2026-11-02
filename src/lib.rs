@@ -149,7 +149,7 @@ pub mod can;
 #[cfg(all(any(eth, emac), not(ch32v4)))]
 pub mod eth;
 
-#[cfg(all(flash, not(any(ch32h4, ch32v4))))]
+#[cfg(all(flash, not(ch32h4)))]
 pub mod flash;
 
 mod patches;

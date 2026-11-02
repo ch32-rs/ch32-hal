@@ -15,6 +15,7 @@ defmt = "1.0"
 embassy-futures = "0.1.2"
 embedded-hal = "1.0.0"
 nb = "1.1.0"
+embedded-storage = { version = "0.3.2", optional = true }
 embassy-executor = { version = "0.10.0", optional = true, features = ["platform-riscv32", "executor-thread"] }
 embassy-time = { version = "0.5.1", optional = true }
 critical-section = { version = "1.2.0", optional = true }
@@ -41,6 +42,7 @@ spi-loopback = ["embassy"]
 rng-usbhs-pll = ["embassy"]
 adc-usbhs-pll = ["embassy"]
 adc-loopback = ["embassy"]
+flash-write-test = ["hal", "ch32-hal/memory-split-usr", "dep:embedded-storage"]
 
 [[bin]]
 name = "hal_init"
@@ -101,6 +103,10 @@ required-features = ["embassy"]
 [[bin]]
 name = "hal_adc"
 required-features = ["embassy"]
+
+[[bin]]
+name = "hal_flash"
+required-features = ["hal"]
 
 [profile.release]
 debug = 2
