@@ -9,12 +9,16 @@ use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::i2c::Operation;
 
 use crate::dma::ChannelAndRequest;
-use crate::gpio::{AfType, OutputType, Speed};
+use crate::gpio::{AfType, AnyPin, OutputType, SealedPin, Speed};
 use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode};
 // use crate::interrupt::Interrupt;
 use crate::time::Hertz;
 use crate::{interrupt, peripherals, Peri, Timeout};
+
+#[cfg(test)]
+#[path = "i2c/tests.rs"]
+mod tests;
 
 /// Event interrupt handler.
 pub struct EventInterruptHandler<T: Instance> {
@@ -70,6 +74,10 @@ pub enum Error {
     Overrun,
     /// Zero-length transfers are not allowed.
     ZeroLengthTransfer,
+    /// DMA buffer exceeds the hardware transfer counter.
+    BufferTooLong,
+    /// Address is outside the 7-bit address range.
+    InvalidAddress,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -98,8 +106,54 @@ impl Default for Config {
     }
 }
 
+struct Timing {
+    input_mhz: u8,
+    #[cfg(i2c_v3)]
+    rise: u8,
+    divider: u16,
+    fast: bool,
+    duty: bool,
+}
+
+fn timing(input: Hertz, frequency: Hertz, duty: Duty) -> Timing {
+    assert!(frequency.0 > 0 && frequency.0 <= 400_000);
+    let fast = frequency.0 > 100_000;
+    let input_mhz = input.0 / 1_000_000;
+    #[cfg(ch32v4)]
+    let input_mhz = {
+        assert!(input_mhz >= 4);
+        input_mhz.min(60)
+    };
+    #[cfg(not(ch32v4))]
+    assert!(input_mhz >= (if fast { 4 } else { 2 }) && input_mhz <= 63);
+    let factor = if !fast {
+        2
+    } else if duty == Duty::Duty2_1 {
+        3
+    } else {
+        25
+    };
+    let divider = u64::from(input.0).div_ceil(u64::from(frequency.0) * factor);
+    let divider = divider.max(if fast { 1 } else { 4 });
+    assert!(divider <= 0xfff);
+    Timing {
+        input_mhz: input_mhz as u8,
+        #[cfg(i2c_v3)]
+        rise: (if fast {
+            input_mhz * 300 / 1000 + 1
+        } else {
+            input_mhz + 1
+        }) as u8,
+        divider: divider as u16,
+        fast,
+        duty: fast && duty == Duty::Duty16_9,
+    }
+}
+
 /// I2C driver.
 pub struct I2c<'d, T: Instance, M: Mode> {
+    scl: Peri<'d, AnyPin>,
+    sda: Peri<'d, AnyPin>,
     tx_dma: Option<ChannelAndRequest<'d>>,
     rx_dma: Option<ChannelAndRequest<'d>>,
     #[cfg(feature = "embassy")]
@@ -108,6 +162,50 @@ pub struct I2c<'d, T: Instance, M: Mode> {
 }
 
 impl<'d, T: Instance> I2c<'d, T, Async> {
+    async fn wait_status(mask: u32) -> Result<(), Error> {
+        poll_fn(|cx| {
+            T::state().waker.register(cx.waker());
+            match Self::check_and_clear_error_flags() {
+                Err(error) => Poll::Ready(Err(error)),
+                Ok(status) if status.0 & mask != 0 => Poll::Ready(Ok(())),
+                Ok(_) => {
+                    T::regs().ctlr2().modify(|w| {
+                        w.set_itbufen(mask == (1 << 6));
+                        w.set_iterren(true);
+                        w.set_itevten(true);
+                    });
+                    Poll::Pending
+                }
+            }
+        })
+        .await
+    }
+
+    async fn wait_stop_async() {
+        poll_fn(|cx| {
+            if T::regs().ctlr1().read().stop() {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        })
+        .await
+    }
+
+    async fn launch_start_async(ack: bool) -> Result<(), Error> {
+        Self::wait_stop_async().await;
+        if T::regs().ctlr1().read().start() || T::regs().star1().read().sb() {
+            return Ok(());
+        }
+        T::regs().ctlr1().modify(|w| {
+            w.set_start(true);
+            w.set_ack(ack);
+            w.set_pos(false);
+        });
+        Ok(())
+    }
+
     /// Create a new I2C driver.
     pub fn new<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
@@ -121,7 +219,6 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
         freq: Hertz,
         config: Config,
     ) -> Self {
-        apply_remap!();
         Self::new_inner(peri, scl, sda, new_dma!(tx_dma), new_dma!(rx_dma), freq, config)
     }
 }
@@ -135,7 +232,6 @@ impl<'d, T: Instance> I2c<'d, T, Blocking> {
         freq: Hertz,
         config: Config,
     ) -> Self {
-        apply_remap!();
         Self::new_inner(peri, scl, sda, None, None, freq, config)
     }
 }
@@ -151,11 +247,11 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         freq: Hertz,
         config: Config,
     ) -> Self {
+        let timing = timing(T::frequency(), freq, config.duty);
         apply_remap!();
         use crate::interrupt::typelevel::Interrupt;
 
         T::enable_and_reset();
-
 
         // gpio_x0 doesn't expose an open-drain AF variant; SCL/SDA fall back
         // to push-pull and rely on external pull-ups (already required for I2C).
@@ -167,10 +263,9 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         set_as_af!(scl, af);
         set_as_af!(sda, af);
 
-        unsafe { T::EventInterrupt::enable() };
-        unsafe { T::ErrorInterrupt::enable() };
-
         let mut this = Self {
+            scl: scl.into(),
+            sda: sda.into(),
             tx_dma,
             rx_dma,
             #[cfg(feature = "embassy")]
@@ -178,7 +273,13 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
             _phantom: PhantomData,
         };
 
-        this.init(freq, config);
+        this.init(timing);
+        T::EventInterrupt::unpend();
+        T::ErrorInterrupt::unpend();
+        if this.tx_dma.is_some() {
+            unsafe { T::EventInterrupt::enable() };
+            unsafe { T::ErrorInterrupt::enable() };
+        }
 
         this
     }
@@ -193,7 +294,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
 impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     // init as master mode
-    fn init(&mut self, freq: Hertz, config: Config) {
+    fn init(&mut self, timing: Timing) {
         let regs = T::regs();
 
         regs.ctlr1().modify(|w| w.set_pe(false)); // disale i2c
@@ -202,47 +303,65 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         regs.ctlr1().modify(|w| w.set_swrst(true));
         regs.ctlr1().modify(|w| w.set_swrst(false));
 
-        let freq_in = T::frequency().0;
-        let freq_range = freq_in / 1_000_000;
-
-        // assert!(freq_range >= 2 && freq_range <= 36); // MHz
-
-        regs.ctlr2().modify(|w| w.set_freq(freq_range as u8)); // set i2c clock in
-
-        let i2c_clk = freq.0;
-        if i2c_clk <= 100_000 {
-            let tmp = freq_in / (i2c_clk * 2);
-            let tmp = u32::max(tmp, 0x04);
-
-            #[cfg(i2c_v3)]
-            regs.rtr().write(|w| w.set_trise((freq_range + 1) as u8));
-            regs.ckcfgr().write(|w| {
-                // w.set_f_s(false);
-                w.set_ccr(tmp as _);
-            });
-        } else {
-            // high speed, use duty cycle
-            let tmp = if config.duty == Duty::Duty2_1 {
-                freq_in / (i2c_clk * 3)
-            } else {
-                freq_in / (i2c_clk * 25)
-            };
-            let tmp = u32::max(tmp, 0x01);
-
-            #[cfg(i2c_v3)]
-            regs.rtr().write(|w| w.set_trise((freq_range * 300 / 1000 + 1) as u8));
-            regs.ckcfgr().write(|w| {
-                w.set_f_s(true);
-                w.set_duty(config.duty as u8 != 0);
-                w.set_ccr(tmp as u16);
-            });
-        }
+        regs.ctlr2().modify(|w| w.set_freq(timing.input_mhz));
+        #[cfg(i2c_v3)]
+        regs.rtr().write(|w| w.set_trise(timing.rise));
+        regs.ckcfgr().write(|w| {
+            w.set_f_s(timing.fast);
+            w.set_duty(timing.duty);
+            w.set_ccr(timing.divider);
+        });
 
         regs.ctlr1().modify(|w| w.set_pe(true));
     }
 
     fn generate_stop() {
         T::regs().ctlr1().modify(|w| w.set_stop(true));
+    }
+
+    fn finish_transfer() {
+        T::regs().ctlr2().modify(|w| {
+            w.set_dmaen(false);
+            w.set_iterren(false);
+            w.set_itevten(false);
+            w.set_itbufen(false);
+            w.set_last(false);
+        });
+    }
+
+    fn abort_transfer() {
+        Self::finish_transfer();
+        let regs = T::regs();
+        let control = regs.ctlr1().read();
+        if control.start() || control.stop() {
+            let frequency = regs.ctlr2().read().freq();
+            let divider = regs.ckcfgr().read();
+            #[cfg(i2c_v3)]
+            let rise = regs.rtr().read();
+            regs.ctlr1().write(|w| w.set_swrst(true));
+            regs.ctlr1().write(|w| w.set_swrst(false));
+            regs.ctlr2().write(|w| w.set_freq(frequency));
+            regs.ckcfgr().write_value(divider);
+            #[cfg(i2c_v3)]
+            regs.rtr().write_value(rise);
+            regs.ctlr1().write(|w| w.set_pe(true));
+        } else if regs.star2().read().msl() {
+            Self::generate_stop();
+        }
+    }
+
+    fn validate_address(address: u8) -> Result<(), Error> {
+        if address > 0x7f {
+            Err(Error::InvalidAddress)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn clear_error(mask: u16) {
+        T::regs()
+            .star1()
+            .write_value(crate::pac::i2c::regs::Star1(u32::from(!mask)));
     }
 
     /// Wait until a previously requested STOP has been generated and HW has
@@ -259,6 +378,9 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     /// Issue a START (optionally with ACK) only after any pending STOP finishes.
     fn launch_start(ack: bool, timeout: Timeout) -> Result<(), Error> {
         Self::wait_stop_finished(timeout)?;
+        if T::regs().ctlr1().read().start() || T::regs().star1().read().sb() {
+            return Ok(());
+        }
         T::regs().ctlr1().modify(|reg| {
             reg.set_start(true);
             if ack {
@@ -269,53 +391,37 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     }
 
     fn check_and_clear_error_flags() -> Result<crate::pac::i2c::regs::Star1, Error> {
-        // Note that flags should only be cleared once they have been registered. If flags are
-        // cleared otherwise, there may be an inherent race condition and flags may be missed.
-        let star1 = T::regs().star1().read();
-
-        #[cfg(i2c_v3)]
-        if star1.timeout() {
-            T::regs().star1().modify(|w| w.set_timeout(false));
-            // Release the bus; otherwise the master can keep SCL low (#222).
-            Self::generate_stop();
-            return Err(Error::Timeout);
+        let status = T::regs().star1().read();
+        let observed = (status.0 & 0x5f00) as u16;
+        if observed != 0 {
+            Self::clear_error(observed);
         }
-
-        if star1.pecerr() {
-            T::regs().star1().modify(|w| w.set_pecerr(false));
-            return Err(Error::Crc);
-        }
-
-        if star1.ovr() {
-            T::regs().star1().modify(|w| w.set_ovr(false));
-            return Err(Error::Overrun);
-        }
-
-        if star1.af() {
-            T::regs().star1().modify(|w| w.set_af(false));
-            // Without STOP the peripheral stays in master mode with SCL held
-            // low (ch32-rs/ch32-hal#222). Mirror the v5f local driver / embassy
-            // async AF path.
-            Self::generate_stop();
-            return Err(Error::Nack);
-        }
-
-        if star1.arlo() {
-            T::regs().star1().modify(|w| w.set_arlo(false));
-            Self::generate_stop();
+        if status.arlo() {
             return Err(Error::Arbitration);
         }
-
-        // The errata indicates that BERR may be incorrectly detected. It recommends ignoring and
-        // clearing the BERR bit instead.
-        if star1.berr() {
-            T::regs().star1().modify(|w| w.set_berr(false));
+        #[cfg(i2c_v3)]
+        if status.timeout() {
+            return Err(Error::Timeout);
         }
-
-        Ok(star1)
+        if status.pecerr() {
+            return Err(Error::Crc);
+        }
+        if status.ovr() {
+            return Err(Error::Overrun);
+        }
+        if status.af() {
+            return Err(Error::Nack);
+        }
+        #[cfg(ch32v4)]
+        if status.berr() {
+            return Err(Error::Bus);
+        }
+        Ok(status)
     }
 
     fn write_bytes(&mut self, addr: u8, bytes: &[u8], timeout: Timeout, frame: FrameOptions) -> Result<(), Error> {
+        Self::validate_address(addr)?;
+        let on_drop = OnDrop::new(Self::abort_transfer);
         if frame.send_start() {
             // Send a START condition
             Self::launch_start(false, timeout)?;
@@ -327,7 +433,6 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
             // Check if we were the ones to generate START
             if T::regs().ctlr1().read().start() || !T::regs().star2().read().msl() {
-                Self::generate_stop();
                 return Err(Error::Arbitration);
             }
 
@@ -353,9 +458,10 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         if frame.send_stop() {
             // Send a STOP condition
             T::regs().ctlr1().modify(|reg| reg.set_stop(true));
+            Self::wait_stop_finished(timeout)?;
         }
 
-        // Fallthrough is success
+        on_drop.defuse();
         Ok(())
     }
 
@@ -369,9 +475,7 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         }
 
         // Push out a byte of data
-        T::regs()
-            .datar()
-            .write(|reg: &mut ch32_metapac::i2c::regs::Datar| reg.set_datar(byte));
+        T::regs().datar().write(|reg| reg.set_datar(byte));
 
         // Wait until byte is transferred
         while {
@@ -405,9 +509,32 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
         timeout: Timeout,
         frame: FrameOptions,
     ) -> Result<(), Error> {
-        let Some((last, buffer)) = buffer.split_last_mut() else {
+        let length = buffer.len();
+        self.blocking_read_iter(addr, buffer.iter_mut(), length, timeout, frame)
+    }
+
+    fn wait_btf(timeout: Timeout) -> Result<(), Error> {
+        while !Self::check_and_clear_error_flags()?.btf() {
+            timeout.check().ok_or(Error::Timeout)?;
+        }
+        Ok(())
+    }
+
+    fn blocking_read_iter<'a>(
+        &mut self,
+        addr: u8,
+        mut buffer: impl Iterator<Item = &'a mut u8>,
+        mut remaining: usize,
+        timeout: Timeout,
+        frame: FrameOptions,
+    ) -> Result<(), Error> {
+        Self::validate_address(addr)?;
+        if remaining == 0 {
             return Err(Error::Overrun);
-        };
+        }
+        let on_drop = OnDrop::new(Self::abort_transfer);
+        let regs = T::regs();
+        regs.ctlr1().modify(|w| w.set_pos(remaining == 2 && frame.send_nack()));
 
         if frame.send_start() {
             // Send a START condition and set ACK bit
@@ -420,7 +547,6 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
             // Check if we were the ones to generate START
             if T::regs().ctlr1().read().start() || !T::regs().star2().read().msl() {
-                Self::generate_stop();
                 return Err(Error::Arbitration);
             }
 
@@ -433,29 +559,51 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
                 timeout.check().ok_or(Error::Timeout)?;
             }
 
-            // Clear condition by reading SR2
-            let _ = T::regs().star2().read();
+            critical_section::with(|_| {
+                if remaining <= 2 && frame.send_nack() {
+                    regs.ctlr1().modify(|w| w.set_ack(false));
+                }
+                let _ = regs.star2().read();
+                if remaining == 1 && frame.send_stop() {
+                    Self::generate_stop();
+                } else if remaining == 1 && frame.send_nack() {
+                    regs.ctlr1().modify(|w| w.set_start(true));
+                }
+            });
         }
 
-        // Receive bytes into buffer
-        for c in buffer {
-            *c = self.recv_byte(timeout)?;
+        if !frame.send_nack() {
+            for value in buffer {
+                *value = self.recv_byte(timeout)?;
+            }
+        } else if remaining == 1 {
+            *buffer.next().unwrap() = self.recv_byte(timeout)?;
+        } else {
+            while remaining > 3 {
+                *buffer.next().unwrap() = self.recv_byte(timeout)?;
+                remaining -= 1;
+            }
+            Self::wait_btf(timeout)?;
+            if remaining == 3 {
+                regs.ctlr1().modify(|w| w.set_ack(false));
+                *buffer.next().unwrap() = regs.datar().read().datar();
+                Self::wait_btf(timeout)?;
+            }
+            critical_section::with(|_| {
+                if frame.send_stop() {
+                    Self::generate_stop();
+                } else {
+                    regs.ctlr1().modify(|w| w.set_start(true));
+                }
+                *buffer.next().unwrap() = regs.datar().read().datar();
+                *buffer.next().unwrap() = regs.datar().read().datar();
+            });
         }
-
-        // Prepare to send NACK then STOP after next byte
-        T::regs().ctlr1().modify(|reg| {
-            if frame.send_nack() {
-                reg.set_ack(false);
-            }
-            if frame.send_stop() {
-                reg.set_stop(true);
-            }
-        });
-
-        // Receive last byte
-        *last = self.recv_byte(timeout)?;
-
-        // Fallthrough is success
+        if frame.send_stop() {
+            Self::wait_stop_finished(timeout)?;
+            regs.ctlr1().modify(|w| w.set_pos(false));
+        }
+        on_drop.defuse();
         Ok(())
     }
 
@@ -494,26 +642,55 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
     ///
     /// [transaction contract]: embedded_hal_1::i2c::I2c::transaction
     pub fn blocking_transaction(&mut self, addr: u8, operations: &mut [Operation<'_>]) -> Result<(), Error> {
+        Self::validate_address(addr)?;
+        validate_operations(operations, false)?;
         let timeout = self.timeout();
-
-        for (op, frame) in operation_frames(operations)? {
-            match op {
-                Operation::Read(read) => self.blocking_read_timeout(addr, read, timeout, frame)?,
-                Operation::Write(write) => self.write_bytes(addr, write, timeout, frame)?,
+        let mut operations = operations;
+        while !operations.is_empty() {
+            let read = matches!(operations[0], Operation::Read(_));
+            let count = operations
+                .iter()
+                .take_while(|op| matches!(op, Operation::Read(_)) == read)
+                .count();
+            let (group, rest) = operations.split_at_mut(count);
+            if read {
+                let length = group
+                    .iter()
+                    .map(|op| match op {
+                        Operation::Read(buffer) => buffer.len(),
+                        _ => 0,
+                    })
+                    .sum();
+                let buffer = group.iter_mut().flat_map(|op| match op {
+                    Operation::Read(buffer) => buffer.iter_mut(),
+                    _ => unreachable!(),
+                });
+                let frame = if rest.is_empty() {
+                    FrameOptions::FirstAndLastFrame
+                } else {
+                    FrameOptions::FirstFrame
+                };
+                self.blocking_read_iter(addr, buffer, length, timeout, frame)?;
+            } else {
+                for (index, operation) in group.iter().enumerate() {
+                    let Operation::Write(buffer) = operation else {
+                        unreachable!()
+                    };
+                    let first = index == 0;
+                    let stop = rest.is_empty() && index + 1 == count;
+                    let frame = match (first, stop) {
+                        (true, true) => FrameOptions::FirstAndLastFrame,
+                        (true, false) => FrameOptions::FirstFrame,
+                        (false, true) => FrameOptions::LastFrame,
+                        (false, false) => FrameOptions::NextFrame,
+                    };
+                    self.write_bytes(addr, buffer, timeout, frame)?;
+                }
             }
+            operations = rest;
         }
 
         Ok(())
-    }
-
-    // Async
-
-    #[inline] // pretty sure this should always be inlined
-    fn enable_interrupts() -> () {
-        T::regs().ctlr2().modify(|w| {
-            w.set_iterren(true);
-            w.set_itevten(true);
-        });
     }
 }
 
@@ -521,148 +698,68 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M> {
 
 impl<'d, T: Instance> I2c<'d, T, Async> {
     async fn write_frame(&mut self, address: u8, write: &[u8], frame: FrameOptions) -> Result<(), Error> {
-        T::regs().ctlr2().modify(|w| {
-            // Note: Do not enable the ITBUFEN bit in the I2C_CR2 register if DMA is used for
-            // reception.
-            w.set_itbufen(false);
-            // DMA mode can be enabled for transmission by setting the DMAEN bit in the I2C_CR2
-            // register.
-            w.set_dmaen(true);
-            // Sending NACK is not necessary (nor possible) for write transfer.
-            w.set_last(false);
-        });
-
-        // Sentinel to disable transfer when an error occurs or future is canceled.
-        let on_drop = OnDrop::new(|| {
-            T::regs().ctlr2().modify(|w| {
-                w.set_dmaen(false);
-                w.set_iterren(false);
-                w.set_itevten(false);
-            });
-            // Release the bus if the future is cancelled mid-transfer.
-            Self::generate_stop();
-        });
-
-        let state = T::state();
-
-        if frame.send_start() {
-            // Send a START condition
-            Self::launch_start(false, self.timeout())?;
-
-            // Wait until START condition was generated
-            poll_fn(|cx| {
-                state.waker.register(cx.waker());
-
-                match Self::check_and_clear_error_flags() {
-                    Err(e) => Poll::Ready(Err(e)),
-                    Ok(sr1) => {
-                        if sr1.sb() {
-                            Poll::Ready(Ok(()))
-                        } else {
-                            // When pending, (re-)enable interrupts to wake us up.
-                            Self::enable_interrupts();
-                            Poll::Pending
-                        }
-                    }
-                }
-            })
-            .await?;
-
-            // Check if we were the ones to generate START
-            if T::regs().ctlr1().read().start() || !T::regs().star2().read().msl() {
-                Self::generate_stop();
-                return Err(Error::Arbitration);
-            }
-
-            // Set up current address we're trying to talk to
-            T::regs().datar().write(|reg| reg.set_datar(address << 1));
-
-            // Wait for the address to be acknowledged
-            poll_fn(|cx| {
-                state.waker.register(cx.waker());
-
-                match Self::check_and_clear_error_flags() {
-                    Err(e) => Poll::Ready(Err(e)),
-                    Ok(sr1) => {
-                        if sr1.addr() {
-                            Poll::Ready(Ok(()))
-                        } else {
-                            // When pending, (re-)enable interrupts to wake us up.
-                            Self::enable_interrupts();
-                            Poll::Pending
-                        }
-                    }
-                }
-            })
-            .await?;
-
-            // Clear condition by reading SR2
-            T::regs().star2().read();
+        Self::validate_address(address)?;
+        if write.len() > u16::MAX as usize {
+            return Err(Error::BufferTooLong);
         }
+        self.timeout()
+            .with(async { Some(self.write_frame_inner(address, write, frame).await) })
+            .await
+            .unwrap_or(Err(Error::Timeout))
+    }
 
-        let dma_transfer = unsafe {
-            // Set the I2C_DR register address in the DMA_SxPAR register. The data will be moved to
-            // this address from the memory after each TxE event.
-            let dst = T::regs().datar().as_ptr() as *mut u8;
-
-            self.tx_dma.as_mut().unwrap().write(write, dst, Default::default())
-        };
-
-        // Wait for bytes to be sent, or an error to occur.
-        let poll_error = poll_fn(|cx| {
-            state.waker.register(cx.waker());
-
+    async fn wait_error() -> Error {
+        poll_fn(|cx| {
+            T::state().waker.register(cx.waker());
             match Self::check_and_clear_error_flags() {
-                Err(e) => Poll::Ready(Err::<(), Error>(e)),
+                Err(error) => Poll::Ready(error),
                 Ok(_) => {
-                    // When pending, (re-)enable interrupts to wake us up.
-                    Self::enable_interrupts();
+                    T::regs().ctlr2().modify(|w| {
+                        w.set_itevten(false);
+                        w.set_itbufen(false);
+                        w.set_iterren(true);
+                    });
                     Poll::Pending
                 }
             }
-        });
+        })
+        .await
+    }
 
-        // Wait for either the DMA transfer to successfully finish, or an I2C error to occur.
-        match select(dma_transfer, poll_error).await {
-            Either::Second(Err(e)) => Err(e),
-            _ => Ok(()),
-        }?;
-
-        T::regs().ctlr2().modify(|w| {
-            w.set_dmaen(false);
-        });
-
-        if frame.send_stop() {
-            // The I2C transfer itself will take longer than the DMA transfer, so wait for that to finish too.
-
-            // 18.3.8 “Master transmitter: In the interrupt routine after the EOT interrupt, disable DMA
-            // requests then wait for a BTF event before programming the Stop condition.”
-            poll_fn(|cx| {
-                state.waker.register(cx.waker());
-
-                match Self::check_and_clear_error_flags() {
-                    Err(e) => Poll::Ready(Err(e)),
-                    Ok(sr1) => {
-                        if sr1.btf() {
-                            Poll::Ready(Ok(()))
-                        } else {
-                            // When pending, (re-)enable interrupts to wake us up.
-                            Self::enable_interrupts();
-                            Poll::Pending
-                        }
-                    }
-                }
-            })
-            .await?;
-
-            T::regs().ctlr1().modify(|w| {
-                w.set_stop(true);
-            });
+    async fn write_frame_inner(&mut self, address: u8, write: &[u8], frame: FrameOptions) -> Result<(), Error> {
+        let regs = T::regs();
+        Self::finish_transfer();
+        let on_drop = OnDrop::new(Self::abort_transfer);
+        if frame.send_start() {
+            Self::launch_start_async(false).await?;
+            Self::wait_status(1).await?;
+            if regs.ctlr1().read().start() || !regs.star2().read().msl() {
+                return Err(Error::Arbitration);
+            }
+            regs.datar().write(|w| w.set_datar(address << 1));
+            Self::wait_status(1 << 1).await?;
+            let _ = regs.star2().read();
         }
-
-        drop(on_drop);
-
-        // Fallthrough is success
+        if !write.is_empty() {
+            let transfer = unsafe {
+                self.tx_dma
+                    .as_mut()
+                    .unwrap()
+                    .write(write, regs.datar().as_ptr().cast(), Default::default())
+            };
+            regs.ctlr2().modify(|w| w.set_dmaen(true));
+            if let Either::First(error) = select(Self::wait_error(), transfer).await {
+                return Err(error);
+            }
+            regs.ctlr2().modify(|w| w.set_dmaen(false));
+            Self::wait_status(1 << 2).await?;
+        }
+        if frame.send_stop() {
+            Self::generate_stop();
+            Self::wait_stop_async().await;
+        }
+        Self::finish_transfer();
+        on_drop.defuse();
         Ok(())
     }
 
@@ -676,166 +773,111 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
 
     /// Read.
     pub async fn read(&mut self, address: u8, buffer: &mut [u8]) -> Result<(), Error> {
-        self.read_frame(address, buffer, FrameOptions::FirstAndLastFrame)
-            .await?;
-
-        Ok(())
+        self.read_group(address, &mut [Operation::Read(buffer)], true).await
     }
 
-    async fn read_frame(&mut self, address: u8, buffer: &mut [u8], frame: FrameOptions) -> Result<(), Error> {
-        if buffer.is_empty() {
-            return Err(Error::Overrun);
-        }
+    async fn read_group(&mut self, address: u8, operations: &mut [Operation<'_>], stop: bool) -> Result<(), Error> {
+        Self::validate_address(address)?;
+        validate_operations(operations, true)?;
+        self.timeout()
+            .with(async { Some(self.read_group_inner(address, operations, stop).await) })
+            .await
+            .unwrap_or(Err(Error::Timeout))
+    }
 
-        // Some branches below depend on whether the buffer contains only a single byte.
-        let single_byte = buffer.len() == 1;
-
-        T::regs().ctlr2().modify(|w| {
-            // Note: Do not enable the ITBUFEN bit in the I2C_CR2 register if DMA is used for
-            // reception.
-            w.set_itbufen(false);
-            // DMA mode can be enabled for transmission by setting the DMAEN bit in the I2C_CR2
-            // register.
-            w.set_dmaen(true);
-            // If, in the I2C_CR2 register, the LAST bit is set, I2C automatically sends a NACK
-            // after the next byte following EOT_1. The user can generate a Stop condition in
-            // the DMA Transfer Complete interrupt routine if enabled.
-            w.set_last(frame.send_nack() && !single_byte);
-        });
-
-        // Sentinel to disable transfer when an error occurs or future is canceled.
-        let on_drop = OnDrop::new(|| {
-            T::regs().ctlr2().modify(|w| {
-                w.set_dmaen(false);
-                w.set_iterren(false);
-                w.set_itevten(false);
-            });
-            // Release the bus if the future is cancelled mid-transfer.
-            Self::generate_stop();
-        });
-
-        let state = T::state();
-
-        if frame.send_start() {
-            // Send a START condition and set ACK bit
-            Self::launch_start(true, self.timeout())?;
-
-            // Wait until START condition was generated
-            poll_fn(|cx| {
-                state.waker.register(cx.waker());
-
-                match Self::check_and_clear_error_flags() {
-                    Err(e) => Poll::Ready(Err(e)),
-                    Ok(sr1) => {
-                        if sr1.sb() {
-                            Poll::Ready(Ok(()))
-                        } else {
-                            // When pending, (re-)enable interrupts to wake us up.
-                            Self::enable_interrupts();
-                            Poll::Pending
-                        }
-                    }
-                }
+    async fn read_group_inner(
+        &mut self,
+        address: u8,
+        operations: &mut [Operation<'_>],
+        stop: bool,
+    ) -> Result<(), Error> {
+        let total: usize = operations
+            .iter()
+            .map(|op| match op {
+                Operation::Read(buffer) => buffer.len(),
+                _ => unreachable!(),
             })
-            .await?;
-
-            // Check if we were the ones to generate START
-            if T::regs().ctlr1().read().start() || !T::regs().star2().read().msl() {
+            .sum();
+        let regs = T::regs();
+        Self::finish_transfer();
+        let on_drop = OnDrop::new(Self::abort_transfer);
+        Self::launch_start_async(true).await?;
+        Self::wait_status(1).await?;
+        if regs.ctlr1().read().start() || !regs.star2().read().msl() {
+            return Err(Error::Arbitration);
+        }
+        regs.datar().write(|w| w.set_datar((address << 1) | 1));
+        Self::wait_status(1 << 1).await?;
+        critical_section::with(|_| {
+            regs.ctlr1().modify(|w| {
+                w.set_pos(total == 2);
+                w.set_ack(total > 2);
+            });
+            let _ = regs.star2().read();
+            if total == 1 && stop {
                 Self::generate_stop();
-                return Err(Error::Arbitration);
+            } else if total == 1 {
+                regs.ctlr1().modify(|w| w.set_start(true));
             }
+        });
 
-            // Set up current address we're trying to talk to
-            T::regs().datar().write(|reg| reg.set_datar((address << 1) + 1));
-
-            // Wait for the address to be acknowledged
-            poll_fn(|cx| {
-                state.waker.register(cx.waker());
-
-                match Self::check_and_clear_error_flags() {
-                    Err(e) => Poll::Ready(Err(e)),
-                    Ok(sr1) => {
-                        if sr1.addr() {
-                            Poll::Ready(Ok(()))
-                        } else {
-                            // When pending, (re-)enable interrupts to wake us up.
-                            Self::enable_interrupts();
-                            Poll::Pending
-                        }
-                    }
+        let mut prefix = total.saturating_sub(3);
+        let mut tail: [Option<&mut u8>; 3] = [None, None, None];
+        let mut tail_index = 0;
+        for operation in operations {
+            let Operation::Read(buffer) = operation else {
+                unreachable!()
+            };
+            let count = prefix.min(buffer.len());
+            let (dma_buffer, tail_buffer) = buffer.split_at_mut(count);
+            if count != 0 {
+                let transfer = unsafe {
+                    self.rx_dma
+                        .as_mut()
+                        .unwrap()
+                        .read(regs.datar().as_ptr().cast(), dma_buffer, Default::default())
+                };
+                regs.ctlr2().modify(|w| w.set_dmaen(true));
+                if let Either::First(error) = select(Self::wait_error(), transfer).await {
+                    return Err(error);
                 }
-            })
-            .await?;
-
-            // 18.3.8: When a single byte must be received: the NACK must be programmed during EV6
-            // event, i.e. program ACK=0 when ADDR=1, before clearing ADDR flag.
-            if frame.send_nack() && single_byte {
-                T::regs().ctlr1().modify(|w| {
-                    w.set_ack(false);
-                });
+                regs.ctlr2().modify(|w| w.set_dmaen(false));
+                prefix -= count;
             }
-
-            // Clear condition by reading SR2
-            T::regs().star2().read();
+            for value in tail_buffer {
+                tail[tail_index] = Some(value);
+                tail_index += 1;
+            }
+        }
+        if total == 1 {
+            Self::wait_status(1 << 6).await?;
+            *tail[0].take().unwrap() = regs.datar().read().datar();
         } else {
-            // Before starting reception of single byte (but without START condition, i.e. in case
-            // of continued frame), program NACK to emit at end of this byte.
-            if frame.send_nack() && single_byte {
-                T::regs().ctlr1().modify(|w| {
-                    w.set_ack(false);
-                });
-            }
-        }
-
-        // 18.3.8: When a single byte must be received: [snip] Then the user can program the STOP
-        // condition either after clearing ADDR flag, or in the DMA Transfer Complete interrupt
-        // routine.
-        if frame.send_stop() && single_byte {
-            T::regs().ctlr1().modify(|w| {
-                w.set_stop(true);
-            });
-        }
-
-        let dma_transfer = unsafe {
-            // Set the I2C_DR register address in the DMA_SxPAR register. The data will be moved
-            // from this address from the memory after each RxE event.
-            let src = T::regs().datar().as_ptr() as *mut u8;
-
-            self.rx_dma.as_mut().unwrap().read(src, buffer, Default::default())
-        };
-
-        // Wait for bytes to be received, or an error to occur.
-        let poll_error = poll_fn(|cx| {
-            state.waker.register(cx.waker());
-
-            match Self::check_and_clear_error_flags() {
-                Err(e) => Poll::Ready(Err::<(), Error>(e)),
-                _ => {
-                    // When pending, (re-)enable interrupts to wake us up.
-                    Self::enable_interrupts();
-                    Poll::Pending
+            Self::wait_status(1 << 2).await?;
+            let offset = if total >= 3 {
+                regs.ctlr1().modify(|w| w.set_ack(false));
+                *tail[0].take().unwrap() = regs.datar().read().datar();
+                Self::wait_status(1 << 2).await?;
+                1
+            } else {
+                0
+            };
+            critical_section::with(|_| {
+                if stop {
+                    Self::generate_stop();
+                } else {
+                    regs.ctlr1().modify(|w| w.set_start(true));
                 }
-            }
-        });
-
-        match select(dma_transfer, poll_error).await {
-            Either::Second(Err(e)) => Err(e),
-            _ => Ok(()),
-        }?;
-
-        T::regs().ctlr2().modify(|w| {
-            w.set_dmaen(false);
-        });
-
-        if frame.send_stop() && !single_byte {
-            T::regs().ctlr1().modify(|w| {
-                w.set_stop(true);
+                *tail[offset].take().unwrap() = regs.datar().read().datar();
+                *tail[offset + 1].take().unwrap() = regs.datar().read().datar();
             });
         }
-
-        drop(on_drop);
-
-        // Fallthrough is success
+        if stop {
+            Self::wait_stop_async().await;
+            regs.ctlr1().modify(|w| w.set_pos(false));
+        }
+        Self::finish_transfer();
+        on_drop.defuse();
         Ok(())
     }
 
@@ -846,9 +888,12 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
         if read.is_empty() {
             return Err(Error::Overrun);
         }
+        if read.len() > u16::MAX as usize {
+            return Err(Error::BufferTooLong);
+        }
 
         self.write_frame(address, write, FrameOptions::FirstFrame).await?;
-        self.read_frame(address, read, FrameOptions::FirstAndLastFrame).await
+        self.read(address, read).await
     }
 
     /// Transaction with operations.
@@ -857,11 +902,33 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
     ///
     /// [transaction contract]: embedded_hal_1::i2c::I2c::transaction
     pub async fn transaction(&mut self, addr: u8, operations: &mut [Operation<'_>]) -> Result<(), Error> {
-        for (op, frame) in operation_frames(operations)? {
-            match op {
-                Operation::Read(read) => self.read_frame(addr, read, frame).await?,
-                Operation::Write(write) => self.write_frame(addr, write, frame).await?,
+        Self::validate_address(addr)?;
+        validate_operations(operations, true)?;
+        let mut operations = operations;
+        while !operations.is_empty() {
+            let read = matches!(operations[0], Operation::Read(_));
+            let count = operations
+                .iter()
+                .take_while(|op| matches!(op, Operation::Read(_)) == read)
+                .count();
+            let (group, rest) = operations.split_at_mut(count);
+            if read {
+                self.read_group(addr, group, rest.is_empty()).await?;
+            } else {
+                for (index, operation) in group.iter().enumerate() {
+                    let Operation::Write(buffer) = operation else {
+                        unreachable!()
+                    };
+                    let frame = match (index == 0, rest.is_empty() && index + 1 == count) {
+                        (true, true) => FrameOptions::FirstAndLastFrame,
+                        (true, false) => FrameOptions::FirstFrame,
+                        (false, true) => FrameOptions::LastFrame,
+                        (false, false) => FrameOptions::NextFrame,
+                    };
+                    self.write_frame(addr, buffer, frame).await?;
+                }
             }
+            operations = rest;
         }
 
         Ok(())
@@ -872,7 +939,14 @@ impl<'d, T: Instance> I2c<'d, T, Async> {
 
 impl<'d, T: Instance, M: Mode> Drop for I2c<'d, T, M> {
     fn drop(&mut self) {
+        use crate::interrupt::typelevel::Interrupt;
+        Self::finish_transfer();
         T::regs().ctlr1().modify(|w| w.set_pe(false));
+        T::EventInterrupt::disable();
+        T::ErrorInterrupt::disable();
+        self.scl.set_as_disconnected();
+        self.sda.set_as_disconnected();
+        T::disable();
     }
 }
 
@@ -896,7 +970,9 @@ trait SealedInstance: crate::peripheral::RccPeripheral {
 
 /// I2C peripheral instance
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + embassy_hal_internal::PeripheralType + crate::peripheral::RemapBound + 'static {
+pub trait Instance:
+    SealedInstance + embassy_hal_internal::PeripheralType + crate::peripheral::RemapBound + 'static
+{
     /// Event interrupt for this instance
     type EventInterrupt: interrupt::typelevel::Interrupt;
     /// Error interrupt for this instance
@@ -939,6 +1015,7 @@ impl embedded_hal::i2c::Error for Error {
             Self::Crc => embedded_hal::i2c::ErrorKind::Other,
             Self::Overrun => embedded_hal::i2c::ErrorKind::Overrun,
             Self::ZeroLengthTransfer => embedded_hal::i2c::ErrorKind::Other,
+            Self::BufferTooLong | Self::InvalidAddress => embedded_hal::i2c::ErrorKind::Other,
         }
     }
 }
@@ -965,9 +1042,7 @@ impl<'d, T: Instance, M: Mode> embedded_hal::i2c::I2c for I2c<'d, T, M> {
         address: u8,
         operations: &mut [embedded_hal::i2c::Operation<'_>],
     ) -> Result<(), Self::Error> {
-        let _ = address;
-        let _ = operations;
-        todo!()
+        self.blocking_transaction(address, operations)
     }
 }
 
@@ -989,9 +1064,7 @@ impl<'d, T: Instance> embedded_hal_async::i2c::I2c for I2c<'d, T, Async> {
         address: u8,
         operations: &mut [embedded_hal_async::i2c::Operation<'_>],
     ) -> Result<(), Self::Error> {
-        let _ = address;
-        let _ = operations;
-        todo!()
+        self.transaction(address, operations).await
     }
 }
 
@@ -1030,6 +1103,22 @@ enum FrameOptions {
     LastFrame,
     /// `[NACK]` Last frame in a read operation but not last frame overall in this transaction.
     LastFrameNoStop,
+}
+
+fn validate_operations(operations: &[Operation<'_>], dma: bool) -> Result<(), Error> {
+    let mut total = 0usize;
+    for operation in operations {
+        let length = match operation {
+            Operation::Read(buffer) if buffer.is_empty() => return Err(Error::Overrun),
+            Operation::Read(buffer) => buffer.len(),
+            Operation::Write(buffer) => buffer.len(),
+        };
+        if dma && length > u16::MAX as usize {
+            return Err(Error::BufferTooLong);
+        }
+        total = total.checked_add(length).ok_or(Error::BufferTooLong)?;
+    }
+    Ok(())
 }
 
 #[allow(dead_code)]

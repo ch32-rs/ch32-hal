@@ -36,6 +36,7 @@ clock-hse = ["hal"]
 clock-pll = ["hal"]
 clock-slow = ["hal"]
 usart-loopback = ["embassy"]
+i2c-eeprom = ["embassy"]
 
 [[bin]]
 name = "hal_init"
@@ -75,6 +76,10 @@ required-features = ["embassy"]
 
 [[bin]]
 name = "hal_timer"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_i2c"
 required-features = ["embassy"]
 
 [profile.release]

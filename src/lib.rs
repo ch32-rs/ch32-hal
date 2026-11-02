@@ -112,7 +112,7 @@ pub mod gpio;
 // don't exist on `*_h4`-versioned peripherals. I2C is the exception:
 // H4 chip metadata flags I2C as `version: v3` (same register layout
 // as the V2/V3 families), so the existing V3 driver applies directly.
-#[cfg(all(i2c, not(ch32v4)))]
+#[cfg(i2c)]
 pub mod i2c;
 #[cfg(all(rng, not(any(ch32h4, ch32v4))))]
 pub mod rng;
