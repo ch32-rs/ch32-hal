@@ -223,8 +223,8 @@ opted into WCH-Link's automatic unprotect-on-attach path.
 
 The earlier low-HCLK firmware left the probe unable to attach (`81 55 01 01`).
 `wlink erase --method power-off --chip CH32V4X7` recovered the board without
-touching option bytes, and the supported examples were re-run (USBHS, EXTI and
-the natural-wrap variant were not). Timing-sensitive results were collected by
+touching option bytes, and the supported examples were re-run (EXTI and the
+natural-wrap variant were not). Timing-sensitive results were collected by
 flashing (`probe-rs download`), resetting and reading RAM markers afterwards,
 because a live RTT/debug attach halts the core.
 
@@ -237,7 +237,8 @@ because a live RTT/debug attach halts the core.
   `hal_dac`, `hal_rng`, `hal_adc`, `hal_can` (72-frame loopback), `hal_i3c` and
   `hal_flash` (read-only plus `flash-write-test`) passed.
 - `hal_eth` initialized (PHY ID `0x73719011`) but had no cable; `hal_sdio`
-  correctly reported no card response.
+  correctly reported no card response. `hal_usbhs` (USBHS1 CDC echo) passed
+  later, on 2026-11-04, against a macOS host.
 - Two driver bugs were found and fixed: `SPI::blocking_flush` polled `TXE`
   while `SPE=0` (first `hal_spi` write deadlocked), and fast page programming
   waited for `BSY|WRBSY` instead of `WRBSY` (`flash-write-test` timed out).
@@ -247,9 +248,9 @@ because a live RTT/debug attach halts the core.
 The user visually confirmed the `hal_blinky` PE8/PE9 alternation on 2026-11-04.
 
 Still requiring hardware or equipment: the natural 32-bit SysTick wrap, GPIO
-input/EXTI wiring, USART/SPI loopback wiring, USBHS enumeration/echo, an
-external I2C EEPROM, external I3C/CAN/SD/Ethernet peers, option-byte RAM split
-and measured HSI frequency, and analog measurements.
+input/EXTI wiring, USART/SPI loopback wiring, an external I2C EEPROM, external
+I3C/CAN/SD/Ethernet peers, option-byte RAM split and measured HSI frequency,
+and analog measurements.
 
 SDI did not work on the user's board; an address/handshake mismatch is a
 hypothesis, not a diagnosed cause. These examples no longer touch SDI registers.
@@ -266,7 +267,8 @@ cargo run --release --bin hal_usbhs --features usbhs
 cargo run --release --bin hal_usbhs --features usbhs,clock-pll
 cargo run --release --bin hal_usbhs --features usbhs,clock-hse
 cargo run --release --bin hal_usbhs --features usbhs2
-python3 usbhs_echo_test.py /dev/ttyACM0
+python3 usbhs_echo_test.py /dev/ttyACM0                    # Linux
+python3 usbhs_echo_test.py /dev/tty.usbmodemV4_USBHS11     # macOS, USBHS1
 ```
 
 The default uses USBHS1: PA12 = D+, PA11 = D−. `usbhs2` selects USBHS2:
@@ -278,8 +280,9 @@ same pair of wires. USBHS2 uses its own interrupt, bus gate and UTMI gate.
 The example uses **full-speed USB** with 64-byte CDC bulk packets. HSI feeds the
 shared 480 MHz USBHS PLL; `clock-pll` additionally runs HCLK at 200 MHz.
 `clock-hse` requires a 25 MHz crystal and instead supplies the USBHS PLL from HSE.
-HSI operation still needs physical enumeration and stability testing; use the
-actual board crystal configuration when assessing USB frequency accuracy.
+HSI operation has now passed enumeration and echo; long-run stability and
+frequency accuracy still need testing. Use the actual board crystal
+configuration when assessing USB frequency accuracy.
 The demonstration VID/PID is `c0de:cafe`, matching the existing USB examples;
 it is not a production allocation.
 
@@ -290,6 +293,11 @@ concurrently and fails on mismatches, disconnects or timeout. Expect
 `PASS: 120 exchanges, 62160 bytes matched` with the default ten rounds.
 The firmware adds an IN ZLP after a full 64-byte packet so exact packet-sized
 echoes are delivered without waiting for another packet.
+
+On 2026-11-04, USBHS1 enumerated and echoed on a macOS host
+(`/dev/tty.usbmodemV4_USBHS11`); the default ten-round test reported
+`PASS: 120 exchanges, 62160 bytes matched`. USBHS2, the PLL/HSE clock variants,
+bus reset, cable reconnect and high-speed operation remain untested on hardware.
 
 Debugger symbols: `USBHS_STAGE` = 1 initializing, 2 waiting for CDC connection,
 3 connected, 4 echoed data. `USBHS_ECHO_PACKETS`, `USBHS_ECHO_BYTES` and
@@ -316,9 +324,9 @@ device. Endpoint aliases 9–15, burst mode, LPM and USB host mode remain pendin
 The reproducible USBHS model lives in `../../tools/usbhs-host-tests`; its README
 lists the host test command and model boundaries. All 27 USBHS checks passed,
 alongside the 16-case library matrix and six CDC example build configurations.
-The library and example builds and host model tests passed; **enumeration and
-echo have not yet run on the board**. The probe connection was recovered on
-2026-11-03, but no USB host has been attached to the CDC port.
+The library and example builds and host model tests passed. USBHS1 enumeration
+and CDC echo then passed on the board on 2026-11-04; the remaining hardware
+items are listed above.
 
 ## SysTick rollover stress test (2026-11-01)
 
