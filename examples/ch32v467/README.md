@@ -67,8 +67,8 @@ cargo build --release --bin hal_exti --features exti
 transition and reports `GPIO_OUT_RESULT=PASS` after 20 transitions. The debugger
 symbol is 0 before entry, 1 while running, 2 on success, and 3 on failure. With
 `embassy`, it uses a CPU spin loop; executor-based blinking uses `hal_embassy`.
-Output readback passed on WEU6; LED appearance and waveform accuracy require
-visual or instrument verification.
+Output readback passed on WEU6, and the PE8/PE9 LED alternation was confirmed
+visually on 2026-11-04; waveform accuracy still requires an instrument.
 
 For `hal_exti`, connect **PA0 to PB1, PB8 and PC13** as one signal net (three
 jumper branches). Check that these pins are exposed and free of external drivers
@@ -214,8 +214,9 @@ Read-only hardware checks on 2026-10-28 passed with the local release binary:
 explicit-chip reads confirm that ID and USER at `0x1FFFF802` = `0xBF` (200 KiB
 RAM, matching the default linker layout). Omitting `--chip` identifies WEU6
 but the subsequent connection times out over USB; keep the explicit chip.
-Flash programming and live RTT passed on 2026-10-31; PE8/PE9 behavior remains
-unverified. V4x7 is not
+Flash programming and live RTT passed on 2026-10-31. The PAC-only `blinky`
+output remains visually unverified; the HAL `hal_blinky` LED alternation was
+confirmed on 2026-11-04. V4x7 is not
 opted into WCH-Link's automatic unprotect-on-attach path.
 
 ## Board status after recovery (2026-11-03)
@@ -243,10 +244,12 @@ because a live RTT/debug attach halts the core.
   Host models in `tools/spi-host-tests` and `tools/flash-host-tests` now cover
   both boundaries.
 
-Still requiring hardware or equipment: PE8/PE9 LED observation, the natural
-32-bit SysTick wrap, GPIO input/EXTI wiring, USART/SPI loopback wiring, USBHS
-enumeration/echo, an external I2C EEPROM, external I3C/CAN/SD/Ethernet peers,
-option-byte RAM split and measured HSI frequency, and analog measurements.
+The user visually confirmed the `hal_blinky` PE8/PE9 alternation on 2026-11-04.
+
+Still requiring hardware or equipment: the natural 32-bit SysTick wrap, GPIO
+input/EXTI wiring, USART/SPI loopback wiring, USBHS enumeration/echo, an
+external I2C EEPROM, external I3C/CAN/SD/Ethernet peers, option-byte RAM split
+and measured HSI frequency, and analog measurements.
 
 SDI did not work on the user's board; an address/handshake mismatch is a
 hypothesis, not a diagnosed cause. These examples no longer touch SDI registers.
@@ -447,7 +450,7 @@ RX and loopback still require PA9–PA10 wiring.
 1. Expand hardware coverage of the generated V4x7 Flash algorithms (endurance,
    worst-case erase timing); investigate the auto-detection reconnect timeout
    (use explicit `--chip` meanwhile).
-2. Verify PE8/PE9 LED, option-byte RAM split and measured HSI frequency.
+2. Verify the option-byte RAM split and measure the HSI frequency.
 3. Run the remaining board tests that need wiring or external peers: USART
    loopback, SPI loopback, I2C EEPROM, external I3C target/CAN/SD/Ethernet, and
    the natural SysTick wrap. The time-driver, DMA and default USART regressions
