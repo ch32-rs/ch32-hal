@@ -1,4 +1,5 @@
-//! CH32V4 I3C controller with FIFO polling and interrupt-driven transfers.
+//! CH32V407/CH32V467 I3C controller with FIFO polling and interrupt-driven
+//! transfers.
 //!
 //! Timings are explicit HCLK counters: board wiring, target capabilities and mixed-bus
 //! requirements must be checked against the reference manual.
@@ -79,7 +80,7 @@ impl embedded_hal::i2c::Error for Error {
     }
 }
 
-/// Raw timing fields from RM 19.4.16–19.4.18, bound to one HCLK frequency.
+/// Raw timing fields from RM §19.4.16–19.4.18, bound to one HCLK frequency.
 ///
 /// SCL high/low periods and the AVAL unit use `(counter + 1) / hclk_hz`.
 /// FREE is the hardware's MIPI timing parameter, not an I2C baud-rate divider.

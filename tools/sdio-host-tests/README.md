@@ -1,4 +1,4 @@
-# CH32V4 SDIO host model
+# CH32V4 SDIO host tests
 
 Run from the HAL repository root after generating the sibling `../ch32-data`
 PAC:

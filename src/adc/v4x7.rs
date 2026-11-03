@@ -1,4 +1,5 @@
-//! Independent-mode ADC1/ADC2 with blocking, interrupt, and regular scan DMA reads.
+//! CH32V407/CH32V467 independent-mode ADC1/ADC2 with blocking, interrupt, and
+//! regular scan DMA reads.
 #![macro_use]
 
 use core::future::poll_fn;

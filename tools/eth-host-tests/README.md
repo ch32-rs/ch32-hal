@@ -1,4 +1,4 @@
-# CH32V4 Ethernet host model
+# CH32V4 Ethernet host tests
 
 After generating the sibling `../ch32-data` PAC, run from the HAL root:
 

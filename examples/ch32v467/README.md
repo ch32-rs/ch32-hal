@@ -873,7 +873,7 @@ separate from the register PASS.
 
 The backend supports blocking and Embassy FIFO transfers, single-direction legacy
 I2C via both embedded-hal traits, SDR private transfers, ordinary broadcast/direct
-CCC and ENTDAA. RM 19.4.1 explicitly requires MEND=1 for legacy I2C messages.
+CCC and ENTDAA. RM §19.4.1 explicitly requires MEND=1 for legacy I2C messages.
 Legacy transactions changing direction, including write_read, return
 `UnsupportedTransaction` before bus activity; they are not split into separate
 STOP-delimited transactions. Adjacent operations in one direction are merged.

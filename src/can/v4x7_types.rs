@@ -111,7 +111,7 @@ pub(super) fn encode_id(id: Id) -> u32 {
     }
 }
 
-/// One of the 14 filter banks. Raw fields follow RM 25.7.16–25.7.20.
+/// One of the 14 filter banks. Raw fields follow RM §25.7.16–25.7.20.
 #[derive(Clone, Copy, Debug)]
 pub struct Filter {
     pub bank: u8,

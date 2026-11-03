@@ -182,7 +182,7 @@ embassy-stm32 对不同系列的“操作忙”和“队列/子阶段忙”做�
   `hal_i2c`（配置/清理）、`hal_spi`（24 cases，修复后）、`hal_dac`、`hal_rng`、
   `hal_adc`、`hal_can`（72 帧 loopback）、`hal_i3c`、`hal_flash`（只读 + 写测试）PASS；
 - `hal_eth` 初始化成功（PHY ID `0x73719011`），无网线故未验帧收发；
-  `hal_sdio` 无卡时正确报告 “no card response”。
+  `hal_sdio` 无卡时正确报告“no card response”。
 
 **注意**：持续 RTT/调试访问会 halt 内核，导致 `hal_usart`/`hal_timer` 的时序
 断言出现假失败（code 11），`hal_rcc` 则表现为 `RCC_RESULT=3`。时序类用例应
@@ -243,14 +243,14 @@ embassy-stm32 对不同系列的“操作忙”和“队列/子阶段忙”做�
 
 ## 7. 独立审查确认的边界（2026-11-03）
 
-两个修复经独立 subagent 审查（对照 RM 32.5.6、embassy-stm32 与全部调用路径，并重跑
+两个修复经独立 subagent 审查（对照 RM §32.5.6、embassy-stm32 与全部调用路径，并重跑
 主机测试）未发现高/中等级缺陷。审查确认的边界如下，均为有意保留：
 
 | 位置 | 边界 | 结论 |
 | --- | --- | --- |
 | `src/spi.rs` 的 `SPE=0` guard | 非 V4 芯片上，错误/取消后 `cleanup()` 在未等 `BSY` 的情况下关闭 `SPE`；新 guard 使下一次 `prepare()` 不再等待被中止帧的 `BSY` | 只发生在 abort 路径、最多一帧；V4 上旧代码是死锁而非等待。与 embassy-stm32 的 `was_enabled` 保护一致，保留 |
 | `src/flash/v4x7.rs:408-420` | 若 `WRPRTERR` 在 `WRBSY` 未清时置位，会报 `Timeout` 而非 `Protected` | 仍以错误结束，不造成数据损坏；与 `wait_idle` 只在空闲时检查 `wrprterr` 的方式一致 |
-| `src/flash/v4x7.rs` 快速页中途出错 | `finish()` 在 `BSY=1` 时拒绝写寄存器，`recover()` 也等不到 `BSY=0`，驱动需复位才能恢复 | 既有行为：RM 32.5.4 禁止 `BSY=1` 时写寄存器，没有安全中止手段。修复前这是每次快速页写的必然路径，现在只在真实故障时出现 |
+| `src/flash/v4x7.rs` 快速页中途出错 | `finish()` 在 `BSY=1` 时拒绝写寄存器，`recover()` 也等不到 `BSY=0`，驱动需复位才能恢复 | 既有行为：RM §32.5.4 禁止 `BSY=1` 时写寄存器，没有安全中止手段。修复前这是每次快速页写的必然路径，现在只在真实故障时出现 |
 | 主机模型 | 看不到生产代码对 flash 地址空间的裸字存储，因而也不覆盖 store→poll 的 `WRBSY` 置位竞态、真实 IRQ 延迟与电气时序 | 模型只证明状态机边界；`hal_spi`/`hal_flash` 仍是硬件验收依据 |
 
 其余 `BUSY_MASK` 轮询点（`blocking_read`、`prepare_write`、`operation` 前置检查、

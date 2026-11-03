@@ -1,4 +1,4 @@
-//! CH32V407/CH32V467 Classical CAN, RM chapter 25 and EVT CAN examples.
+//! CH32V407/CH32V467 Classical CAN, RM §25 and EVT CAN examples.
 //!
 //! Supports both receive FIFOs, all 14 filters, standard/extended data and remote
 //! frames, blocking/nonblocking I/O and cancellation-safe asynchronous waits.

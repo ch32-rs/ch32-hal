@@ -74,7 +74,7 @@ option bytes）；返回后等 2–3 秒再 attach 即恢复。
   `hal_can`（72 帧回环）、`hal_i3c`（寄存器/生命周期）、`hal_flash`
   （只读 + `flash-write-test`）均通过。
 - `hal_eth` 初始化成功（PHY ID `0x73719011`），无网线未验帧收发；`hal_sdio`
-  无卡时正确报告 “no card response”。
+  无卡时正确报告“no card response”。
 
 本轮发现并修复了两个真实驱动边界问题：
 
@@ -82,7 +82,7 @@ option bytes）；返回后等 2–3 秒再 attach 即恢复。
    CH32V467 实测 `SPE=0` 时 TXE 恒为 0，而 `prepare()` 在使能 SPE 前先 flush，
    导致第一次 `blocking_write` 永久自旋。修复为禁用状态直接返回。详见
    [review-conclusion](review-conclusion.md) 第 2 节。
-2. `src/flash/v4x7.rs` 的快速页编程在装载阶段等待 `BSY|WRBSY`。RM 32.5.6 要求
+2. `src/flash/v4x7.rs` 的快速页编程在装载阶段等待 `BSY|WRBSY`。RM §32.5.6 要求
    每个 32 位字只等 `WRBSY`，`BSY` 要到 `PGSTRT` 之后才清零；原实现永远到不了
    `PGSTRT`，`flash-write-test` 报 `code=21`（`Timeout`）。修复为分阶段等待。
    详见 review-conclusion 第 3 节。
@@ -519,7 +519,7 @@ RTR 按该值计算；旧 HAL 直接把 PCLK MHz 写进 6-bit FREQ，在 100/200
 ## 实施记录：阶段 6c（I²C，2026-11-01）
 
 - 依据 CH32V407RM V1.3 第 18 章与 EVT `ch32v4x7_i2c.c`、`I2C_DMA`，
-  接入单个 I2C（非 I3C）：PB6/PB7 默认、PB8/PB9 重映射；
+  接入单个 I²C（非 I3C）：PB6/PB7 默认、PB8/PB9 重映射；
   I2C_EV/I2C_ER；TX=DMA1_CH6、RX=DMA1_CH7；PCLK1 驱动。
 - V4 FREQ 钳位到 60，RTR 采用同一频率域值；CCR 用实际 PCLK1 向上取整，
   避免超过请求的 SCL 频率。配置限制为 0 < SCL ≤ 400kHz、V4 输入时钟至少 4MHz，
@@ -946,18 +946,18 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
 ### 阶段 7h：I3C 首轮接入（2026-11-01）
 
 - 按 RM 第 19 章与 EVT `I3C_DMA_Controller` 核对：I3C 是独立的 HCLK 外设，
-  并非 I2C 寄存器组的扩展。采用独立 `src/i3c.rs` 和传输状态机；传统 I2C 的单方向消息
+  并非 I²C 寄存器组的扩展。采用独立 `src/i3c.rs` 和传输状态机；传统 I²C 的单方向消息
   在上层实现 `embedded-hal::i2c::I2c` 与 Embassy async trait。GPIO 使用 EVT 的
   AF push-pull 配置，接入默认 PB10/PB11 与重映射 PB4/PB5 的生成 pin traits。
 - 修正 ch32-data 中 TMODE（FIFO 预装载，并非 target mode）、MID（消息序号）、
   XDCNT、ABT、PERR 和 TXLASTF/RXLASTF 描述，重新生成全部 PAC。
-- 第一轮采用 byte FIFO 的 blocking / interrupt 后端：支持 I2C 同向 operation
+- 第一轮采用 byte FIFO 的 blocking / interrupt 后端：支持 I²C 同向 operation
   合并、SDR 私有事务及其重复起始、普通广播 CCC、无 defining byte 的单目标直接 CCC，
   以及 ENTDAA。ENTDAA 使用调用者提供的地址池及结果数组，验证保留/重复/本机地址，
   分别保存 PID/BCR/DCR，并检查结束时的硬件目标数量；不继承 EVT 的无界数组及累积 PID 问题。
-- RM 19.4.1 与 19.4.2 的 MEND 说明明确要求 MTYPE=4（legacy I2C）时 MEND 不能为 0。
-  因此不承诺完整 I2C 兼容：跨方向 transaction/write_read 在硬件操作前返回
-  UnsupportedTransaction。需重复起始的 I2C 设备继续使用独立 I2C 外设；不能用多个 STOP
+- RM §19.4.1 与 19.4.2 的 MEND 说明明确要求 MTYPE=4（legacy I²C）时 MEND 不能为 0。
+  因此不承诺完整 I²C 兼容：跨方向 transaction/write_read 在硬件操作前返回
+  UnsupportedTransaction。需重复起始的 I²C 设备继续使用独立 I²C 外设；不能用多个 STOP
   替代 trait 约定的 repeated start。该限制也加入模型断言，不能用模型构造出手册禁止的支持。
 - 使用 TMODE 预装载，先设 CRINIT 再解除内部复位；关停 IBI/hot-join 接收。
   按 EVR 的 FIFO 请求逐项服务，最后等待 FCF，错误优先于完成；RX FIFO 在 FCF 后

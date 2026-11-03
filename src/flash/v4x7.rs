@@ -1,4 +1,4 @@
-//! CH32V4x7 raw flash and an explicit XOR-encoded NOR data partition.
+//! CH32V407/CH32V467 raw flash and an explicit XOR-encoded NOR data partition.
 
 use core::marker::PhantomData;
 use core::ptr::{read_volatile, write_volatile};
@@ -12,7 +12,7 @@ pub const FLASH_BASE: usize = 0x0800_0000;
 pub const ERASE_SIZE: usize = 4096;
 pub const BLOCK_ERASE_SIZE: usize = 32768;
 pub const HALFWORD_WRITE_SIZE: usize = 2;
-/// Raw erased flash reads as 0xE339, rather than 0xFFFF (RM 32.5.4/32.5.7).
+/// Raw erased flash reads as 0xE339, rather than 0xFFFF (RM §32.5.4/32.5.7).
 pub const ERASED_HALFWORD: u16 = 0xe339;
 const NOR_XOR: [u8; 2] = (ERASED_HALFWORD ^ u16::MAX).to_le_bytes();
 const BUSY_MASK: u32 = 3;
@@ -402,7 +402,7 @@ fn wait_idle(limit: u32) -> Result<(), Error> {
 }
 
 /// Fast page programming keeps BSY set for the whole 256-byte load; each
-/// 32-bit store only waits for WRBSY to clear (RM 32.5.6 step 6). Waiting for
+/// 32-bit store only waits for WRBSY to clear (RM §32.5.6 step 6). Waiting for
 /// BSY here would spin until PGSTRT, which is never reached.
 #[inline(always)]
 fn wait_write_buffer(limit: u32) -> Result<(), Error> {

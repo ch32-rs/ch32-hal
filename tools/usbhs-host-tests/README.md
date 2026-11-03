@@ -1,4 +1,4 @@
-# CH32V4 USBHS host model
+# CH32V4 USBHS host tests
 
 Run from the HAL repository root after regenerating the sibling `../ch32-data`
 PAC:

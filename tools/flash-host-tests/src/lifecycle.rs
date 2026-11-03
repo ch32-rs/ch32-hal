@@ -26,7 +26,7 @@ fn unlock_clears_lock_and_flock() {
     assert!(!pac::FLASH.ctlr().read().flock());
 }
 
-// RM 32.5.6: each fast-page 32-bit store waits for `WRBSY`, not `BSY`.
+// RM §32.5.6: each fast-page 32-bit store waits for `WRBSY`, not `BSY`.
 // `BSY` stays set for the whole 256-byte load, so a `BSY|WRBSY` mask never
 // clears before `PGSTRT`.
 #[test]

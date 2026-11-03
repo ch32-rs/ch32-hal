@@ -5,7 +5,8 @@ modeled CH32V4x7 status register:
 
 ```sh
 CARGO_TARGET_DIR=/tmp/ch32v4-spi-host-target cargo test \
-  --manifest-path tools/spi-host-tests/Cargo.toml -- --test-threads=1
+  --manifest-path tools/spi-host-tests/Cargo.toml \
+  --target x86_64-unknown-linux-gnu -- --test-threads=1
 ```
 
 `--target x86_64-unknown-linux-gnu` is the Linux target of the reference
