@@ -106,7 +106,9 @@ impl<'d, T: Instance> Rng<'d, T> {
             return Err(Error::SeedError);
         }
         if status.ceis() || status.cecs() {
-            T::regs().sr().write_value(pac::rng::regs::Sr(1 << 6));
+            // CEIS is an RW interrupt-status bit, not write-zero-to-clear, so
+            // clear it explicitly instead of writing a raw flag mask.
+            T::regs().sr().modify(|reg| reg.set_ceis(false));
             return Err(Error::ClockError);
         }
         Ok(())
@@ -182,7 +184,16 @@ impl<'d, T: Instance> Drop for Rng<'d, T> {
 
 impl<'d, T: Instance> RngCore for Rng<'d, T> {
     fn next_u32(&mut self) -> u32 {
-        self.blocking_next_u32().expect("RNG hardware failure")
+        loop {
+            match self.blocking_next_u32() {
+                Ok(value) => return value,
+                // `blocking_next_u32` has already restarted the generator,
+                // so a transient seed error is recovered the same way as
+                // before. A clock error needs an RCC fix, not a retry.
+                Err(Error::SeedError) => {}
+                Err(Error::ClockError) => panic!("RNG clock error"),
+            }
+        }
     }
 
     fn next_u64(&mut self) -> u64 {
@@ -190,7 +201,10 @@ impl<'d, T: Instance> RngCore for Rng<'d, T> {
     }
 
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        self.try_fill_bytes(dest).expect("RNG hardware failure");
+        for chunk in dest.chunks_mut(4) {
+            let word = self.next_u32();
+            chunk.copy_from_slice(&word.to_le_bytes()[..chunk.len()]);
+        }
     }
 
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
