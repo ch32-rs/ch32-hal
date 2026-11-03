@@ -92,6 +92,24 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(afio)");
     println!("cargo:rustc-check-cfg=cfg(afio_h4)");
 
+    // Whether the pinned PAC already carries an `Mco` enum for RCC_CFGR0.MCO.
+    // rcc_v1 and rcc_v4x7 got it later than the others, so `src/rcc/mco.rs`
+    // falls back to a local enum when this is unset. The probe reads the
+    // generated IR, not the register file, so it tracks the PAC revision for
+    // free and drops the fallback once the data catches up.
+    println!("cargo:rustc-check-cfg=cfg(ch32_mco_enum)");
+    if METADATA
+        .peripherals
+        .iter()
+        .filter_map(|p| p.registers.as_ref())
+        .filter(|r| r.kind == "rcc")
+        .flat_map(|r| r.ir.fieldsets)
+        .flat_map(|fs| fs.fields)
+        .any(|f| f.name == "mco" && f.enumm == Some("Mco"))
+    {
+        println!("cargo:rustc-cfg=ch32_mco_enum");
+    }
+
     let mut gpio_lines = 16;
     match &*chip_family {
         "ch32v0" | "ch32m0" => {
@@ -423,6 +441,9 @@ fn main() {
         // is `#[cfg(usbhs_v3)]`, so the rows are removed below on that family.
         (("usbhs", "DP"), quote!(crate::usbhs::DpPin)),
         (("usbhs", "DM"), quote!(crate::usbhs::DmPin)),
+        // MCO belongs to the RCC singleton, so it uses its own impl macro
+        // below instead of the instance-parameterised pin trait.
+        (("rcc", "MCO"), quote!(crate::rcc::McoPin)),
     ]
     .into();
 
@@ -439,7 +460,7 @@ fn main() {
         pin_signals.retain(|key, _| {
             matches!(
                 key.0,
-                "usart" | "timer" | "i2c" | "i3c" | "spi" | "can" | "usbhs" | "sdio"
+                "usart" | "timer" | "i2c" | "i3c" | "spi" | "can" | "usbhs" | "sdio" | "rcc"
             )
         });
     }
@@ -452,6 +473,23 @@ fn main() {
                 if let Some(tr) = pin_signals.get(&key) {
                     let peri = format_ident!("{}", p.name);
                     let pin_name = format_ident!("{}", pin.pin);
+
+                    if key == ("rcc", "MCO") {
+                        let n = if h4 { pin.af.unwrap_or(0) } else { 0 };
+                        // H4's MCO pin (PB0/AF0) is the one data entry that
+                        // arrived after the currently pinned PAC. Flag it so
+                        // `src/rcc/mco.rs` can drop its hand-written PB0 impl
+                        // once the PAC carries the pin.
+                        if h4 {
+                            println!("cargo:rustc-check-cfg=cfg(ch32_data_h4_mco_pin)");
+                            println!("cargo:rustc-cfg=ch32_data_h4_mco_pin");
+                        }
+                        g.extend(quote! {
+                            mco_pin_impl!(#pin_name, #n);
+                        });
+                        continue;
+                    }
+
                     // H4 pins carry `af` (AFR index). Every other family carries
                     // `remap` (PCFR group). Emit each (signal, pin, value) on
                     // its own — do not collapse a pin's other signals.

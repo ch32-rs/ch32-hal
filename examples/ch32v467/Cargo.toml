@@ -82,6 +82,10 @@ name = "hal_rcc"
 required-features = ["hal"]
 
 [[bin]]
+name = "hal_mco"
+required-features = ["hal"]
+
+[[bin]]
 name = "hal_time_scale"
 required-features = ["embassy"]
 

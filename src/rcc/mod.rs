@@ -25,6 +25,9 @@ mod shared;
 #[doc(hidden)]
 pub mod clock_tree_reference;
 
+pub mod mco;
+pub use mco::{Mco, McoPin, McoSource};
+
 #[cfg(ch32v003)]
 #[path = "v003.rs"]
 mod rcc_impl;

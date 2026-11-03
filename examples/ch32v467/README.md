@@ -458,10 +458,10 @@ RX and loopback still require PA9–PA10 wiring.
 1. Expand hardware coverage of the generated V4x7 Flash algorithms (endurance,
    worst-case erase timing); investigate the auto-detection reconnect timeout
    (use explicit `--chip` meanwhile).
-2. Verify the option-byte RAM split and measure the HSI frequency. V4x7 does
-   have MCO on PA8 (`RCC_CFGR0.MCO[3:0] = 0b0101` selects HSI); the HAL does not
-   expose an MCO configuration yet, so this currently needs direct register
-   access or a new API.
+2. Verify the option-byte RAM split and measure the HSI frequency. V4x7 has MCO
+   on PA8 (`RCC_CFGR0.MCO[3:0] = 0b0101` selects HSI); the HAL now exposes
+   `rcc::Mco::new(p.PA8, McoSource::HSI)` (see `hal_mco`), which is not yet
+   verified on hardware.
 3. Run the remaining board tests that need wiring or external peers: USART
    loopback, SPI loopback, I2C EEPROM, external I3C target/CAN/SD/Ethernet, and
    the natural SysTick wrap. The time-driver, DMA and default USART regressions
