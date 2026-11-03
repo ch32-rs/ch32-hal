@@ -54,13 +54,55 @@ V467 示例均固定使用生成 PAC 仓库的 Git revision
    V4x7 的 CNT/CMP 为 32 位；不能使用 V3 的 64 位访问及高字视图。
 5. 保留现有 cpuid/isa 回归；硬件测试不更改外部用户配置或 option bytes。
 
+## 2026-11-03 板测恢复与回归结果
+
+旧版 `hal_time_scale,clock-slow` 把 HCLK 留在约 39 kHz，WCH-Link attach 返回
+`81 55 01 01`，重新插拔、低速连接、connect-under-reset 均无效。恢复手段是
+`wlink erase --method power-off --chip CH32V4X7`（probe 侧断电整片擦除，不动
+option bytes）；返回后等 2–3 秒再 attach 即恢复。
+
+恢复后重新执行了此前的板测。时序类用例不接持续 RTT：先 `probe-rs download`、
+`reset` 自主运行，再 `probe-rs read` 读 RAM 标记（调试 attach 会 halt 内核，
+曾使 USART/Timer/RCC 断言假失败）。
+
+- PAC-only：`isa`、`cpuid`、`rtt` 正常。
+- HAL：`hal_init`（默认/分频）、`hal_blinky`、`hal_rcc`（HSI 9 组 / HSE 14 组）、
+  `hal_embassy`、`hal_time_scale`（默认/PLL/AHB÷512）、`hal_systick_stress`
+  （默认与分频各 512 轮；负向对照按预期 `FAIL code=13`）、`hal_dma`（24 通道、
+  216 次复制）、`hal_usart`（10/10 TX）、`hal_timer`（24 项）、`hal_i2c`
+  （地址探测/清理）、`hal_spi`（24 项）、`hal_dac`、`hal_rng`、`hal_adc`、
+  `hal_can`（72 帧回环）、`hal_i3c`（寄存器/生命周期）、`hal_flash`
+  （只读 + `flash-write-test`）均通过。
+- `hal_eth` 初始化成功（PHY ID `0x73719011`），无网线未验帧收发；`hal_sdio`
+  无卡时正确报告 “no card response”。
+
+本轮发现并修复了两个真实驱动边界问题：
+
+1. `src/spi.rs` 的 `blocking_flush` / async `flush` 在 `SPE=0` 时轮询 `STATR.TXE`。
+   CH32V467 实测 `SPE=0` 时 TXE 恒为 0，而 `prepare()` 在使能 SPE 前先 flush，
+   导致第一次 `blocking_write` 永久自旋。修复为禁用状态直接返回。详见
+   [review-conclusion](review-conclusion.md) 第 2 节。
+2. `src/flash/v4x7.rs` 的快速页编程在装载阶段等待 `BSY|WRBSY`。RM 32.5.6 要求
+   每个 32 位字只等 `WRBSY`，`BSY` 要到 `PGSTRT` 之后才清零；原实现永远到不了
+   `PGSTRT`，`flash-write-test` 报 `code=21`（`Timeout`）。修复为分阶段等待。
+   详见 review-conclusion 第 3 节。
+
+对应主机模型：新增 `tools/spi-host-tests`（5 项生命周期回归）和
+`tools/flash-host-tests`（3 项），直接编译生产源码；已用“临时回退旧实现”反向
+验证两者都会失败/挂起。`tools/*-host-tests` 在 macOS 上原生运行，
+`--target x86_64-unknown-linux-gnu` 只是 Linux CI 参考。
+
+剩余硬件门槛：PE8/PE9 LED 目视、SysTick 自然 32 位回绕（约 172 秒）、
+USART/SPI 回环接线、I²C EEPROM、外部 I3C/CAN/SD/Ethernet 对端、ADC/DAC 模拟
+测量，以及 USBHS 枚举/回显。
+
 ## 实施记录：阶段 0～1
 
 阶段 0、1 已实现并完成下述验证；阶段 2 已实现并完成本地构建及主机回归，
 GPIO 输出已上机通过；按用户要求暂缓 GPIO 输入/EXTI 接线测试。
 阶段 3 已完成默认和分频配置的上机验证；阶段 4 的高速时钟树已实现并进入扩展回归，
-阶段 5 的 DMA 后端已实现并完成主机/构建验证，板测待设备恢复；
-阶段 6 的 USART、timer/PWM、I²C、SPI 已实现并完成主机/构建验证，板测待设备恢复；
+阶段 5 的 DMA 后端、阶段 6 的 USART/timer/PWM/I²C/SPI 已实现；2026-11-03
+设备恢复后已完成这些外设的默认板测（结果见下文“板测恢复”一节）；
 阶段 7 已接入 DAC/RNG/ADC/Flash/CAN，并增加 USBHS device 后端和 CDC 回显例程；
 主机/构建验证与板上验收分别记录，SDIO 等后续外设继续实施。
 
@@ -328,7 +370,10 @@ RAM 符号 `SYSTICK_STRESS_RESULT`：1=运行中、2=成功、10～17=断言失�
 - RTC/低速时钟驱动尚未接入；ADC/I2S/RNG/LTDC 等专用内核时钟选择将在对应驱动迁移时
   加入，当前没有把它们的专用时钟冒充为已验证的总线时钟。下一阶段为 DMA 和常用外设。
 
-### 当前板测中断点（2026-11-01）
+### 当前板测中断点（2026-11-01，已于 2026-11-03 解除）
+
+> 该中断点已由断电擦除恢复；慢速/PLL 与压力测试结果见文首“2026-11-03 板测恢复与回归结果”。
+> 仅 `stress-natural-wrap`（自然 32 位回绕）仍未上板完成。
 
 - 比例换算修改后，默认 `hal_time_scale` 已在板上通过；RCC 的 9/14 组再次通过。
   新驱动状态机和比例换算的 5 个主机测试通过。
@@ -379,7 +424,7 @@ RAM 符号 `SYSTICK_STRESS_RESULT`：1=运行中、2=成功、10～17=断言失�
 - 新增 `hal_dma` 板测程序：遍历 24 通道，共 216 次复制，覆盖长度 1/2/3/31/256/65535、
   8/16/32 位宽、首尾 guard、无请求时取消及随后重用；每次完成有独立 Embassy 超时。
   已完成 release 构建和链接，BSS 为 132768 字节，适配当前默认 200 KiB SRAM。
-  板测尚未执行，不能据主机测试声明 DMA 实物可用；等待恢复 RESET/调试连接后验收。
+  2026-11-03 已上板：24 通道、216 次复制全部通过；中断延迟和最坏时序未单独测量。
 - 最终版本的六个 V407/V467 芯片 × blocking/Embassy+EXTI 共 12 组 release 构建通过；
   V003、V103、V307（带 Embassy）、H417 V3F 的代表配置也构建通过。
   V307 不带 Embassy 时现有 OTG/USBHS 模块引用可选 embassy_time 导致构建失败，
@@ -430,7 +475,7 @@ RAM 符号 `SYSTICK_STRESS_RESULT`：1=运行中、2=成功、10～17=断言失�
 - `usart-loopback` 可选 PA9→PA10 接线，验收固定长度 RX、IDLE、接收取消/重用、释放 RX 后 TX；
   仍等待 GPIO 输入接线与探针恢复，不把发送完成标志当作实际收到数据的证明。
 - 默认、APB 分频、200 MHz PLL 与 PLL+APB 分频+loopback 四组例程完成构建和链接。
-  板测尚未执行：目前连接仍报 protocol error，未做解保护或 option-byte 修改。
+  2026-11-03 默认配置已上板：TX 10/10 通过；`usart-loopback` 仍待 PA9→PA10 接线。
   USART 的 9 位数据传输、LIN/IrDA/智能卡、流控电气行为不在本轮板测覆盖内。
 
 后续推进 timer/PWM，然后 I²C、SPI；SysTick 自然周期、DMA 实物和 USART 板测继续保留为硬件验收门槛。
@@ -507,8 +552,8 @@ RTR 按该值计算；旧 HAL 直接把 PCLK MHz 写进 6-bit FREQ，在 100/200
   可选 `i2c-eeprom` 要求 PB6/PB7 上接带上拉的 3.3V 24C02、地址 0x50；
   只设置地址指针并读数据，比较 blocking/DMA、短读、连续读及取消后重用，
   不写 EEPROM 非易失数据。
-- 默认与 PLL/APB 分频 + EEPROM 配置已构建链接；硬件调试连接仍待用户复位
-  恢复，因此尚未烧录 `hal_i2c`，外部从机/示波器验收仍待进行。
+- 默认与 PLL/APB 分频 + EEPROM 配置已构建链接；2026-11-03 默认配置已上板，
+  地址探测与清理检查通过；外部 24C02 从机/示波器验收仍待进行。
 - 六个 V407/V467 型号各 blocking/Embassy，加 V003/V103/V307/H417，
   含上述 I²C 修改的 16 组库构建全部通过。
 
@@ -548,7 +593,8 @@ MSB/LSB 顺序和 blocking/DMA 收发；slave/I2S/CRC 不在此次 API 实现范
   `hal_spi` 默认及 `embassy,clock-pll,clock-dividers,spi-loopback` 均成功构建链接。
   默认三路各运行八组模式/位序组合，覆盖 blocking/DMA、8/16 位、重配和取消/重用；
   可选 SPI1 PA7→PA6 回环比较数据。RX-only 两种构造器仅验证完成，不对悬空 MOSI
-  形成的接收数据作断言。硬件连接仍报 Protocol error，尚未烧录这些配置。
+  形成的接收数据作断言。2026-11-03 默认配置已上板，24 项配置/生命周期检查通过
+  （修复了 `SPE=0` 时 `blocking_flush` 的死锁）；回环配置仍待 PA7→PA6 接线。
 
 后续进入阶段 7，先核对 ADC/DAC/RNG 的寄存器和内核时钟，再推进其余外设。
 DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时钟生命周期和 DMA
@@ -608,8 +654,8 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
   DAC 示例比较 DOR、双通道/软件触发、三种 DMA 格式、最后样本、取消重用和三角波变化；
   不接输入线也可做数字路径检查，但实际 PA4/PA5 电压精度仍需外部测量。
   RNG 示例记录 32 个字、非整字节读取、中断清理、drop/recreate，不对熵质量作结论。
-- 调试连接仍待物理恢复，DAC/RNG 示例尚未烧录；当前新例程及此前待测外设继续保留
-  硬件验收门槛。下一步为 ADC 的独立布局、时钟/校准、blocking/DMA 与 ADC↔DAC 板测，
+- 2026-11-03 DAC/RNG 默认配置已上板通过；模拟输出精度与熵质量仍需外部测量。
+  下一步为 ADC 的独立布局、时钟/校准、blocking/DMA 与 ADC↔DAC 板测，
   然后推进 Flash、USBHS、CAN、SDIO、Ethernet 及其他专用外设。
 
 ## 阶段 7b：ADC 独立后端（2026-11-01）
@@ -689,7 +735,9 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
   该 feature 启用分区链接并以 NOLOAD 预留 0x080F0000..0x080F8000 的末尾 32 KiB，
   覆盖 4 KiB/32 KiB 擦除、两种编程、未对齐源、重复编程拒绝和编码 NOR 数据分区。
   ELF 确认预留段文件长度为 0；本地 probe-rs ELF loader 跳过空段，不将其作为下载数据。
-  测试范围内原有数据会被删除，尚未执行任何实际 Flash 擦写。
+  测试范围内原有数据会被删除。2026-11-03 已用 `flash-write-test` 实际执行
+  4 KiB 擦除、快速页写、重复写拒绝、半字写、32 KiB 块擦除和编码 NOR 分区，全流程通过
+  （修复了快速页装载阶段等待 `BSY|WRBSY` 导致的超时）。
 - 104 个主机测试通过，其中 6 个持久化 Flash 几何/边界/保护/编码测试和 10 个临时
   控制器生命周期模型测试；覆盖超时延迟清理、失败解锁、保护错误、校验失败和模式恢复。
   16 组库构建矩阵通过；默认只读和可选写入例程，以及 Embassy+PLL 200 MHz 写入配置
@@ -734,8 +782,8 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
   Embassy+PLL+APB1 /4 配置均构建链接通过。
   记录：/tmp/ch32v4-can-host.log、/tmp/ch32v4-can-matrix.log、
   /tmp/ch32v4-can-example-{default,pll}.log。
-- 探针连接仍未恢复，回环例程尚未上板；主机模型不能证明物理位时序、收发器、
-  外部总线仲裁、错误恢复和电气质量。后续推进 USBHS、SDIO、Ethernet、I3C 等。
+- 2026-11-03 72 帧内部回环已上板通过；物理位时序、收发器、外部总线仲裁、
+  错误恢复和电气质量仍需外部 CAN 环境。后续推进 USBHS、SDIO、Ethernet、I3C 等。
 
 ## 阶段 7e：USBHS device
 
@@ -785,7 +833,8 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
 - 硬件验收：恢复调试连接后先跑默认 USBHS1，检查主机枚举、打开关闭、120 次二进制
   回显、USB reset 后重连、拔插后重新枚举；再测 HSE/HCLK PLL 和 USBHS2。
   `USBHS_STAGE`、echo packets/bytes、error counters 提供 RTT 断连后的观察点。
-  尚未烧录此例程，不把主机测试或构建通过记作板测通过。后续继续 SDIO、Ethernet、I3C 等。
+  连接已于 2026-11-03 恢复，但尚未接 USB 主机做枚举/回显测试；不把主机测试或
+  构建通过记作板测通过。后续继续 SDIO、Ethernet、I3C 等。
 
 ### 下一阶段：SDIO 基线审查
 

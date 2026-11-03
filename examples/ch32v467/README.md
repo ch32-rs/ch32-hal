@@ -219,6 +219,34 @@ Flash programming and live RTT passed on 2026-10-31; PE8/PE9 behavior remains
 unverified. V4x7 is not
 opted into WCH-Link's automatic unprotect-on-attach path.
 
+## Board status after recovery (2026-11-03)
+
+The earlier low-HCLK firmware left the probe unable to attach (`81 55 01 01`).
+`wlink erase --method power-off --chip CH32V4X7` recovered the board without
+touching option bytes, and the examples were re-run. Timing-sensitive results
+were collected by flashing (`probe-rs download`), resetting and reading RAM
+markers afterwards, because a live RTT/debug attach halts the core.
+
+- PAC-only `isa`, `cpuid`, `rtt`, and HAL `hal_init`, `hal_blinky`, `hal_rcc`
+  (9 HSI + 14 HSE configurations), `hal_embassy`, `hal_time_scale` (default,
+  PLL, AHB/512) and `hal_systick_stress` (512 rollovers, default and divided;
+  the negative control reports the expected `FAIL code=13`) passed.
+- `hal_dma` (24 channels, 216 copies), `hal_usart` (10/10 TX), `hal_timer`
+  (24 cases), `hal_i2c` (configuration/cleanup), `hal_spi` (24 cases),
+  `hal_dac`, `hal_rng`, `hal_adc`, `hal_can` (72-frame loopback), `hal_i3c` and
+  `hal_flash` (read-only plus `flash-write-test`) passed.
+- `hal_eth` initialized (PHY ID `0x73719011`) but had no cable; `hal_sdio`
+  correctly reported no card response.
+- Two driver bugs were found and fixed: `SPI::blocking_flush` polled `TXE`
+  while `SPE=0` (first `hal_spi` write deadlocked), and fast page programming
+  waited for `BSY|WRBSY` instead of `WRBSY` (`flash-write-test` timed out).
+  Host models in `tools/spi-host-tests` and `tools/flash-host-tests` now cover
+  both boundaries.
+
+Still requiring hardware or equipment: PE8/PE9 LED observation, the natural
+32-bit SysTick wrap, USART RX/loopback wiring, USBHS enumeration/echo, external
+I2C/SD/Ethernet peers, and analog measurements.
+
 SDI did not work on the user's board; an address/handshake mismatch is a
 hypothesis, not a diagnosed cause. These examples no longer touch SDI registers.
 
@@ -284,7 +312,8 @@ The reproducible USBHS model lives in `../../tools/usbhs-host-tests`; its README
 lists the host test command and model boundaries. All 27 USBHS checks passed,
 alongside the 16-case library matrix and six CDC example build configurations.
 The library and example builds and host model tests passed; **enumeration and
-echo have not yet run on the board**, whose debug attach still needs recovery.
+echo have not yet run on the board**. The probe connection was recovered on
+2026-11-03, but no USB host has been attached to the CDC port.
 
 ## SysTick rollover stress test (2026-11-01)
 
@@ -325,14 +354,15 @@ counter values against a wide integer reference. Add `clock-pll` for 200 MHz
 HCLK or `clock-slow` for AHB /512. The latter has a fractional SysTick frequency;
 the driver preserves the source/divider ratio instead of truncating it to Hz.
 The example restores HSI /1 after checking, allowing the debugger to reconnect.
-The default configuration passed on hardware. Slow and PLL configurations and
-the updated stress tests still require board regression after this conversion
-change; the 3072 results above describe the preceding driver revision.
+After the 2026-11-03 recovery, the default, PLL and AHB/512 configurations
+passed on hardware, as did `hal_systick_stress` with the default and divided
+clocks (512 rollovers each) and the `stress-disable-systick-irq` negative
+control (`FAIL code=13`). The `stress-natural-wrap` variant (about 172 seconds)
+has not been run yet.
 
-During the earlier slow test, debug attach failed after lowering HCLK to about
-39 kHz. Software reset and attach-under-reset have not restored the connection;
-physical reset/recovery is needed before the remaining board tests. The new
-version that restores HSI /1 has been built but not flashed.
+During the earlier slow test, HCLK stayed at about 39 kHz and the probe could
+not attach. The version that restores HSI /1 was flashed after a power-off
+erase, and the board has been recovered as described above.
 
 ## DMA migration check (2026-11-01)
 
@@ -355,10 +385,9 @@ The hardware transfer-error handler stops the channel and panics; it does not
 return a recoverable error from `Transfer`.
 
 Release linking and 13 host tests passed, covering register windows and the
-transfer state machine with RAM-backed PAC registers. Real DMA copies and
-interrupt timing have not yet been tested because debug attach remains
-unavailable after the slow-clock test. This example is ready for that board
-regression once the connection is restored.
+transfer state machine with RAM-backed PAC registers. `hal_dma` then passed on
+hardware on 2026-11-03 (24 channels, 216 copies). Interrupt-timing margins were
+not separately measured.
 
 ## USART migration check (2026-11-01)
 
@@ -407,16 +436,20 @@ RTT/debug access can distort the short cancellation windows. Inspect
 All four build modes, including PLL+APB dividers+loopback, link successfully.
 Eighteen host tests cover UART configuration and asynchronous state with the
 existing DMA tests. These results do not establish physical TX waveforms or RX
-correctness. The board tests are pending recovery of the debug connection; the
-default TX test does not verify reception, and its timer shares the system clock.
+correctness. The default TX test passed on hardware on 2026-11-03 (10/10
+channels); it does not verify reception, and its timer shares the system clock.
+RX and loopback still require PA9–PA10 wiring.
 
 ## Next steps
 
-1. Expand hardware coverage of the generated V4x7 Flash algorithms; investigate the
-   auto-detection reconnect timeout (use explicit `--chip` meanwhile).
+1. Expand hardware coverage of the generated V4x7 Flash algorithms (endurance,
+   worst-case erase timing); investigate the auto-detection reconnect timeout
+   (use explicit `--chip` meanwhile).
 2. Verify PE8/PE9 LED, option-byte RAM split and measured HSI frequency.
-3. Complete the remaining time-driver, DMA and USART board regression; implement
-   timer/PWM, I2C and SPI next.
+3. Run the remaining board tests that need wiring or external peers: USART
+   loopback, SPI loopback, I2C EEPROM, external I3C target/CAN/SD/Ethernet, and
+   the natural SysTick wrap. The time-driver, DMA and default USART regressions
+   passed on 2026-11-03.
    HSE/PLL RCC passed 9 HSI-based and 14 HSE-enabled clock configurations.
    GPIO input and external
    EXTI tests remain pending until wiring is available; HAL output and Embassy
@@ -468,6 +501,10 @@ CARGO_TARGET_DIR=/tmp/ch32v4-i2c-host-target cargo test \
 
 These tests compile the current production driver and generated local PAC. They
 model bus events and DMA completion and do not replace external-device testing.
+`--target x86_64-unknown-linux-gnu` is the Linux CI reference; the harness also
+runs natively on macOS without it. SPI and Flash have equivalent host models in
+`tools/spi-host-tests` and `tools/flash-host-tests`, covering the two boundary
+bugs fixed on 2026-11-03.
 
 `cargo run --release --bin hal_i2c --features embassy` checks the default PB6/PB7
 mapping and PB8/PB9 remap at 100kHz and both 400kHz duty ratios. Add
@@ -536,10 +573,13 @@ so their received values are intentionally not checked. `SPI_LOOPBACK_RESULT`
 is 0 when skipped, 1 running, and 2 passed. The example manages no CS pin;
 do not leave an external device selected during this loopback test.
 
-Both configurations build and link. SPI has not yet run on the board because
-debug attach still reports a protocol error. Host register-model tests pass,
-including cancellation, error IRQ wakeup, flush and 16-bit dummy configuration;
-these do not establish physical signal timing or actual DMA data integrity.
+Both configurations build and link. `hal_spi` passed its 24 configuration and
+lifecycle cases on hardware on 2026-11-03, after fixing `blocking_flush` (it
+polled `TXE` while `SPE=0`, hanging the first write). The loopback cases remain
+opt-in (`spi-loopback`) and still require MOSI–MISO wiring. Host register-model
+tests pass, including cancellation, error IRQ wakeup, flush and 16-bit dummy
+configuration; these do not establish physical signal timing or actual DMA data
+integrity.
 
 ## HAL DAC and RNG validation
 
@@ -574,8 +614,8 @@ RNG initialization does not wait for entropy, and fallible read APIs report seed
 or clock errors. `rand_core` infallible APIs panic on a hardware failure.
 
 Default and PLL configurations build and link. The host suite passes DAC
-lifetime/DMA cancellation and RNG fault/wakeup/cancellation checks. Neither
-example has run on the board yet because debug attach still fails.
+lifetime/DMA cancellation and RNG fault/wakeup/cancellation checks. Both
+examples passed their on-board checks on 2026-11-03.
 
 ## ADC migration check (2026-11-01)
 
@@ -612,8 +652,8 @@ still requires an external reference and measurement equipment.
 
 The driver currently supports independent regular conversion; injected groups,
 dual-ADC modes, watchdog and hardware trigger APIs remain future work.
-Host register/event tests and builds pass. The example has not run on hardware
-because debug attach still reports a protocol error.
+Host register/event tests and builds pass. The example passed its on-board
+digital checks on 2026-11-03; the optional PA4–PA0 analog loopback was not wired.
 
 ## Flash migration check (2026-11-01)
 
@@ -657,8 +697,9 @@ registers untouched: retain the driver and retry `recover()` once hardware is id
 The combined host suite passes 104 tests, and the 16-configuration library matrix
 passes. Read-only, write-test and Embassy/200 MHz PLL builds link successfully.
 ELF inspection confirms the reserved range and zero-wait operation entrypoints.
-Physical Flash behavior, timing and durability remain untested while debug attach
-reports a protocol error.
+Read-only and `flash-write-test` flows passed on hardware on 2026-11-03, after
+fixing the fast-page busy wait (it waited for `BSY|WRBSY` instead of `WRBSY`).
+Endurance and worst-case erase timing remain untested.
 
 ## CAN migration check (2026-11-01)
 
@@ -698,10 +739,9 @@ interrupt sources. An overrun reports loss while leaving queued frames readable.
 
 The combined host suite passes 128 tests, including CAN frame/timing/filter and
 controller lifecycle/interrupt/cancellation checks. All 16 library configurations
-pass, and both example configurations build and link. The example has not run on
-hardware while debug attach is unavailable. Loopback will verify controller
-behavior; real bus timing, arbitration, transceivers and electrical quality need
-an external CAN setup.
+pass, and both example configurations build and link. The 72-frame internal
+loopback passed on hardware on 2026-11-03. Real bus timing, arbitration,
+transceivers and electrical quality still need an external CAN setup.
 
 ## HAL SDIO validation
 
@@ -737,8 +777,9 @@ ELF symbols: `SDIO_RESULT` is 1 while running, 2 for no card response, 3 for a
 passing read test and 10–26 for a failed check. `SDIO_CARD_INFO` contains the low
 and high block-count words, transfer clock in Hz, RCA and high-speed selection.
 `SDIO_FIRST_BYTES` contains the first 64 bytes of block 0; `SDIO_CANCELLED`
-records whether the cancellation path was exercised. The example builds, but
-hardware execution remains pending while debug attachment fails.
+records whether the cancellation path was exercised. The example ran on hardware
+on 2026-11-03 and reported `SDIO_RESULT=2` (no card response), as expected with
+no card inserted. Card read, high-speed and cancellation paths remain untested.
 
 ## HAL Ethernet validation
 
@@ -775,8 +816,9 @@ a host socket model.
 queued, 10 init failure, 11 runtime error. Result 4 alone is not proof of delivery;
 the peer script must verify the returned frame. `ETH_PHY_ID` records the PHY ID;
 `ETH_STATS` contains received frames, queued echoes, TX errors, RX errors and DMA
-errors. No cable is required for the first PHY identification check. Debug
-attachment must be restored before these hardware tests can run.
+errors. No cable is required for the first PHY identification check. On
+2026-11-03 initialization succeeded with PHY ID `0x73719011`; frame exchange was
+not tested because no cable was attached.
 
 The implementation follows the RM's reduced DMA register map and PHY interrupt
 at bit 11. FES access and fatal bus-error bit 13 have conflicting RM/EVT details;
@@ -870,7 +912,8 @@ on error, including capacity exhaustion. Supplied addresses must be unused on
 the existing bus; the driver only checks reservations, duplicates and its own
 address.
 
-No physical I3C test has been completed yet.
+The register/lifecycle check passed on hardware on 2026-11-03. No external
+I3C target or DMA echo fixture has been tested yet.
 
 ## Local validation (2026-10-28)
 

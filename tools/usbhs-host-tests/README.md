@@ -8,6 +8,10 @@ cargo test --manifest-path tools/usbhs-host-tests/Cargo.toml \
   --target x86_64-unknown-linux-gnu -- --test-threads=1
 ```
 
+`--target x86_64-unknown-linux-gnu` is the Linux CI reference. The harness
+is a plain `std` crate and also runs natively on macOS without `--target`
+(all five pre-existing harnesses passed this way on 2026-11-03).
+
 The production driver, its endpoint/control helpers, register geometry tests,
 and the generated USBHS/RCC register types are compiled directly from their
 source paths. The wrapper substitutes RAM-backed registers, clock/reset/IRQ

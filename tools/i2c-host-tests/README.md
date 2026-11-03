@@ -9,6 +9,10 @@ CARGO_TARGET_DIR=/tmp/ch32v4-i2c-host-target cargo test \
   --target x86_64-unknown-linux-gnu -- --test-threads=1
 ```
 
+`--target x86_64-unknown-linux-gnu` is the Linux CI reference. The harness
+is a plain `std` crate and also runs natively on macOS without `--target`
+(all five pre-existing harnesses passed this way on 2026-11-03).
+
 The generated local PAC must exist at `../ch32-data/build/ch32-metapac`.
 The build script reads the current production I2C source, resolves its existing
 unit tests and attaches the lifecycle tests without maintaining a driver copy.
