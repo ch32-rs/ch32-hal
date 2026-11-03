@@ -9,9 +9,10 @@ CARGO_TARGET_DIR=/tmp/ch32v4-i3c-host-target cargo test \
   --target x86_64-unknown-linux-gnu -- --test-threads=1
 ```
 
-`--target x86_64-unknown-linux-gnu` is the Linux CI reference. The harness
-is a plain `std` crate and also runs natively on macOS without `--target`
-(all five pre-existing harnesses passed this way on 2026-11-03).
+`--target x86_64-unknown-linux-gnu` is the Linux target of the reference
+command; no CI job currently runs this harness. It is a plain `std` crate, so
+omit `--target` to run natively on macOS (all five pre-existing harnesses
+passed this way on 2026-11-03).
 
 The harness compiles the production V4 DMA backend and I3C driver. It replaces
 GPIO/RCC/interrupt plumbing and register side effects. Tests

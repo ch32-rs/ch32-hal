@@ -8,9 +8,10 @@ cargo test --manifest-path tools/sdio-host-tests/Cargo.toml \
   --target x86_64-unknown-linux-gnu -- --test-threads=1
 ```
 
-`--target x86_64-unknown-linux-gnu` is the Linux CI reference. The harness
-is a plain `std` crate and also runs natively on macOS without `--target`
-(all five pre-existing harnesses passed this way on 2026-11-03).
+`--target x86_64-unknown-linux-gnu` is the Linux target of the reference
+command; no CI job currently runs this harness. It is a plain `std` crate, so
+omit `--target` to run natively on macOS (all five pre-existing harnesses
+passed this way on 2026-11-03).
 
 The harness compiles the production V4x7 SDIO and DMA implementations and the
 generated SDIO/DMA register types directly. RAM registers substitute for MMIO;

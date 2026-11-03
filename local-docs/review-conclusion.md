@@ -8,7 +8,7 @@
 | 1 | `src/spi.rs` `blocking_flush` / `async flush` | `hal_spi` 第一个 `blocking_write` 永久自旋 | CH32V4x7 在 `SPE=0` 时 `STATR.TXE` 读 0，而 `prepare()` 在使能 SPE 之前先 flush |
 | 2 | `src/flash/v4x7.rs` `program_page` | `flash-write-test` 报 `FLASH_RESULT=FAIL code=21`（`Timeout`） | 快速页编程装载阶段等了 `BSY|WRBSY`；RM 要求只等 `WRBSY`，而 `BSY` 在整个 256 字节装载期间保持置位 |
 
-两个修复都已在硬件上复验通过（见第 6 节），并与 embassy-stm32 的处理路径做了对照（第 2、3 节）。
+两个修复都已在硬件上复验通过（见第 5 节），并与 embassy-stm32 的处理路径做了对照（第 2、3 节）。
 
 ---
 
@@ -20,11 +20,13 @@
 --target x86_64-unknown-linux-gnu
 ```
 
-**这不是 harness 的硬性要求，而是 CI/参考环境（Linux）的三元组。** 原因如下：
+**这不是 harness 的硬性要求，只是参考命令使用的 Linux target（当前没有 CI 任务
+运行这些 harness）。** 原因如下：
 
 - 这些 crate 是普通的 `std` 主机程序：`build.rs` 把生产源码（如 `src/i2c.rs`）拷进
-  `OUT_DIR`，配一份手写的、由 RAM 后备的 PAC（`tools/*/src/common.rs`），
-  不包含芯片级 `pac.rs`，也没有 `#[link_section]`。
+  `OUT_DIR`，配一份手写的、由 RAM 后备的寄存器访问层（`tools/*/src/common.rs`
+  或 `model.rs`），不包含芯片级 `pac.rs`。仅 flash harness 的生产源码带
+  `#[link_section]`，由它的 `build.rs` 去掉；其余没有链接段属性。
 - 因此它们与宿主对象格式无关。2026-11-03 在本机 macOS（`aarch64-apple-darwin`）**不加
   `--target`** 直接跑全部 harness，全部通过：
 
@@ -35,13 +37,14 @@
 | `tools/sdio-host-tests` | 34 passed |
 | `tools/eth-host-tests` | 16 passed |
 | `tools/i3c-host-tests` | 50 passed |
-| `tools/spi-host-tests`（新增） | 13 passed（含 5 项 SPI 生命周期回归） |
-| `tools/flash-host-tests`（新增） | 3 passed |
+| `tools/spi-host-tests`（新增） | 13 passed（5 项 SPI 生命周期 + 8 项既有 DMA/ringbuffer） |
+| `tools/flash-host-tests`（新增） | 4 passed |
 
 真正不能在 macOS 上跑的是 **HAL / 示例 crate 自身的 `cargo test`**：生成的 PAC 与
 `qingke-rt` 使用 ELF 段名（`.vector_table.*`、`.init.rust`、`.trap.rust`），rustc 对
 Mach-O 会报 `invalid Mach-O section specifier`。这与 `tools/` 下的 harness 是两回事。
-建议把 README 里的 `--target` 说明为“CI 参考命令（可选）”，避免误导。
+README 已把 `--target` 改述为“参考命令使用的 Linux 目标”，并注明当前没有 CI
+任务运行这些 harness、macOS 可省略 `--target` 原生运行。
 
 ---
 
@@ -95,8 +98,9 @@ ch32-hal 把 `flush` 暴露成独立 API，并且 `prepare()` 会在使能之前
 
 ### 3.1 现象与定位
 
-`hal_flash --features hal,flash-write-test` 在第一次 512 字节快速页写时报
-`FLASH_RESULT=FAIL code=21`。临时打印得到 `Error::Timeout`。
+`hal_flash --features hal,flash-write-test` 在第一次 512 字节 `blocking_write`
+（其中首个 256 字节快速页）时报 `FLASH_RESULT=FAIL code=21`。临时打印得到
+`Error::Timeout`。
 
 失败时的寄存器：
 
@@ -180,8 +184,9 @@ embassy-stm32 对不同系列的“操作忙”和“队列/子阶段忙”做�
 - `hal_eth` 初始化成功（PHY ID `0x73719011`），无网线故未验帧收发；
   `hal_sdio` 无卡时正确报告 “no card response”。
 
-**注意**：持续 RTT/调试访问会 halt 内核，导致 `hal_usart`/`hal_timer`/`hal_rcc`
-的时序断言出现假失败（code 11）。时序类用例应 `probe-rs download` + `reset`
+**注意**：持续 RTT/调试访问会 halt 内核，导致 `hal_usart`/`hal_timer` 的时序
+断言出现假失败（code 11），`hal_rcc` 则表现为 `RCC_RESULT=3`。时序类用例应
+`probe-rs download` + `reset`
 自主运行后再 `probe-rs read` RAM 标记，本次均按此方式取得 PASS。
 
 ---
@@ -200,12 +205,55 @@ embassy-stm32 对不同系列的“操作忙”和“队列/子阶段忙”做�
      `FLASH_SIZE`/`WRITE_SIZE`（主机没有生成的内存布局）。
 2. **回归有效性已做反向验证**：临时把 `program_page` 的等待改回 `wait_idle`，
    flash 用例以 `Err(Timeout)` 失败（与板上 `code=21` 一致）；临时删除两处
-   `SPE` guard，SPI 用例在 20 秒超时内不返回（复现死锁）。恢复源码后全部通过。
+   `SPE` guard，SPI 用例以 `statr_reads` 1001 vs 0 和 `Pending` 失败（不再挂起）。
+   把 `WRBSY_MASK` 改成错误的位（`1 << 2`）时，flash 的两个 `WRBSY` 用例均失败。
+   恢复源码后全部通过。
 3. **已完成**：`examples/ch32v467/README.md` 与 `local-docs/ch32v4-migration.md` 增补
    2026-11-03 的板测恢复与结果，并修正“调试连接待恢复”的旧表述。
 4. **已完成**：`tools/*-host-tests/README.md` 注明 `--target x86_64-unknown-linux-gnu`
-   只是 Linux CI 参考，macOS 可原生运行；新增的两个 harness 也包含该说明。
+   是参考命令使用的 Linux 目标（当前无 CI 任务运行这些 harness），macOS 可原生运行；
+   新增的两个 harness 也包含该说明。
+5. **审查后加固**（独立 subagent 发现）：
+   - flash 的“`WRBSY` 卡住”用例原先在 `FTPG` 之前就置位，会被 `program_page` 开头的
+     `BSY|WRBSY` 空闲等待提前判为超时，实际从未执行 `wait_write_buffer`（假通过）。
+     现改为 `FTPG` 后才卡住，并断言 `load_started()`；另在单元级用例中单独驱动
+     `WRBSY`，钉住 bit 1 的位置。
+   - 两个 harness 的测试现在持有进程级 `Mutex`，默认并行 `cargo test` 也不会竞争
+     `static mut` 寄存器块；README 仍保留 `--test-threads=1` 的示例。
+   - README 补充两个 harness 依赖相邻 `../ch32-data/build/ch32-metapac`，且该 PAC
+     不受 HAL 的 Git revision 约束。
+   - SPI 模型增加“禁用状态轮询 1000 次后返回 TXE=1”的安全栅栏：守卫被删时用例快速
+     失败而不是挂死；该行为是测试设施，不是硬件语义。
+   - 两个 `build.rs` 的源码锚点改为“断言恰好匹配一次/三次再替换”（SPI 的
+     `mod tests`、flash 的三个 `#[link_section]` 与 `mod v4x7`），生产源码结构调整时
+     harness 会构建失败而不是静默拷错。
+   - flash 新增 `unlock_clears_lock_and_flock`，直接驱动 `KEYR`/`MODEKEYR` 与
+     `CTLR.LOCK|FLOCK`，覆盖此前只被 `program_page` 间接使用的解锁路径。
+   - README 记录两处模型边界：生产代码把数据直接写入 flash 地址空间（不经 PAC），
+     模型看不到逐字存储，也复现不了 store→`WRBSY` 的置位竞态；`operation()` 的
+     执行区检查只在 `cfg(target_arch = "riscv32")` 下编译，`validate_execution_address`
+     不由主机 harness 覆盖。另注明 SPI harness 会一并运行 `src/dma/mod.rs` 的 8 项
+     DMA/ringbuffer 测试（可用 `cargo test spi::lifecycle` 过滤）。
 
 剩余（非本轮范围）：`Flash::blocking_write` 走 `FLASH_BASE = 0x0800_0000` 的绝对地址，
 主机无法执行；host 用例只驱动同一 `program_page` 例程，公共封装与擦除流程仍由
 `hal_flash --features flash-write-test` 在板上覆盖。
+
+---
+
+## 7. 独立审查确认的边界（2026-11-03）
+
+两个修复经独立 subagent 审查（对照 RM 32.5.6、embassy-stm32 与全部调用路径，并重跑
+主机测试）未发现高/中等级缺陷。审查确认的边界如下，均为有意保留：
+
+| 位置 | 边界 | 结论 |
+| --- | --- | --- |
+| `src/spi.rs` 的 `SPE=0` guard | 非 V4 芯片上，错误/取消后 `cleanup()` 在未等 `BSY` 的情况下关闭 `SPE`；新 guard 使下一次 `prepare()` 不再等待被中止帧的 `BSY` | 只发生在 abort 路径、最多一帧；V4 上旧代码是死锁而非等待。与 embassy-stm32 的 `was_enabled` 保护一致，保留 |
+| `src/flash/v4x7.rs:408-420` | 若 `WRPRTERR` 在 `WRBSY` 未清时置位，会报 `Timeout` 而非 `Protected` | 仍以错误结束，不造成数据损坏；与 `wait_idle` 只在空闲时检查 `wrprterr` 的方式一致 |
+| `src/flash/v4x7.rs` 快速页中途出错 | `finish()` 在 `BSY=1` 时拒绝写寄存器，`recover()` 也等不到 `BSY=0`，驱动需复位才能恢复 | 既有行为：RM 32.5.4 禁止 `BSY=1` 时写寄存器，没有安全中止手段。修复前这是每次快速页写的必然路径，现在只在真实故障时出现 |
+| 主机模型 | 看不到生产代码对 flash 地址空间的裸字存储，因而也不覆盖 store→poll 的 `WRBSY` 置位竞态、真实 IRQ 延迟与电气时序 | 模型只证明状态机边界；`hal_spi`/`hal_flash` 仍是硬件验收依据 |
+
+其余 `BUSY_MASK` 轮询点（`blocking_read`、`prepare_write`、`operation` 前置检查、
+`finish`、`program_page` 的 `FTPG` 前夕、`program_halfword`、`erase_unit`、`recover`）
+都运行在 `BSY` 预期为 0 的阶段，不受快速页装载 bug 影响；`PGSTRT` 之后的 `wait_idle`
+仍正确等待 `BSY` 清零。

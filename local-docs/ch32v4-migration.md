@@ -88,13 +88,14 @@ option bytes）；返回后等 2–3 秒再 attach 即恢复。
    详见 review-conclusion 第 3 节。
 
 对应主机模型：新增 `tools/spi-host-tests`（5 项生命周期回归）和
-`tools/flash-host-tests`（3 项），直接编译生产源码；已用“临时回退旧实现”反向
-验证两者都会失败/挂起。`tools/*-host-tests` 在 macOS 上原生运行，
-`--target x86_64-unknown-linux-gnu` 只是 Linux CI 参考。
+`tools/flash-host-tests`（4 项），直接编译生产源码；已用“临时回退旧实现”反向
+验证两者都会失败（SPI 模型有安全栅栏，不会挂死）。`tools/*-host-tests` 在 macOS
+上原生运行，`--target x86_64-unknown-linux-gnu` 是参考命令使用的 Linux 目标；
+当前没有 CI 任务运行这些 harness。
 
 剩余硬件门槛：PE8/PE9 LED 目视、SysTick 自然 32 位回绕（约 172 秒）、
-USART/SPI 回环接线、I²C EEPROM、外部 I3C/CAN/SD/Ethernet 对端、ADC/DAC 模拟
-测量，以及 USBHS 枚举/回显。
+GPIO 输入/EXTI 接线、USART/SPI 回环接线、I²C EEPROM、外部 I3C/CAN/SD/Ethernet
+对端、option-byte RAM 划分与 HSI 实测频率、USBHS 枚举/回显，以及 ADC/DAC 模拟测量。
 
 ## 实施记录：阶段 0～1
 
@@ -102,7 +103,7 @@ USART/SPI 回环接线、I²C EEPROM、外部 I3C/CAN/SD/Ethernet 对端、ADC/D
 GPIO 输出已上机通过；按用户要求暂缓 GPIO 输入/EXTI 接线测试。
 阶段 3 已完成默认和分频配置的上机验证；阶段 4 的高速时钟树已实现并进入扩展回归，
 阶段 5 的 DMA 后端、阶段 6 的 USART/timer/PWM/I²C/SPI 已实现；2026-11-03
-设备恢复后已完成这些外设的默认板测（结果见下文“板测恢复”一节）；
+设备恢复后已完成这些外设的默认板测（结果见文首“板测恢复”一节）；
 阶段 7 已接入 DAC/RNG/ADC/Flash/CAN，并增加 USBHS device 后端和 CDC 回显例程；
 主机/构建验证与板上验收分别记录，SDIO 等后续外设继续实施。
 
@@ -310,7 +311,7 @@ TIM 的软件扩展同样需要及时处理中断，改用 16 位 TIM 本身并�
 运行：在 `examples/ch32v467` 中执行
 `cargo run --release --bin hal_systick_stress --features embassy`，分频时追加 `,clock-dividers`。
 负向对照追加 `,stress-disable-systick-irq`（预期 FAIL），结束后应重新烧录正常配置。
-RAM 符号 `SYSTICK_STRESS_RESULT`：1=运行中、2=成功、10～17=断言失败；
+RAM 符号 `SYSTICK_STRESS_RESULT`：1=运行中、2=成功、10～18=断言失败；
 `SYSTICK_STRESS_STATS` 依次为轮数、最短/最长等待、TIM2 两秒窗口、Embassy 两秒窗口，单位 µs。
 记录：`/tmp/ch32v4-stress-{default,divided,negative}.log`、
 `/tmp/ch32v4-stress-detached.json`。
@@ -380,8 +381,8 @@ RAM 符号 `SYSTICK_STRESS_RESULT`：1=运行中、2=成功、10～17=断言失�
 - 旧版 `hal_time_scale,clock-slow` 把 HCLK 留在约 39 kHz，之后探针报 protocol error。
   已尝试低速连接、connect-under-reset、WCH 芯片复位及显式 V4x7 family attach，均未恢复。
   未发送解保护或 option-byte 修改命令。
-- 测试例程已改为检查后恢复 HSI /1，并成功构建；尚无法刷入。
-  需要物理复位/恢复连接后验证慢速与 PLL 比例换算，重跑默认/分频/PLL 压力测试和负向对照。
+- 测试例程已改为检查后恢复 HSI /1；已于 2026-11-03 断电擦除后刷入并通过。
+  慢速与 PLL 比例换算、默认/分频/PLL 压力测试和负向对照均已重跑（见文首）。
 - `embassy,clock-pll,stress-natural-wrap` 已准备自然完整周期验证，预计约 172 秒；
   失败码为 18，结果保存在 `NATURAL_WRAP_STATS`。此项尚未上板完成。
   前述 3072 轮是比例换算改动之前的结果，不能代替当前版本回归。
@@ -502,10 +503,9 @@ RAM 符号 `SYSTICK_STRESS_RESULT`：1=运行中、2=成功、10～17=断言失�
 - 新增 `hal_timer`：八个定时器分别用 50/1000/10000Hz 更新 IRQ 对照 Embassy
   时间窗口；六个 PWM 实例三种计数模式与四通道 duty 回读；最后在 TIM1
   全重映射 PE9/PE8 输出 1kHz 互补 PWM，保留示波器验收入口。
-- 当前默认及 PLL+APB 分频配置已构建链接；本轮实际 attach 仍返回 Protocol
-  error，故没有烧录，也不声称 24 组定时器 IRQ 或互补输出已上机通过。
-  恢复调试连接后读取 `TIMER_RESULT`（1 运行、2 通过、10～16 失败）、
-  `TIMER_CASES`（应为 24）、`TIMER_SNAPSHOTS`，再测 PE9/PE8 波形。
+- 当前默认及 PLL+APB 分频配置已构建链接；2026-11-03 默认配置已上板，
+  24 组定时器 IRQ/寄存器检查通过（`TIMER_RESULT=2`、`TIMER_CASES=24`）；
+  互补 PWM 的 PE9/PE8 波形与死区仍需示波器验证。
 - 六个 V407/V467 型号各 blocking/Embassy，以及 V003/V103/V307/H417 四组
   回归共 16 个库构建通过。共享 PWM 修正亦经过该构建矩阵。
 
@@ -604,7 +604,8 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
 ## 实施记录：阶段 7a（DAC/RNG，2026-11-01）
 
 基线为 CH32V407RM V1.3 第 13、30 章及 EVT `ch32v4x7_dac.c`、
-`ch32v4x7_rng.c`、`RCC_RNGCLKConfig`。尚未进行新的板测。
+`ch32v4x7_rng.c`、`RCC_RNGCLKConfig`。2026-11-03 默认配置已上板通过；
+模拟输出精度与熵质量仍需外部测量。
 
 ### DAC
 
@@ -707,8 +708,8 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
   `adc-loopback` 可选连接 PA4→PA0，核对三个 DAC 输出点；精密模拟性能需外部测量。
 - ADC_RESULT：1 运行、2 通过、10～23 失败；ADC_CLOCK_HZ、ADC_SAMPLES 和
   ADC_CANCEL_PENDING 用于复核。异步读取可用 Embassy with_timeout 包裹并安全取消。
-- 当前仍未上板：探针能枚举，连接 CH32V467WEU6 仍返回 Protocol error。用户物理恢复连接后
-  按原顺序补 SysTick 自然回卷及外设验收，不修改 option bytes、保护状态或 RAM/code 分配。
+- 2026-11-03 已完成默认数字路径上板检查（`ADC_RESULT=2`）；PA4→PA0 模拟回环与
+  精度仍未测。不修改 option bytes、保护状态或 RAM/code 分配。
 - 当前支持独立规则转换；注入组、双 ADC 同步、模拟看门狗和硬件触发 API 尚未实现。
   后续继续 Flash、USBHS、CAN、SDIO、Ethernet、I3C 及专用外设。
 
@@ -744,8 +745,8 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
   构建链接通过。ELF 中擦写入口位于零等待区，预留段和固件数据不重叠。
   记录：/tmp/ch32v4-flash-host.log、/tmp/ch32v4-flash-matrix.log、
   /tmp/ch32v4-flash-example-{read,write,pll}.log、/tmp/ch32v4-flash-elf-layout.txt。
-- 主机模型不能证明物理 Flash 编程、ECC、真实耗时和耐久性；当前探针连接仍报
-  Protocol error，实际板测待恢复后进行。后续推进 CAN、USBHS、SDIO、Ethernet、I3C 等。
+- 主机模型不能证明物理 Flash 编程、ECC、真实耗时和耐久性；2026-11-03 只读与
+  `flash-write-test` 已上板通过，耐久性仍未测。后续推进 CAN、USBHS、SDIO、Ethernet、I3C 等。
 
 ## 实施记录：阶段 7d（CAN，2026-11-01）
 
@@ -878,9 +879,10 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
   V003/V103/V307/H417，共 16 组 release 库构建通过。`hal_sdio` 的默认、4 位、重映射、
   PLL 高速、APB 分频、bypass、RET6 共 7 组 release 构建通过。
 - 新增只读板测例程 `hal_sdio`，读取卡信息、SD Status、单/多块数据并比较，检查取消后的
-  重新初始化及 Drop 后门控/DMA 停止。无卡返回独立结果，不记作读卡通过。设备仍不能 attach，
-  本阶段没有 SDIO 上机结果。真实卡兼容性、总线时序、信号质量和写卡均未验证；eMMC、8 位、
-  SDIO functions、1.8 V/UHS 暂未实现。后续继续 Ethernet、I3C 和其他专用外设。
+  重新初始化及 Drop 后门控/DMA 停止。无卡返回独立结果，不记作读卡通过。2026-11-03
+  已上板运行，无卡时报告 `SDIO_RESULT=2`（no card response）。真实卡兼容性、总线时序、
+  信号质量和写卡均未验证；eMMC、8 位、SDIO functions、1.8 V/UHS 暂未实现。
+  后续继续 Ethernet、I3C 和其他专用外设。
 
 ### 下一阶段：Ethernet 基线审查
 
@@ -932,7 +934,8 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
   及 Drop。主机 peer 脚本的 10 次/4466 字节回显、超时和损坏注入路径通过 socket 模型。
 - 新增 `hal_eth`：无网线先检查 PHY ID，再等待链路并回显自定义 EtherType 帧；
   `eth_echo_test.py` 默认验证 100 帧，最大 1500 字节负载。GPIO LEDs 不占用，PHY jack/
-  磁性器件和 Linux 有线接口需准备。当前调试连接未恢复，没有 PHY 实测或真实链路/帧收发结果。
+  磁性器件和 Linux 有线接口需准备。2026-11-03 已读到 PHY ID `0x73719011`；
+  真实链路/帧收发仍未测。
   10/100M、半双工、协商/复位时序、DMA 总线时序、FES/bit 13 冲突均待硬件验收。
 - 暂不提供 MAC/PHY loopback API、PTP、硬件 checksum、WoL、VLAN/jumbo frame 和 TCP/IP
   栈例程；后续继续 I3C、PSRAM/FSMC、LTDC/ARGB 等专用外设及整体验收。
@@ -967,8 +970,8 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
 - 主机测试直接编译生产后端及 PAC，覆盖控制/数据 FIFO、CCC、ENTDAA、短读、错误、
   超时、取消、复用与 Drop。新增 hal_i3c：默认只做寄存器生命周期检查；i3c-daa
   必须显式提供审核后的 TIMINGR0/1，才运行 RSTDAA → ENTDAA → GETPID。
-- 未上板，不将模型/构建通过当作通信验收。现有探针连接故障尚无恢复验证。
-  板测需先恢复设备连接，准备原生 I3C target、PB10/PB11 与共地及匹配的上拉。
+- 2026-11-03 已完成寄存器/生命周期上板检查；外部通信未验证，不将模型/构建通过
+  当作通信验收。真实设备测试需准备原生 I3C target、PB10/PB11 与共地及匹配的上拉。
   原有 SysTick 自然回卷验收仍保留。
 - 下一步为 DMA1 CH4 TX / CH5 RX 接入与回归（控制 FIFO 为 CH8，独立评估是否需要）；
   FIFO 中断后端尚不能据此宣称高速 SDR 能力。之后补真实设备与中断压力验收，
@@ -996,8 +999,9 @@ DAC 当前沿用 `dac_h4` 布局，不能仅解除旧驱动 gate；双通道时�
 - `hal_i2c` 默认 Embassy 配置和 PLL/APB 分频 + `i2c-eeprom` 两组 release
   构建链接通过。格式检查及 diff 检查通过；本轮未改动 I²C 生产驱动逻辑。
 - 模型在请求使能时模拟 DMA 完成，不能证明真实请求路由、IRQ 延迟和 ACK/NACK 波形。
-  板测仍需恢复调试连接，准备 3.3V 24C02（0x50）、PB6/PB7、共地及外部上拉；
-  用逻辑分析仪/示波器核验 100/400kHz、repeated START、读尾 NACK 和 STOP。
+  2026-11-03 默认配置已上板（地址探测/清理）；外部设备测试需准备 3.3V 24C02（0x50）、
+  PB6/PB7、共地及外部上拉；用逻辑分析仪/示波器核验 100/400kHz、repeated START、
+  读尾 NACK 和 STOP。
 
 ### 上游已有实现及复用建议
 

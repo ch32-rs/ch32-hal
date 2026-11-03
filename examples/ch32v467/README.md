@@ -223,9 +223,10 @@ opted into WCH-Link's automatic unprotect-on-attach path.
 
 The earlier low-HCLK firmware left the probe unable to attach (`81 55 01 01`).
 `wlink erase --method power-off --chip CH32V4X7` recovered the board without
-touching option bytes, and the examples were re-run. Timing-sensitive results
-were collected by flashing (`probe-rs download`), resetting and reading RAM
-markers afterwards, because a live RTT/debug attach halts the core.
+touching option bytes, and the supported examples were re-run (USBHS, EXTI and
+the natural-wrap variant were not). Timing-sensitive results were collected by
+flashing (`probe-rs download`), resetting and reading RAM markers afterwards,
+because a live RTT/debug attach halts the core.
 
 - PAC-only `isa`, `cpuid`, `rtt`, and HAL `hal_init`, `hal_blinky`, `hal_rcc`
   (9 HSI + 14 HSE configurations), `hal_embassy`, `hal_time_scale` (default,
@@ -244,8 +245,9 @@ markers afterwards, because a live RTT/debug attach halts the core.
   both boundaries.
 
 Still requiring hardware or equipment: PE8/PE9 LED observation, the natural
-32-bit SysTick wrap, USART RX/loopback wiring, USBHS enumeration/echo, external
-I2C/SD/Ethernet peers, and analog measurements.
+32-bit SysTick wrap, GPIO input/EXTI wiring, USART/SPI loopback wiring, USBHS
+enumeration/echo, an external I2C EEPROM, external I3C/CAN/SD/Ethernet peers,
+option-byte RAM split and measured HSI frequency, and analog measurements.
 
 SDI did not work on the user's board; an address/handshake mismatch is a
 hypothesis, not a diagnosed cause. These examples no longer touch SDI registers.
@@ -501,8 +503,9 @@ CARGO_TARGET_DIR=/tmp/ch32v4-i2c-host-target cargo test \
 
 These tests compile the current production driver and generated local PAC. They
 model bus events and DMA completion and do not replace external-device testing.
-`--target x86_64-unknown-linux-gnu` is the Linux CI reference; the harness also
-runs natively on macOS without it. SPI and Flash have equivalent host models in
+`--target x86_64-unknown-linux-gnu` is the Linux target of the reference
+command (no CI job currently runs these harnesses); the harness also runs
+natively on macOS without it. SPI and Flash have equivalent host models in
 `tools/spi-host-tests` and `tools/flash-host-tests`, covering the two boundary
 bugs fixed on 2026-11-03.
 
@@ -524,8 +527,9 @@ It writes the EEPROM address pointer only; it does not write nonvolatile data.
 `I2C_DEVICE_RESULT=2` marks completion of those checks. Measure SCL/SDA with a
 scope or logic analyzer for electrical timing and ACK verification.
 
-Both modes have built and linked locally; hardware runs remain pending while
-the debugger attach reports a protocol error.
+Both modes have built and linked locally. The default configuration passed its
+address-probe and cleanup checks on hardware on 2026-11-03; external-device
+(`i2c-eeprom`) testing remains pending.
 
 ## HAL timer/PWM validation
 
@@ -545,8 +549,9 @@ failure; `TIMER_CASES` should reach 24; `TIMER_SNAPSHOTS` contains frequency,
 PSC, ARR and the last interrupt count for each timer. Allow at least 4 seconds
 without continuous debugger polling before inspecting results.
 
-The example has built and linked locally. Hardware execution remains pending
-because the probe currently reports a protocol error when attaching.
+The example has built and linked locally. The 24 timer/PWM register cases passed
+on hardware on 2026-11-03; PE9/PE8 waveform and dead-time verification still
+needs a scope.
 
 ## HAL SPI validation
 
