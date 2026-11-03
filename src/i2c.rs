@@ -118,14 +118,16 @@ struct Timing {
 fn timing(input: Hertz, frequency: Hertz, duty: Duty) -> Timing {
     assert!(frequency.0 > 0 && frequency.0 <= 400_000);
     let fast = frequency.0 > 100_000;
+    // The legacy families have always stored the truncated megahertz value in
+    // the 6-bit FREQ/TRISE fields. CH32V303/V305/V307 run at 144 MHz and
+    // CH32H417 at 100/120 MHz, so rejecting values above 63 MHz here would
+    // panic in the constructor on those chips. Keep the historical truncation
+    // for them; CH32V4x7 clamps to the range documented for its I2C block.
     let input_mhz = input.0 / 1_000_000;
     #[cfg(ch32v4)]
-    let input_mhz = {
-        assert!(input_mhz >= 4);
-        input_mhz.min(60)
-    };
-    #[cfg(not(ch32v4))]
-    assert!(input_mhz >= (if fast { 4 } else { 2 }) && input_mhz <= 63);
+    assert!(input_mhz >= 4);
+    #[cfg(ch32v4)]
+    let input_mhz = input_mhz.min(60);
     let factor = if !fast {
         2
     } else if duty == Duty::Duty2_1 {
