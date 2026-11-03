@@ -1043,10 +1043,13 @@ fn baudrate_divisor(clock_hz: u32, baudrate: u32) -> Result<u32, ConfigError> {
     if baudrate == 0 {
         return Err(ConfigError::BaudrateTooLow);
     }
-    if baudrate > clock_hz / 16 {
+    // BRR holds USARTDIV in 4.16 fixed point, and the hardware requires
+    // USARTDIV >= 1 (BRR >= 0x10), which the documented maximum baud rate
+    // equals: 3 Mbps at 48 MHz, 4.5 at 72, 9 at 144 and 12.5 at 200.
+    let divisor = (u64::from(clock_hz) + u64::from(baudrate) / 2) / u64::from(baudrate);
+    if divisor < 0x10 {
         return Err(ConfigError::BaudrateTooHigh);
     }
-    let divisor = (u64::from(clock_hz) + u64::from(baudrate) / 2) / u64::from(baudrate);
     if divisor > 0xffff {
         return Err(ConfigError::BaudrateTooLow);
     }

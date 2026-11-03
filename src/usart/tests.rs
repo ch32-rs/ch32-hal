@@ -15,7 +15,7 @@ fn baudrate_dividers_match_wide_rounding_at_all_clock_rates() {
         ] {
             let expected = (u64::from(clock) + u64::from(baudrate) / 2) / u64::from(baudrate);
             let actual = baudrate_divisor(clock, baudrate);
-            if baudrate > clock / 16 {
+            if expected < 0x10 {
                 assert_eq!(actual, Err(ConfigError::BaudrateTooHigh));
             } else if expected > 0xffff {
                 assert_eq!(actual, Err(ConfigError::BaudrateTooLow));
@@ -27,12 +27,17 @@ fn baudrate_dividers_match_wide_rounding_at_all_clock_rates() {
     assert_eq!(baudrate_divisor(200_000_000, 115200), Ok(1736));
     assert_eq!(baudrate_divisor(200_000_000, 12_500_000), Ok(16));
     assert_eq!(baudrate_divisor(20_000_000, 20_000_000 / 65535 + 1), Ok(65359));
+    assert_eq!(baudrate_divisor(16_000_000, 1_000_001), Ok(16));
+    assert_eq!(
+        baudrate_divisor(16_000_000, 16_000_001),
+        Err(ConfigError::BaudrateTooHigh)
+    );
     assert_eq!(baudrate_divisor(20_000_000, 0), Err(ConfigError::BaudrateTooLow));
 }
 
 #[test]
 fn invalid_baudrates_leave_registers_unchanged() {
-    for baudrate in [0, 1, 305, 12_500_001, u32::MAX] {
+    for baudrate in [0, 1, 305, 13_000_000, u32::MAX] {
         let mut words = [0x5a5a_5a5au32; 8];
         let registers = unsafe { pac::usart::Usart::from_ptr(words.as_mut_ptr().cast()) };
         let mut config = Config::default();
