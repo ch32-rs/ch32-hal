@@ -26,8 +26,6 @@ cargo build --release --bins --no-default-features --features ch32v467vet6
 
 ### HAL stages 0–1
 
-The migration plan and validation record are in
-[`../../local-docs/ch32v4-migration.md`](../../local-docs/ch32v4-migration.md).
 The Git PAC revision is fixed in both Cargo manifests until the corrected
 V4x7 metadata is released. HAL dependencies require qingke/qingke-rt 0.8.3
 or newer for V3V. The host models under `tools/` still require the generated
