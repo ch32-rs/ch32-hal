@@ -1,9 +1,18 @@
 use core::future::Future;
 use core::task::{Context, Poll};
+use std::sync::{Mutex, MutexGuard};
 
 use super::*;
 use crate::pac;
 use crate::spi_model as model;
+
+/// The model and the RAM-backed registers are process-wide singletons.
+/// Serialize tests here so a plain `cargo test` cannot race them.
+static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock() -> MutexGuard<'static, ()> {
+    TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner())
+}
 
 impl SckPin<peripherals::SPI1, 0> for crate::gpio::AnyPin {}
 impl MosiPin<peripherals::SPI1, 0> for crate::gpio::AnyPin {}
@@ -54,6 +63,7 @@ fn poll_once<F: Future>(future: F) -> Poll<F::Output> {
 /// the status register in that state.
 #[test]
 fn blocking_flush_is_noop_while_disabled() {
+    let _guard = lock();
     let mut spi = driver();
     assert!(!pac::SPI1.ctlr1().read().spe());
     let before = model::statr_reads();
@@ -65,6 +75,7 @@ fn blocking_flush_is_noop_while_disabled() {
 /// before it enables `SPE`; this is the exact path that used to deadlock.
 #[test]
 fn blocking_write_starts_with_a_disabled_peripheral() {
+    let _guard = lock();
     let mut spi = driver();
     assert!(!pac::SPI1.ctlr1().read().spe());
     assert_eq!(spi.blocking_write(&[0xa5u8]), Ok(()));
@@ -73,6 +84,7 @@ fn blocking_write_starts_with_a_disabled_peripheral() {
 /// Once enabled, `blocking_flush` still waits for `TXE && !BSY`.
 #[test]
 fn blocking_flush_waits_when_enabled() {
+    let _guard = lock();
     let mut spi = driver();
     pac::SPI1.ctlr1().modify(|w| w.set_spe(true));
     let before = model::statr_reads();
@@ -83,6 +95,7 @@ fn blocking_flush_waits_when_enabled() {
 /// The async `flush` has the same boundary as the blocking one.
 #[test]
 fn async_flush_is_ready_while_disabled() {
+    let _guard = lock();
     let mut spi = async_driver();
     assert!(!pac::SPI1.ctlr1().read().spe());
     assert_eq!(poll_once(spi.flush()), Poll::Ready(Ok(())));
@@ -91,6 +104,7 @@ fn async_flush_is_ready_while_disabled() {
 /// Enabled and busy: the async flush must stay pending until `BSY` clears.
 #[test]
 fn async_flush_polls_status_when_enabled() {
+    let _guard = lock();
     let mut spi = async_driver();
     pac::SPI1.ctlr1().modify(|w| w.set_spe(true));
     model::set_busy(true);

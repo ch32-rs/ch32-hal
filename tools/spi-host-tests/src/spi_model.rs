@@ -17,18 +17,26 @@ const RXNE: u32 = 1 << 0;
 const TXE: u32 = 1 << 1;
 const BSY: u32 = 1 << 7;
 
+/// After this many disabled-state polls, the model reports `TXE=1`. This is a
+/// safety fence, not hardware behaviour: it turns the regression's infinite
+/// hang into a failing assertion so the test binary cannot wedge CI.
+const DISABLED_POLL_LIMIT: usize = 1_000;
+
 pub struct Model {
     /// `STATR.RXNE`: set at reset, cleared when `DATAR` is read.
     pub rxne: bool,
     /// `STATR.BSY`, controlled by the test.
     pub bsy: bool,
     pub statr_reads: usize,
+    /// `STATR` reads observed while `SPE=0`.
+    pub disabled_polls: usize,
 }
 
 pub static MODEL: Mutex<Model> = Mutex::new(Model {
     rxne: true,
     bsy: false,
     statr_reads: 0,
+    disabled_polls: 0,
 });
 
 fn bases() -> [usize; 3] {
@@ -64,6 +72,7 @@ pub fn reset() {
         rxne: true,
         bsy: false,
         statr_reads: 0,
+        disabled_polls: 0,
     };
 }
 
@@ -86,7 +95,14 @@ pub fn read(address: usize) {
             model.statr_reads += 1;
             // CH32V467 measurement: TXE is only meaningful while SPE=1.
             let spe = unsafe { word(base, CTLR1) } & SPE != 0;
-            let value = (model.rxne as u32 * RXNE) | (spe as u32 * TXE) | (model.bsy as u32 * BSY);
+            let mut txe = spe;
+            if !spe {
+                model.disabled_polls += 1;
+                if model.disabled_polls > DISABLED_POLL_LIMIT {
+                    txe = true;
+                }
+            }
+            let value = (model.rxne as u32 * RXNE) | (txe as u32 * TXE) | (model.bsy as u32 * BSY);
             unsafe { set_word(base, STATR, value) };
         }
         DATAR => model.rxne = false,

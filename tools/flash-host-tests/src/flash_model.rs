@@ -27,6 +27,10 @@ pub struct Model {
     pub wrprterr: bool,
     /// Number of `STATR` reads that observed `BSY=1`.
     pub busy_reads: usize,
+    /// True once `FTPG` was written, i.e. the 256-byte load has started.
+    pub load_started: bool,
+    /// If set, `WRBSY` stays high from `FTPG` until `PGSTRT`.
+    stall_wrbsy_after_ftpg: bool,
 }
 
 pub static MODEL: Mutex<Model> = Mutex::new(Model {
@@ -35,6 +39,8 @@ pub static MODEL: Mutex<Model> = Mutex::new(Model {
     eop: false,
     wrprterr: false,
     busy_reads: 0,
+    load_started: false,
+    stall_wrbsy_after_ftpg: false,
 });
 
 fn base() -> usize {
@@ -57,6 +63,8 @@ pub fn reset() {
         eop: false,
         wrprterr: false,
         busy_reads: 0,
+        load_started: false,
+        stall_wrbsy_after_ftpg: false,
     };
 }
 
@@ -64,13 +72,36 @@ pub fn set_busy(bsy: bool) {
     MODEL.lock().unwrap().bsy = bsy;
 }
 
-/// Hold the "page buffer is accepting a word" flag so a wait on it times out.
-pub fn stall_wrbsy(stall: bool) {
-    MODEL.lock().unwrap().wrbsy = stall;
+/// Drive `STATR.WRBSY` directly, for the unit-level wait tests.
+pub fn set_wrbsy(wrbsy: bool) {
+    MODEL.lock().unwrap().wrbsy = wrbsy;
+}
+
+/// Set or clear `CTLR.LOCK|FLOCK`, so `unlock()` can be exercised.
+pub fn set_locked(locked: bool) {
+    let value = unsafe { word(CTLR) };
+    let value = if locked {
+        value | LOCK | FLOCK
+    } else {
+        value & !(LOCK | FLOCK)
+    };
+    unsafe { set_word(CTLR, value) };
+}
+
+/// Keep `WRBSY` high from `FTPG` onward, so the per-word wait times out.
+///
+/// This cannot be modelled by presetting `WRBSY`: `program_page` starts with a
+/// `BSY|WRBSY` idle wait that would time out before `FTPG` is ever written.
+pub fn stall_wrbsy_after_ftpg(stall: bool) {
+    MODEL.lock().unwrap().stall_wrbsy_after_ftpg = stall;
 }
 
 pub fn busy_reads() -> usize {
     MODEL.lock().unwrap().busy_reads
+}
+
+pub fn load_started() -> bool {
+    MODEL.lock().unwrap().load_started
 }
 
 pub fn read(address: usize) {
@@ -107,11 +138,16 @@ pub fn write(address: usize, value: u32) -> bool {
         CTLR => {
             if value & PGSTRT != 0 {
                 model.bsy = false;
+                model.wrbsy = false;
                 model.eop = true;
             } else if value & FTPG != 0 {
                 // Fast page programming starts; BSY stays high for the whole
                 // 256-byte load, until PGSTRT is set.
                 model.bsy = true;
+                model.load_started = true;
+                if model.stall_wrbsy_after_ftpg {
+                    model.wrbsy = true;
+                }
             }
         }
         _ => {}
