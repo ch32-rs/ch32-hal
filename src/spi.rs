@@ -282,6 +282,12 @@ impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
 
     /// Wait for the final bit to leave the peripheral.
     pub fn blocking_flush(&mut self) -> Result<(), Error> {
+        // A disabled peripheral has no transfer in flight. On CH32V4x7
+        // STATR.TXE reads 0 while SPE=0 (measured on CH32V467), so polling it
+        // before the first `prepare` enabled SPE would never complete.
+        if !T::REGS.ctlr1().read().spe() {
+            return Ok(());
+        }
         loop {
             let status = T::REGS.statr().read();
             if let Err(error) = check_error_flags(&status) {
@@ -624,6 +630,11 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
 
     /// Wait until the transmit buffer and shift register are empty.
     pub async fn flush(&mut self) -> Result<(), Error> {
+        // Same boundary as `blocking_flush`: while SPE=0 the CH32V4x7 TXE
+        // flag is not meaningful, and no transfer can be in flight.
+        if !T::REGS.ctlr1().read().spe() {
+            return Ok(());
+        }
         poll_fn(|cx| {
             let status = T::REGS.statr().read();
             if let Err(error) = check_error_flags(&status) {
