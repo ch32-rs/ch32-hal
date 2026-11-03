@@ -191,9 +191,10 @@ default. No flashing is done by `cargo build`.
 
 The local `../../../probe-rs` checkout now recognizes WCH-Link family `0xA6`
 and includes `CH32V4X7_Series.yaml`: six V407/V467 packages, each with 200 KiB
-or 136 KiB RAM, plus generated V4x7 Flash algorithms. The local build was installed with `cargo install --path probe-rs-tools
---bin probe-rs --force --locked`; PATH now resolves to
-`/Users/mono/.cargo/bin/probe-rs`, and the default Cargo runner can use it.
+or 136 KiB RAM, plus generated V4x7 Flash algorithms. The local build was
+installed with `cargo install --path probe-rs-tools --bin probe-rs --force
+--locked`; the installed `probe-rs` in `~/.cargo/bin` is what the default
+Cargo runner resolves from PATH.
 To explicitly select the checkout build instead, use this runner override:
 
 ```sh
