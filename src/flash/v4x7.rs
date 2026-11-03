@@ -16,6 +16,7 @@ pub const HALFWORD_WRITE_SIZE: usize = 2;
 pub const ERASED_HALFWORD: u16 = 0xe339;
 const NOR_XOR: [u8; 2] = (ERASED_HALFWORD ^ u16::MAX).to_le_bytes();
 const BUSY_MASK: u32 = 3;
+const WRBSY_MASK: u32 = 1 << 1;
 const CLEAR_FLAGS: u32 = (1 << 4) | (1 << 5);
 const OPERATION_MASK: u32 = 1 | (1 << 1) | (1 << 6) | (1 << 16) | (1 << 18) | (1 << 21);
 
@@ -400,6 +401,24 @@ fn wait_idle(limit: u32) -> Result<(), Error> {
     Err(Error::Timeout)
 }
 
+/// Fast page programming keeps BSY set for the whole 256-byte load; each
+/// 32-bit store only waits for WRBSY to clear (RM 32.5.6 step 6). Waiting for
+/// BSY here would spin until PGSTRT, which is never reached.
+#[inline(always)]
+fn wait_write_buffer(limit: u32) -> Result<(), Error> {
+    for _poll in 0..limit {
+        let status = pac::FLASH.statr().read();
+        if status.0 & WRBSY_MASK == 0 {
+            return if status.wrprterr() {
+                Err(Error::Protected)
+            } else {
+                Ok(())
+            };
+        }
+    }
+    Err(Error::Timeout)
+}
+
 #[inline(always)]
 fn wait_enhanced(enabled: bool, limit: u32) -> Result<(), Error> {
     for _poll in 0..limit {
@@ -444,7 +463,7 @@ unsafe fn program_page(address: usize, bytes: &[u8], limit: u32) -> Result<(), E
         let value = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         write_volatile((address + index * 4) as *mut u32, value);
         fence(Ordering::SeqCst);
-        wait_idle(limit)?;
+        wait_write_buffer(limit)?;
     }
     regs.ctlr().modify(|reg| reg.set_pgstrt(true));
     wait_idle(limit)?;
