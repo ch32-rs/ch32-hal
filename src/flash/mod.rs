@@ -12,8 +12,16 @@ mod v4x7;
 #[cfg(flash_v4x7)]
 pub use v4x7::*;
 
+// Re-declare the legacy geometry instead of re-exporting the PAC constants:
+// the current metapac marks them deprecated in favor of `MEMORY_LAYOUT`, and
+// re-exporting would push that warning into every non-V4 build (including
+// downstream crates that deny warnings). The values are unchanged.
 #[cfg(not(flash_v4x7))]
-pub use crate::pac::{FLASH_SIZE, WRITE_SIZE};
+#[allow(deprecated)]
+pub const FLASH_SIZE: usize = crate::pac::FLASH_SIZE;
+#[cfg(not(flash_v4x7))]
+#[allow(deprecated)]
+pub const WRITE_SIZE: usize = crate::pac::WRITE_SIZE;
 
 #[cfg(flash_v4x7)]
 pub const FLASH_SIZE: usize = {
