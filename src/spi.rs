@@ -13,6 +13,7 @@ use core::ptr;
 use core::task::Poll;
 
 use embassy_futures::join::join;
+#[cfg(spi_v4x7)]
 use embassy_futures::select::{select, Either};
 use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::spi::{Mode, Phase, Polarity, MODE_0};
@@ -181,7 +182,10 @@ impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
     ) -> Self {
         let regs = T::REGS;
 
-        let div = calculate_baud_rate(T::frequency().0, config.frequency.0).expect("unrepresentable SPI frequency");
+        // Frequencies below `clock / 256` are unrepresentable. Clamping to the
+        // slowest divisor matches the historical behavior of the existing
+        // families instead of panicking the constructor.
+        let div = calculate_baud_rate(T::frequency().0, config.frequency.0).unwrap_or(BaudRate::DIV_256);
 
         let cpha = config.raw_phase();
         let cpol = config.raw_polarity();
@@ -231,7 +235,8 @@ impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
 
         let lsbfirst = config.lsb_first();
 
-        let br = calculate_baud_rate(T::frequency().0, config.frequency.0).ok_or(())?;
+        // Same clamping policy as the constructor.
+        let br = calculate_baud_rate(T::frequency().0, config.frequency.0).unwrap_or(BaudRate::DIV_256);
         let _cleanup = OnDrop::new(|| cleanup(T::REGS));
         self.blocking_flush().map_err(|_| ())?;
         T::REGS.ctlr1().modify(|w| w.set_spe(false));
@@ -388,10 +393,6 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         miso: Peri<'d, if_remap!(impl MisoPin<T, REMAP>)>,
         config: Config,
     ) -> Self {
-        assert!(
-            calculate_baud_rate(T::frequency().0, config.frequency.0).is_some(),
-            "unrepresentable SPI frequency"
-        );
         apply_remap!();
 
         Self::new_inner(
@@ -412,10 +413,6 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         miso: Peri<'d, if_remap!(impl MisoPin<T, REMAP>)>,
         config: Config,
     ) -> Self {
-        assert!(
-            calculate_baud_rate(T::frequency().0, config.frequency.0).is_some(),
-            "unrepresentable SPI frequency"
-        );
         apply_remap!();
 
         Self::new_inner(
@@ -436,10 +433,6 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         mosi: Peri<'d, if_remap!(impl MosiPin<T, REMAP>)>,
         config: Config,
     ) -> Self {
-        assert!(
-            calculate_baud_rate(T::frequency().0, config.frequency.0).is_some(),
-            "unrepresentable SPI frequency"
-        );
         apply_remap!();
 
         Self::new_inner(
@@ -461,10 +454,6 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
         mosi: Peri<'d, if_remap!(impl MosiPin<T, REMAP>)>,
         config: Config,
     ) -> Self {
-        assert!(
-            calculate_baud_rate(T::frequency().0, config.frequency.0).is_some(),
-            "unrepresentable SPI frequency"
-        );
         apply_remap!();
 
         Self::new_inner(
@@ -491,10 +480,6 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Self {
-        assert!(
-            calculate_baud_rate(T::frequency().0, config.frequency.0).is_some(),
-            "unrepresentable SPI frequency"
-        );
         apply_remap!();
 
         Self::new_inner(
@@ -517,10 +502,6 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Self {
-        assert!(
-            calculate_baud_rate(T::frequency().0, config.frequency.0).is_some(),
-            "unrepresentable SPI frequency"
-        );
         apply_remap!();
 
         Self::new_inner(
@@ -544,10 +525,6 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Self {
-        assert!(
-            calculate_baud_rate(T::frequency().0, config.frequency.0).is_some(),
-            "unrepresentable SPI frequency"
-        );
         apply_remap!();
         Self::new_inner(
             peri,
@@ -569,10 +546,6 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         tx_dma: Peri<'d, impl TxDma<T>>,
         config: Config,
     ) -> Self {
-        assert!(
-            calculate_baud_rate(T::frequency().0, config.frequency.0).is_some(),
-            "unrepresentable SPI frequency"
-        );
         apply_remap!();
 
         Self::new_inner(
@@ -596,10 +569,6 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         tx_dma: Peri<'d, impl TxDma<T>>,
         config: Config,
     ) -> Self {
-        assert!(
-            calculate_baud_rate(T::frequency().0, config.frequency.0).is_some(),
-            "unrepresentable SPI frequency"
-        );
         apply_remap!();
 
         Self::new_inner(
@@ -613,16 +582,18 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         )
     }
 
+    // Only CH32V4x7 has an SPI error interrupt binding in the constructors.
+    // Polling this future on the other families would wake the executor
+    // continuously for the whole DMA transfer, so they await the transfer and
+    // check the error flags once afterwards instead.
+    #[cfg(spi_v4x7)]
     async fn wait_error() -> Error {
         poll_fn(|cx| {
             T::state().waker.register(cx.waker());
             if let Err(error) = check_error_flags(&T::REGS.statr().read()) {
                 return Poll::Ready(error);
             }
-            #[cfg(spi_v4x7)]
             T::REGS.ctlr2().modify(|w| w.set_errie(true));
-            #[cfg(not(spi_v4x7))]
-            cx.waker().wake_by_ref();
             Poll::Pending
         })
         .await
@@ -672,9 +643,12 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         };
         T::REGS.ctlr2().modify(|w| w.set_txdmaen(true));
         T::REGS.ctlr1().modify(|w| w.set_spe(true));
+        #[cfg(spi_v4x7)]
         if let Either::First(error) = select(Self::wait_error(), transfer).await {
             return Err(error);
         }
+        #[cfg(not(spi_v4x7))]
+        transfer.await;
         self.flush().await
     }
 
@@ -710,9 +684,12 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
                 w.set_txdmaen(true);
             });
             T::REGS.ctlr1().modify(|w| w.set_spe(true));
+            #[cfg(spi_v4x7)]
             if let Either::First(error) = select(Self::wait_error(), join(transmit, receive)).await {
                 return Err(error);
             }
+            #[cfg(not(spi_v4x7))]
+            join(transmit, receive).await;
         } else {
             let mut sent = 0;
             let transmit = poll_fn(|cx| {
@@ -731,9 +708,12 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
             });
             T::REGS.ctlr2().modify(|w| w.set_rxdmaen(true));
             T::REGS.ctlr1().modify(|w| w.set_spe(true));
+            #[cfg(spi_v4x7)]
             if let Either::First(error) = select(Self::wait_error(), join(transmit, receive)).await {
                 return Err(error);
             }
+            #[cfg(not(spi_v4x7))]
+            join(transmit, receive).await;
         }
         self.flush().await
     }
@@ -770,9 +750,12 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
             w.set_txdmaen(true);
         });
         T::REGS.ctlr1().modify(|w| w.set_spe(true));
+        #[cfg(spi_v4x7)]
         if let Either::First(error) = select(Self::wait_error(), join(transmit, receive)).await {
             return Err(error);
         }
+        #[cfg(not(spi_v4x7))]
+        join(transmit, receive).await;
         self.flush().await
     }
 
