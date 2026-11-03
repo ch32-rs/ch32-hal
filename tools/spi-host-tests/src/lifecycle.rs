@@ -6,8 +6,8 @@ use super::*;
 use crate::pac;
 use crate::spi_model as model;
 
-/// The model and the RAM-backed registers are process-wide singletons.
-/// Serialize tests here so a plain `cargo test` cannot race them.
+// The model and the RAM-backed registers are process-wide singletons.
+// Serialize tests here so a plain `cargo test` cannot race them.
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock() -> MutexGuard<'static, ()> {
@@ -38,8 +38,8 @@ impl TxDma<peripherals::SPI1> for crate::dma::AnyChannel {
     fn request(&self) {}
 }
 
-/// The async `flush` lives on `Spi<_, Async>`. The DMA channel is never used
-/// by `flush`; it only satisfies the constructor.
+// The async `flush` lives on `Spi<_, Async>`. The DMA channel is never used
+// by `flush`; it only satisfies the constructor.
 fn async_driver() -> Spi<'static, peripherals::SPI1, Async> {
     model::reset();
     Spi::new_txonly::<0>(
@@ -58,9 +58,9 @@ fn poll_once<F: Future>(future: F) -> Poll<F::Output> {
     future.as_mut().poll(&mut cx)
 }
 
-/// Regression for the `hal_spi` hang measured on CH32V467: the constructor
-/// leaves `SPE=0`, where `STATR.TXE` reads 0. `blocking_flush` must not poll
-/// the status register in that state.
+// Regression for the `hal_spi` hang measured on CH32V467: the constructor
+// leaves `SPE=0`, where `STATR.TXE` reads 0. `blocking_flush` must not poll
+// the status register in that state.
 #[test]
 fn blocking_flush_is_noop_while_disabled() {
     let _guard = lock();
@@ -71,8 +71,8 @@ fn blocking_flush_is_noop_while_disabled() {
     assert_eq!(model::statr_reads(), before);
 }
 
-/// The first `blocking_write` goes through `prepare()` -> `blocking_flush()`
-/// before it enables `SPE`; this is the exact path that used to deadlock.
+// The first `blocking_write` goes through `prepare()` -> `blocking_flush()`
+// before it enables `SPE`; this is the exact path that used to deadlock.
 #[test]
 fn blocking_write_starts_with_a_disabled_peripheral() {
     let _guard = lock();
@@ -81,7 +81,7 @@ fn blocking_write_starts_with_a_disabled_peripheral() {
     assert_eq!(spi.blocking_write(&[0xa5u8]), Ok(()));
 }
 
-/// Once enabled, `blocking_flush` still waits for `TXE && !BSY`.
+// Once enabled, `blocking_flush` still waits for `TXE && !BSY`.
 #[test]
 fn blocking_flush_waits_when_enabled() {
     let _guard = lock();
@@ -92,7 +92,7 @@ fn blocking_flush_waits_when_enabled() {
     assert!(model::statr_reads() > before);
 }
 
-/// The async `flush` has the same boundary as the blocking one.
+// The async `flush` has the same boundary as the blocking one.
 #[test]
 fn async_flush_is_ready_while_disabled() {
     let _guard = lock();
@@ -101,7 +101,7 @@ fn async_flush_is_ready_while_disabled() {
     assert_eq!(poll_once(spi.flush()), Poll::Ready(Ok(())));
 }
 
-/// Enabled and busy: the async flush must stay pending until `BSY` clears.
+// Enabled and busy: the async flush must stay pending until `BSY` clears.
 #[test]
 fn async_flush_polls_status_when_enabled() {
     let _guard = lock();

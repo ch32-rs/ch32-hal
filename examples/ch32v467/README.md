@@ -253,9 +253,10 @@ option-byte RAM split and measured HSI frequency, and analog measurements.
 SDI did not work on the user's board; an address/handshake mismatch is a
 hypothesis, not a diagnosed cause. These examples no longer touch SDI registers.
 
-The PAC-only examples explicitly select **HSI 20 MHz, HCLK /1** and use a polled SysTick.
-They do not need an external crystal, configure PLL/PSRAM, or enable peripheral
-interrupts. Timing is nominal until measured on hardware, including log overhead.
+The PAC-only examples explicitly select **HSI 20 MHz, HCLK /1** and use a
+polled SysTick. They do not need an external crystal, configure PLL/PSRAM, or
+enable peripheral interrupts. Timing is nominal until measured on hardware,
+including log overhead.
 
 ## USBHS device / CDC echo
 
@@ -452,11 +453,10 @@ RX and loopback still require PA9–PA10 wiring.
 3. Run the remaining board tests that need wiring or external peers: USART
    loopback, SPI loopback, I2C EEPROM, external I3C target/CAN/SD/Ethernet, and
    the natural SysTick wrap. The time-driver, DMA and default USART regressions
-   passed on 2026-11-03.
-   HSE/PLL RCC passed 9 HSI-based and 14 HSE-enabled clock configurations.
-   GPIO input and external
-   EXTI tests remain pending until wiring is available; HAL output and Embassy
-   timers/rollover/WFI have passed the stage 2–3 tests above.
+   passed on 2026-11-03, as did 9 HSI-based and 14 HSE-enabled RCC clock
+   configurations; HAL output and Embassy timers/rollover/WFI passed the stage
+   2–3 tests above. GPIO input and external EXTI tests remain pending until
+   wiring is available.
 
 Building these examples only validates compilation and linking, not hardware
 startup or full peripheral support.

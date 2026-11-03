@@ -20,7 +20,7 @@
 --target x86_64-unknown-linux-gnu
 ```
 
-**这不是 harness 的硬性要求，只是参考命令使用的 Linux target（当前没有 CI 任务
+**这不是 harness 的硬性要求，只是参考命令使用的 Linux 目标（当前没有 CI 任务
 运行这些 harness）。** 原因如下：
 
 - 这些 crate 是普通的 `std` 主机程序：`build.rs` 把生产源码（如 `src/i2c.rs`）拷进
