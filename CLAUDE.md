@@ -107,9 +107,14 @@ Current state and the direction it should move in:
   effectively dead: they need a real PAC (`pac::MEMORY_LAYOUT` etc.) and CI
   never runs them on-target.
 - `tools/*-host-tests` (7 crates) compile the real driver source against a
-  hand-written mock register model. Each crate duplicates a `build.rs`
-  (rewrites production source with string anchors), a `*_model.rs`, `common.rs`,
-  and `lifecycle.rs`.
+  hand-written mock register model. Shared scaffolding lives in
+  `tools/host-tests-common/`: `common_word.rs`/`common_reg.rs` (the two `Reg`
+  access shapes, each reached through a `record_read`/`record_write` seam in
+  the harness `lib.rs`) and `build_helpers.rs` (production-source rewrite
+  helpers). The mock `qingke` preamble (`extern crate self as qingke`, `pac`
+  word arrays, mock `interrupt`/`gpio`/`peripherals`, the DMA `_generated`
+  scaffold) and each `*_model.rs`/`lifecycle.rs` are still duplicated per
+  harness; consolidating the `qingke` preamble is the next step.
 - Examples copy-paste a `static mut X_RESULT` + `write_volatile` + `check()`
   marker per binary instead of sharing a helper.
 
