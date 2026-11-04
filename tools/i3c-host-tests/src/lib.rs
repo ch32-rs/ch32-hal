@@ -40,7 +40,7 @@ macro_rules! foreach_peripheral {
 #[macro_use]
 #[path = "../../../src/macros.rs"]
 mod macros;
-#[path = "../../sdio-host-tests/src/common.rs"]
+#[path = "../../host-tests-common/common_reg.rs"]
 pub mod common;
 #[path = "../../../src/dma/mod.rs"]
 pub mod dma;
@@ -203,3 +203,11 @@ mod dma_tests;
 mod model;
 #[cfg(test)]
 mod tests;
+
+pub fn record_read(address: usize) {
+    model::after_read(address);
+}
+
+pub fn record_write(address: usize, value: u32, size: usize) -> bool {
+    model::write(address, value, size)
+}

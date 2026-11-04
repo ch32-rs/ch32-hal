@@ -8,6 +8,7 @@ mod macros;
 #[path = "../../../src/peripheral.rs"]
 mod peripheral;
 pub use peripheral::RccPeripheral;
+#[path = "../../host-tests-common/common_reg.rs"]
 pub mod common;
 #[path = "../../../../ch32-data/build/ch32-metapac/src/peripherals/rcc_v4x7.rs"]
 pub mod rcc_registers;
@@ -16,6 +17,14 @@ pub mod usbhs;
 #[cfg(test)]
 mod usbhs_lifecycle_tests;
 mod usbhs_model;
+
+pub fn record_read(address: usize) {
+    usbhs_model::after_read(address);
+}
+
+pub fn record_write(address: usize, value: u32, size: usize) -> bool {
+    usbhs_model::write(address, value, size)
+}
 #[path = "../../../../ch32-data/build/ch32-metapac/src/peripherals/usbhs_v4x7.rs"]
 pub mod usbhs_registers;
 

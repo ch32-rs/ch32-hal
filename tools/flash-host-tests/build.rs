@@ -1,32 +1,9 @@
-use std::path::{Path, PathBuf};
+#[path = "../host-tests-common/build_helpers.rs"]
+mod build_helpers;
+use build_helpers::{canonical, read, replace, strip_inner_docs};
+
+use std::path::PathBuf;
 use std::{env, fs};
-
-fn read(path: &Path) -> String {
-    fs::read_to_string(path).unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
-}
-
-fn canonical(path: &Path) -> PathBuf {
-    path.canonicalize()
-        .unwrap_or_else(|error| panic!("cannot resolve {}: {error}", path.display()))
-}
-
-/// Replace one production-source anchor, failing loudly when the source moves.
-fn replace(source: String, from: &str, to: &str) -> String {
-    assert_eq!(
-        source.matches(from).count(),
-        1,
-        "production-source anchor moved (expected one match): {from:?}"
-    );
-    source.replace(from, to)
-}
-
-fn strip_inner_docs(source: String) -> String {
-    source
-        .lines()
-        .skip_while(|line| line.is_empty() || line.starts_with("//!"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(flash_v4x7)");

@@ -56,7 +56,7 @@ impl<T: Copy, A: Read> Reg<T, A> {
     #[inline(always)]
     pub fn read(&self) -> T {
         let value = unsafe { (self.ptr as *mut T).read_volatile() };
-        crate::model::after_read(self.ptr as usize);
+        crate::record_read(self.ptr as usize);
         value
     }
 }
@@ -73,7 +73,7 @@ impl<T: Copy, A: Write> Reg<T, A> {
                 _ => 0,
             }
         };
-        if crate::model::write(self.ptr as usize, value, size) {
+        if crate::record_write(self.ptr as usize, value, size) {
             return;
         }
         unsafe { (self.ptr as *mut T).write_volatile(val) }

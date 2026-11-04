@@ -8,6 +8,7 @@ mod macros;
 macro_rules! foreach_interrupt {
     ($($tokens:tt)*) => {};
 }
+#[path = "../../host-tests-common/common_reg.rs"]
 pub mod common;
 #[path = "../../../src/peripheral.rs"]
 mod peripheral;
@@ -30,6 +31,14 @@ pub mod internal {
 #[cfg(test)]
 mod lifecycle;
 mod model;
+
+pub fn record_read(address: usize) {
+    model::after_read(address);
+}
+
+pub fn record_write(address: usize, value: u32, size: usize) -> bool {
+    model::write(address, value, size)
+}
 
 pub mod pac {
     pub use crate::{common, dma_registers as dma, sdio_registers as sdio};

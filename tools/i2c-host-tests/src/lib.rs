@@ -25,7 +25,7 @@ macro_rules! foreach_peripheral {
     };
 }
 
-#[path = "common.rs"]
+#[path = "../../host-tests-common/common_word.rs"]
 pub mod common;
 #[path = "../../../../ch32-data/build/ch32-metapac/src/peripherals/dma_v4x7.rs"]
 pub mod dma_registers;

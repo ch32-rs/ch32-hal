@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_imports, unexpected_cfgs, static_mut_refs)]
 
 pub use embassy_hal_internal::{impl_peripheral, Peri, PeripheralType};
-#[path = "../../sdio-host-tests/src/common.rs"]
+#[path = "../../host-tests-common/common_reg.rs"]
 pub mod common;
 #[path = "../../../src/internal/drop.rs"]
 pub mod drop_impl;
@@ -75,3 +75,11 @@ unsafe impl interrupt::typelevel::Binding<interrupt::typelevel::ETH, eth::Interr
 #[cfg(test)]
 mod lifecycle;
 mod model;
+
+pub fn record_read(address: usize) {
+    model::after_read(address);
+}
+
+pub fn record_write(address: usize, value: u32, size: usize) -> bool {
+    model::write(address, value, size)
+}

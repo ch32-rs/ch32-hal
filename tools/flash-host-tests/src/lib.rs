@@ -12,7 +12,7 @@
 extern crate self as qingke;
 pub use embassy_hal_internal::{impl_peripheral, Peri};
 
-#[path = "common.rs"]
+#[path = "../../host-tests-common/common_word.rs"]
 pub mod common;
 #[path = "../../../src/internal/drop.rs"]
 pub mod drop_impl;
