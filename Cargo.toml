@@ -13,10 +13,10 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# Generated from ch32-data 844640b (#78).
+# Generated from ch32-data d8112ba (#82).
 ch32-metapac = { features = [
     "rt",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "e150d5303c6980d4d1cc708944654d3b9f47295a" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "8b204133d86a3fe65860077131a43ebde4097cf7" }
 
 # `unsafe-trust-wch-atomics`: qingke 0.8.2 refuses to build whenever the target
 # claims byte atomics unless this is set, and every A-extension target does.
@@ -58,10 +58,10 @@ sdio-host = "0.5.0"
 embedded-storage = "0.3.1"
 
 [build-dependencies]
-# Generated from ch32-data 844640b (#78).
+# Generated from ch32-data d8112ba (#82).
 ch32-metapac = { features = [
     "metadata",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "e150d5303c6980d4d1cc708944654d3b9f47295a" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "8b204133d86a3fe65860077131a43ebde4097cf7" }
 
 proc-macro2 = "1.0"
 quote = "1.0"
