@@ -8,20 +8,17 @@ use ch32_hal::rcc::{
 use ch32_hal::time::Hertz;
 use defmt_rtt as _;
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 use qingke_rt::entry;
 
-#[no_mangle]
-pub static mut RCC_RESULT: u32 = 0;
+report_static!(RCC_RESULT);
 #[no_mangle]
 pub static mut RCC_CASES: u32 = 0;
 #[no_mangle]
 pub static mut RCC_SNAPSHOTS: [[u32; 8]; 14] = [[0; 8]; 14];
 
 fn check(condition: bool) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(RCC_RESULT), 3) };
-        defmt::panic!("RCC_RESULT=FAIL");
-    }
+    report_check!(RCC_RESULT, condition, 3, "RCC_RESULT check failed");
 }
 
 fn check_clock(config: rcc::Config, sysclk: u32, hclk: u32) {
@@ -94,7 +91,7 @@ fn check_clock(config: rcc::Config, sysclk: u32, hclk: u32) {
 
 #[entry]
 fn main() -> ! {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(RCC_RESULT), 1) };
+    report_set!(RCC_RESULT, 1);
     qingke::riscv::asm::delay(2_000_000);
     check_clock(rcc::Config::default(), 20_000_000, 20_000_000);
     for (mul, sysclk, hclk) in [
@@ -208,7 +205,7 @@ fn main() -> ! {
         unsafe { core::ptr::read_volatile(core::ptr::addr_of!(RCC_CASES)) }
             == if cfg!(feature = "clock-hse") { 14 } else { 9 },
     );
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(RCC_RESULT), 2) };
+    report_set!(RCC_RESULT, 2);
     defmt::info!("RCC_RESULT=PASS");
     loop {
         qingke::riscv::asm::delay(20_000_000);

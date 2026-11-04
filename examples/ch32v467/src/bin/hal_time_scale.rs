@@ -5,23 +5,20 @@ use ch32_hal::{pac, rcc};
 use defmt_rtt as _;
 use embassy_time::{Instant, TICK_HZ};
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 use qingke_rt::entry;
 
-#[no_mangle]
-pub static mut TIME_SCALE_RESULT: u32 = 0;
+report_static!(TIME_SCALE_RESULT);
 #[no_mangle]
 pub static mut TIME_SCALE_SAMPLES: [[u32; 4]; 5] = [[0; 4]; 5];
 
 fn check(condition: bool) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(TIME_SCALE_RESULT), 3) };
-        defmt::panic!("TIME_SCALE_RESULT=FAIL");
-    }
+    report_check!(TIME_SCALE_RESULT, condition, 3, "TIME_SCALE_RESULT check failed");
 }
 
 #[entry]
 fn main() -> ! {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(TIME_SCALE_RESULT), 1) };
+    report_set!(TIME_SCALE_RESULT, 1);
     qingke::riscv::asm::delay(2_000_000);
     let mut config = ch32_hal::Config::default();
     let mut ahb_divisor = 1u64;
@@ -61,7 +58,7 @@ fn main() -> ! {
         unsafe { qingke::pfic::unpend_interrupt(qingke_rt::CoreInterrupt::SysTick as u8) };
     });
     unsafe { rcc::init(rcc::Config::default()) };
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(TIME_SCALE_RESULT), 2) };
+    report_set!(TIME_SCALE_RESULT, 2);
     defmt::info!(
         "TIME_SCALE_RESULT=PASS sysclk={} ahb_divisor={}",
         source_hz,

@@ -8,9 +8,9 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::{with_timeout, Duration, Timer};
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
-#[no_mangle]
-pub static mut DMA_RESULT: u32 = 0;
+report_static!(DMA_RESULT);
 #[no_mangle]
 pub static mut DMA_CASES: u32 = 0;
 #[no_mangle]
@@ -22,10 +22,7 @@ static mut SOURCE: [u8; 65_535] = [0; 65_535];
 static mut DESTINATION: [u8; 65_537] = [0; 65_537];
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(DMA_RESULT), code) };
-        defmt::panic!("DMA_RESULT=FAIL code={}", code);
-    }
+    report_check!(DMA_RESULT, condition, code, "DMA_RESULT check failed");
 }
 
 fn record_case(channel: u32, words: usize, word_size: usize) {
@@ -50,7 +47,7 @@ async fn copy<W: Word + PartialEq>(channel: Peri<'_, AnyChannel>, source: &[W], 
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(DMA_RESULT), 1) };
+    report_set!(DMA_RESULT, 1);
     qingke::riscv::asm::delay(2_000_000);
     let peripherals = ch32_hal::init(Default::default());
     let channels: [Peri<'_, AnyChannel>; 24] = [
@@ -118,7 +115,7 @@ async fn main(_spawner: Spawner) {
         unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(DMA_CHANNELS_PASSED), index as u32 + 1) };
         defmt::info!("DMA channel {} PASS", index);
     }
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(DMA_RESULT), 2) };
+    report_set!(DMA_RESULT, 2);
     defmt::info!("DMA_RESULT=PASS channels=24 copies=216");
     loop {
         Timer::after_secs(1).await;

@@ -12,10 +12,10 @@ use ch32_hal::{pac, Peri};
 use defmt_rtt as _;
 use embassy_futures::join::join3;
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 use qingke_rt::entry;
 
-#[no_mangle]
-pub static mut GPIO_EXTI_RESULT: u32 = 0;
+report_static!(GPIO_EXTI_RESULT);
 static WAKE_COUNT: AtomicU32 = AtomicU32::new(0);
 const LINES: u32 = (1 << 1) | (1 << 8) | (1 << 13);
 const VTABLE: RawWakerVTable = RawWakerVTable::new(clone_waker, wake, wake, drop_waker);
@@ -46,10 +46,7 @@ async fn wait(input: &mut ExtiInput<'_>, edge: Edge) {
 }
 
 fn check(condition: bool) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(GPIO_EXTI_RESULT), 3) };
-        defmt::panic!("GPIO/EXTI check failed");
-    }
+    report_check!(GPIO_EXTI_RESULT, condition, 3, "GPIO_EXTI_RESULT check failed");
 }
 
 fn check_pull(pin: Peri<'_, impl ch32_hal::gpio::Pin>) {
@@ -87,7 +84,7 @@ fn complete(mut future: Pin<&mut impl Future>, context: &mut Context<'_>, output
 
 #[entry]
 fn main() -> ! {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(GPIO_EXTI_RESULT), 1) };
+    report_set!(GPIO_EXTI_RESULT, 1);
     qingke::riscv::asm::delay(2_000_000);
     let mut peripherals = ch32_hal::init(Default::default());
     defmt::info!("GPIO pulls: PA0 -> PB1, PB8, PC13; PA0 initially floating");
@@ -148,7 +145,7 @@ fn main() -> ! {
         check(input1.is_low() && input8.is_low() && input13.is_low());
         defmt::info!("EXTI rising/falling/any/cancel/stale round={} PASS", round);
     }
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(GPIO_EXTI_RESULT), 2) };
+    report_set!(GPIO_EXTI_RESULT, 2);
     defmt::info!("GPIO_EXTI_RESULT=PASS");
     loop {
         core::hint::spin_loop();

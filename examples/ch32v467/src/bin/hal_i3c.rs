@@ -7,18 +7,16 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::Timer;
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
 bind_interrupts!(struct Irqs {
     I3C_EV => i3c::EventInterruptHandler<peripherals::I3C>;
     I3C_ER => i3c::ErrorInterruptHandler<peripherals::I3C>;
 });
 
-#[no_mangle]
-pub static mut I3C_RESULT: u32 = 0;
-#[no_mangle]
-pub static mut I3C_DEVICE_RESULT: u32 = 0;
-#[no_mangle]
-pub static mut I3C_DMA_RESULT: u32 = 0;
+report_static!(I3C_RESULT);
+report_static!(I3C_DEVICE_RESULT);
+report_static!(I3C_DMA_RESULT);
 #[no_mangle]
 pub static mut I3C_TARGET_COUNT: u32 = 0;
 #[no_mangle]
@@ -30,10 +28,7 @@ pub static mut I3C_TARGETS: [Target; 4] = [Target {
 }; 4];
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(I3C_RESULT), code) };
-        defmt::panic!("I3C_RESULT=FAIL code={}", code);
-    }
+    report_check!(I3C_RESULT, condition, code, "I3C_RESULT check failed");
 }
 
 #[cfg(feature = "i3c-daa")]
@@ -48,7 +43,7 @@ fn raw_word(value: Option<&str>) -> u32 {
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(I3C_RESULT), 1) };
+    report_set!(I3C_RESULT, 1);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-dividers") {
         config.rcc.ahb_pre = rcc::AHBPrescaler::DIV2;
@@ -106,7 +101,7 @@ async fn main(_spawner: Spawner) {
 
     #[cfg(feature = "i3c-daa")]
     {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(I3C_DEVICE_RESULT), 1) };
+        report_set!(I3C_DEVICE_RESULT, 1);
         driver.broadcast_ccc(0x06, &[]).await.unwrap();
         let mut targets = [Target::default(); 4];
         let count = driver
@@ -133,7 +128,7 @@ async fn main(_spawner: Spawner) {
         #[cfg(feature = "i3c-dma-loopback")]
         {
             use embedded_hal::i2c::Operation;
-            unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(I3C_DMA_RESULT), 1) };
+            report_set!(I3C_DMA_RESULT, 1);
             let address = targets[0].dynamic_address;
             let mut transmit = [0u8; 257];
             let mut receive = [0u8; 257];
@@ -162,16 +157,16 @@ async fn main(_spawner: Spawner) {
                 );
                 check(pac::I3C.cfgr().read().0 & ((1 << 8) | (1 << 12)) == 0, 33);
             }
-            unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(I3C_DMA_RESULT), 2) };
+            report_set!(I3C_DMA_RESULT, 2);
             defmt::info!("I3C_DMA_RESULT=PASS echo fixture; bus speed remains unqualified");
         }
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(I3C_DEVICE_RESULT), 2) };
+        report_set!(I3C_DEVICE_RESULT, 2);
         defmt::info!("I3C_DEVICE_RESULT=PASS DAA and GETPID targets={}", count);
     }
 
     drop(driver);
     check(!pac::RCC.hbpcenr().read().i3cen(), 18);
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(I3C_RESULT), 2) };
+    report_set!(I3C_RESULT, 2);
     defmt::info!("I3C_RESULT=PASS register/lifecycle checks; hclk={}", hclk);
     if !cfg!(feature = "i3c-daa") {
         defmt::info!("I3C device transfers not run; raw fixture timings are not a qualified bus profile");

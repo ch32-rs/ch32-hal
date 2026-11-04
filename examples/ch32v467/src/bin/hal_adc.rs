@@ -12,13 +12,13 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_time::{with_timeout, Duration, Timer};
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
 bind_interrupts!(struct Irqs {
     ADC1_2 => InterruptHandler;
 });
 
-#[no_mangle]
-pub static mut ADC_RESULT: u32 = 0;
+report_static!(ADC_RESULT);
 #[no_mangle]
 pub static mut ADC_CLOCK_HZ: u32 = 0;
 #[no_mangle]
@@ -27,15 +27,12 @@ pub static mut ADC_SAMPLES: [u16; 68] = [0; 68];
 pub static mut ADC_CANCEL_PENDING: u32 = 0;
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(ADC_RESULT), code) };
-        defmt::panic!("ADC_RESULT=FAIL code={}", code);
-    }
+    report_check!(ADC_RESULT, condition, code, "ADC_RESULT check failed");
 }
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(ADC_RESULT), 1) };
+    report_set!(ADC_RESULT, 1);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-pll") {
         config.rcc.sys = rcc::Sysclk::PLL;
@@ -173,7 +170,7 @@ async fn main(_spawner: Spawner) {
         }
     }
 
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(ADC_RESULT), 2) };
+    report_set!(ADC_RESULT, 2);
     defmt::info!(
         "ADC_RESULT=PASS clock_hz={} vref_raw={} temperature_raw={}",
         frequency,

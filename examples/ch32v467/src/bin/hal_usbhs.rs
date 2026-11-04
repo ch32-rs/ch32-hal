@@ -10,6 +10,7 @@ use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::Builder;
 use panic_halt as _;
+use ch32v467_examples::{report_set, report_static};
 
 #[cfg(all(feature = "usbhs2", feature = "ch32v467ret6"))]
 compile_error!("CH32V467RET6 does not expose USBHS2; use USBHS1");
@@ -24,8 +25,7 @@ bind_interrupts!(struct Irqs {
     USBHS2 => InterruptHandler<peripherals::USBHS2>;
 });
 
-#[no_mangle]
-pub static mut USBHS_STAGE: u32 = 0;
+report_static!(USBHS_STAGE);
 #[no_mangle]
 pub static mut USBHS_ECHO_PACKETS: u32 = 0;
 #[no_mangle]
@@ -38,7 +38,7 @@ struct EndpointMemory([u8; 512]);
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(USBHS_STAGE), 1) };
+    report_set!(USBHS_STAGE, 1);
     let mut config = ch32_hal::Config::default();
     config.rcc.hspll = Some(rcc::HsPllSource::HSI);
     if cfg!(feature = "clock-hse") {
@@ -101,7 +101,7 @@ async fn main(_spawner: Spawner) {
     );
     let mut class = CdcAcmClass::new(&mut builder, &mut state, 64);
     let mut usb = builder.build();
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(USBHS_STAGE), 2) };
+    report_set!(USBHS_STAGE, 2);
     defmt::info!(
         "USBHS CDC ready: instance={} full-speed",
         if cfg!(feature = "usbhs2") { 2 } else { 1 }
@@ -109,7 +109,7 @@ async fn main(_spawner: Spawner) {
     let echo = async {
         loop {
             class.wait_connection().await;
-            unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(USBHS_STAGE), 3) };
+            report_set!(USBHS_STAGE, 3);
             defmt::info!("USBHS CDC connected");
             let mut packet = [0; 64];
             loop {
@@ -142,7 +142,7 @@ async fn main(_spawner: Spawner) {
                     }
                 }
             }
-            unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(USBHS_STAGE), 2) };
+            report_set!(USBHS_STAGE, 2);
         }
     };
     join(usb.run(), echo).await;

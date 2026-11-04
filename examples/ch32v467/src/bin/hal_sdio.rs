@@ -12,13 +12,13 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::Timer;
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
 bind_interrupts!(struct Irqs {
     SDIO => InterruptHandler<peripherals::SDIO>;
 });
 
-#[no_mangle]
-pub static mut SDIO_RESULT: u32 = 0;
+report_static!(SDIO_RESULT);
 #[no_mangle]
 pub static mut SDIO_CARD_INFO: [u32; 5] = [0; 5];
 #[no_mangle]
@@ -27,15 +27,12 @@ pub static mut SDIO_FIRST_BYTES: [u8; 64] = [0; 64];
 pub static mut SDIO_CANCELLED: u32 = 0;
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SDIO_RESULT), code) };
-        defmt::panic!("SDIO_RESULT=FAIL code={}", code);
-    }
+    report_check!(SDIO_RESULT, condition, code, "SDIO_RESULT check failed");
 }
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SDIO_RESULT), 1) };
+    report_set!(SDIO_RESULT, 1);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-pll") {
         config.rcc.sys = rcc::Sysclk::PLL;
@@ -97,7 +94,7 @@ async fn main(_spawner: Spawner) {
     match sd.init_card(frequency).await {
         Ok(()) => {}
         Err(Error::Timeout) => {
-            unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SDIO_RESULT), 2) };
+            report_set!(SDIO_RESULT, 2);
             defmt::warn!("SDIO: no card response; check power, card and wiring. No read test performed.");
             drop(sd);
             loop {
@@ -164,7 +161,7 @@ async fn main(_spawner: Spawner) {
     drop(sd);
     check(!pac::RCC.hbpcenr().read().sdioen(), 25);
     check(!pac::DMA2.ch(3).cfgr().read().en(), 26);
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SDIO_RESULT), 3) };
+    report_set!(SDIO_RESULT, 3);
     defmt::info!("SDIO_RESULT=PASS read-only cancelled={}", cancelled);
     loop {
         Timer::after_secs(1).await;

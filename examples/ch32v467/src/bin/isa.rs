@@ -5,6 +5,7 @@ use core::arch::asm;
 use core::hint::black_box;
 
 use ch32v467_examples as board;
+use ch32v467_examples::{report_set, report_static};
 use defmt::{error, info};
 use defmt_rtt as _;
 use panic_halt as _;
@@ -13,8 +14,7 @@ use qingke_rt::entry;
 #[cfg(not(all(target_feature = "zve64x", target_feature = "zvl64b", target_feature = "zvbb")))]
 compile_error!("Run from examples/ch32v467 with its .cargo/config.toml target features");
 
-#[unsafe(no_mangle)]
-pub static mut ISA_RESULT: u32 = 0;
+report_static!(ISA_RESULT);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn ExceptionHandler() {
@@ -25,7 +25,7 @@ pub extern "C" fn ExceptionHandler() {
         asm!("csrr {}, mcause", out(reg) cause);
         asm!("csrr {}, mepc", out(reg) epc);
         asm!("csrr {}, mtval", out(reg) tval);
-        core::ptr::write_volatile(&raw mut ISA_RESULT, 3);
+        report_set!(ISA_RESULT, 3);
     }
     error!(
         "ISA TRAP: mcause={=u32:#x} mepc={=u32:#x} mtval={=u32:#x}",
@@ -148,7 +148,7 @@ vector_check!(check_e64, u64, 64, "vle64.v", "vse64.v");
 fn main() -> ! {
     board::init();
     board::delay_ms(500);
-    unsafe { core::ptr::write_volatile(&raw mut ISA_RESULT, 1) };
+    report_set!(ISA_RESULT, 1);
     info!("CH32V467 ISA behavior test: +xwchc,+zve64x,+zvl64b,+zvbb");
     let status: u32;
     let vector_bytes: u32;
@@ -168,7 +168,7 @@ fn main() -> ! {
     passed &= check_e16();
     passed &= check_e32();
     passed &= check_e64();
-    unsafe { core::ptr::write_volatile(&raw mut ISA_RESULT, if passed { 2 } else { 3 }) };
+    report_set!(ISA_RESULT, if passed { 2 } else { 3 });
     if passed {
         info!("ISA RESULT: PASS");
     } else {

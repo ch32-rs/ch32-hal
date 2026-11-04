@@ -12,6 +12,7 @@ use embassy_executor::Spawner;
 use embassy_net_driver::{Driver, LinkState, RxToken, TxToken};
 use embassy_time::{with_timeout, Duration};
 use panic_halt as _;
+use ch32v467_examples::{report_set, report_static};
 
 bind_interrupts!(struct Irqs { ETH => InterruptHandler; });
 
@@ -19,15 +20,14 @@ const MAC: [u8; 6] = [2, 0, 0, 0, 0, 0x47];
 const MAGIC: &[u8] = b"CH32V4-ECHO";
 static mut RESOURCES: Resources<4, 4> = Resources::new();
 
-#[no_mangle]
-pub static mut ETH_RESULT: u32 = 0;
+report_static!(ETH_RESULT);
 #[no_mangle]
 pub static mut ETH_PHY_ID: u32 = 0;
 #[no_mangle]
 pub static mut ETH_STATS: [u32; 5] = [0; 5];
 
 fn result(value: u32) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(ETH_RESULT), value) };
+    report_set!(ETH_RESULT, value);
 }
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]

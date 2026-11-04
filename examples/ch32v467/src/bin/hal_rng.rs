@@ -7,6 +7,7 @@ use core::task::Poll;
 
 use ch32_hal::rng::{InterruptHandler, Rng};
 use ch32_hal::{bind_interrupts, pac, rcc};
+use ch32v467_examples::{report_check, report_set, report_static};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::{with_timeout, Duration, Timer};
@@ -16,23 +17,15 @@ bind_interrupts!(struct Irqs {
     RNG => InterruptHandler<ch32_hal::peripherals::RNG>;
 });
 
-#[no_mangle]
-pub static mut RNG_RESULT: u32 = 0;
+report_static!(RNG_RESULT);
 #[no_mangle]
 pub static mut RNG_SAMPLES: [u32; 32] = [0; 32];
 #[no_mangle]
 pub static mut RNG_SOURCE_HZ: u32 = 0;
 
-fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(RNG_RESULT), code) };
-        defmt::panic!("RNG_RESULT=FAIL code={}", code);
-    }
-}
-
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(RNG_RESULT), 1) };
+    report_set!(RNG_RESULT, 1);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-pll") {
         config.rcc.sys = rcc::Sysclk::PLL;
@@ -55,16 +48,18 @@ async fn main(_spawner: Spawner) {
     let mut random = Rng::new(peripherals.RNG.reborrow(), Irqs);
     for index in 0..32 {
         let result = with_timeout(Duration::from_millis(100), random.async_next_u32()).await;
-        check(matches!(result, Ok(Ok(_))), 10);
+        report_check!(RNG_RESULT, matches!(result, Ok(Ok(_))), 10, "RNG single-sample acquisition failed");
         unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(RNG_SAMPLES[index]), result.unwrap().unwrap()) };
     }
     let mut bytes = [0u8; 31];
-    check(
+    report_check!(
+        RNG_RESULT,
         matches!(
             with_timeout(Duration::from_millis(100), random.async_fill_bytes(&mut bytes)).await,
             Ok(Ok(()))
         ),
         11,
+        "RNG fill_bytes failed"
     );
     random.reset();
     {
@@ -75,26 +70,35 @@ async fn main(_spawner: Spawner) {
         })
         .await;
     }
-    check(!pac::RNG.cr().read().ie(), 12);
-    check(
+    report_check!(RNG_RESULT, !pac::RNG.cr().read().ie(), 12, "RNG interrupt still enabled after poll");
+    report_check!(
+        RNG_RESULT,
         matches!(
             with_timeout(Duration::from_millis(100), random.async_next_u32()).await,
             Ok(Ok(_))
         ),
         13,
+        "RNG acquisition after reset failed"
     );
     drop(random);
-    check(!pac::RNG.cr().read().rngen() && !pac::RNG.cr().read().ie(), 14);
-    check(!pac::RCC.hbpcenr().read().trngen(), 15);
+    report_check!(
+        RNG_RESULT,
+        !pac::RNG.cr().read().rngen() && !pac::RNG.cr().read().ie(),
+        14,
+        "RNG not disabled after drop"
+    );
+    report_check!(RNG_RESULT, !pac::RCC.hbpcenr().read().trngen(), 15, "RNG clock not gated off after drop");
     let mut random = Rng::new(peripherals.RNG.reborrow(), Irqs);
-    check(
+    report_check!(
+        RNG_RESULT,
         matches!(
             with_timeout(Duration::from_millis(100), random.async_next_u32()).await,
             Ok(Ok(_))
         ),
         16,
+        "RNG re-acquisition failed"
     );
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(RNG_RESULT), 2) };
+    report_set!(RNG_RESULT, 2);
     defmt::info!("RNG_RESULT=PASS acquisition and lifecycle; entropy quality requires separate assessment");
     loop {
         Timer::after_secs(1).await;

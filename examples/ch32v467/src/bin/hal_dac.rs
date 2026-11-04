@@ -15,9 +15,9 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_time::{with_timeout, Duration, Timer};
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
-#[no_mangle]
-pub static mut DAC_RESULT: u32 = 0;
+report_static!(DAC_RESULT);
 #[no_mangle]
 pub static mut DAC_CASES: u32 = 0;
 #[no_mangle]
@@ -26,10 +26,7 @@ pub static mut DAC_SNAPSHOTS: [[u32; 3]; 4] = [[0; 3]; 4];
 pub static mut DAC_WAVE_RANGE: [u32; 2] = [0; 2];
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(DAC_RESULT), code) };
-        defmt::panic!("DAC_RESULT=FAIL code={}", code);
-    }
+    report_check!(DAC_RESULT, condition, code, "DAC_RESULT check failed");
 }
 
 fn snapshot(index: usize) {
@@ -51,7 +48,7 @@ fn no_dma() -> Peri<'static, NoDma> {
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(DAC_RESULT), 1) };
+    report_set!(DAC_RESULT, 1);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-pll") {
         config.rcc.sys = rcc::Sysclk::PLL;
@@ -188,7 +185,7 @@ async fn main(_spawner: Spawner) {
     first.set_waveform(Waveform::DISABLED, 0).unwrap();
     snapshot(3);
     timer.stop();
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(DAC_RESULT), 2) };
+    report_set!(DAC_RESULT, 2);
     defmt::info!("DAC_RESULT=PASS digital register and DMA checks; measure PA4/PA5 for analog accuracy");
     loop {
         Timer::after_secs(1).await;

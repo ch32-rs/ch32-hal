@@ -3,16 +3,16 @@
 
 use ch32_hal as hal;
 use ch32v467_examples as board;
+use ch32v467_examples::{report_check, report_set, report_static};
 use defmt_rtt as _;
 use panic_halt as _;
 use qingke_rt::entry;
 
-#[no_mangle]
-pub static mut HAL_INIT_RESULT: u32 = 0;
+report_static!(HAL_INIT_RESULT);
 
 #[entry]
 fn main() -> ! {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(HAL_INIT_RESULT), 1) };
+    report_set!(HAL_INIT_RESULT, 1);
     qingke::riscv::asm::delay(2_000_000);
     defmt::info!("HAL init starting");
 
@@ -67,7 +67,7 @@ fn main() -> ! {
         check(hal::pac::PFIC.sctlr().read().sevonpend());
     }
 
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(HAL_INIT_RESULT), 2) };
+    report_set!(HAL_INIT_RESULT, 2);
     defmt::info!(
         "HAL_INIT_RESULT=PASS sysclk={} hclk={} pclk1={} pclk2={} cfgr0={=u32:08x}",
         hal::rcc::clocks().sysclk.0,
@@ -90,8 +90,5 @@ fn main() -> ! {
 }
 
 fn check(condition: bool) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(HAL_INIT_RESULT), 3) };
-        defmt::panic!("HAL init check failed");
-    }
+    report_check!(HAL_INIT_RESULT, condition, 3, "HAL init check failed");
 }

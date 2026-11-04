@@ -10,26 +10,22 @@ use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
 use embassy_time::{Duration, Timer};
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
 bind_interrupts!(struct Irqs {
     I2C_EV => i2c::EventInterruptHandler<peripherals::I2C>;
     I2C_ER => i2c::ErrorInterruptHandler<peripherals::I2C>;
 });
 
-#[no_mangle]
-pub static mut I2C_RESULT: u32 = 0;
-#[no_mangle]
-pub static mut I2C_DEVICE_RESULT: u32 = 0;
+report_static!(I2C_RESULT);
+report_static!(I2C_DEVICE_RESULT);
 #[no_mangle]
 pub static mut I2C_SNAPSHOTS: [[u32; 4]; 6] = [[0; 4]; 6];
 #[no_mangle]
 pub static mut I2C_PROBES: [u32; 3] = [0; 3];
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(I2C_RESULT), code) };
-        defmt::panic!("I2C_RESULT=FAIL code={}", code);
-    }
+    report_check!(I2C_RESULT, condition, code, "I2C_RESULT check failed");
 }
 
 fn check_timing(index: usize, frequency: u32, duty: Duty) {
@@ -117,12 +113,12 @@ async fn check_eeprom(bus: &mut I2c<'_, peripherals::I2C, Async>, baseline: &[u8
     check_idle();
     check(bus.write_read(0x50, &[0], &mut buffer).await.is_ok(), 27);
     check(&buffer == baseline, 22);
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(I2C_DEVICE_RESULT), 2) };
+    report_set!(I2C_DEVICE_RESULT, 2);
 }
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(I2C_RESULT), 1) };
+    report_set!(I2C_RESULT, 1);
     qingke::riscv::asm::delay(2_000_000);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-pll") {
@@ -214,7 +210,7 @@ async fn main(_spawner: Spawner) {
         #[cfg(feature = "i2c-eeprom")]
         check_eeprom(&mut bus, &baseline).await;
     }
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(I2C_RESULT), 2) };
+    report_set!(I2C_RESULT, 2);
     defmt::info!(
         "I2C_RESULT=PASS configuration/cleanup; external-device tests enabled={}",
         cfg!(feature = "i2c-eeprom")

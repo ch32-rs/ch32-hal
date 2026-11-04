@@ -15,6 +15,7 @@ use embassy_executor::Spawner;
 use embassy_time::{with_timeout, Duration, Timer};
 use embedded_hal::spi::{MODE_0, MODE_1, MODE_2, MODE_3};
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
 bind_interrupts!(struct Irqs {
     SPI1 => InterruptHandler<ch32_hal::peripherals::SPI1>;
@@ -22,20 +23,15 @@ bind_interrupts!(struct Irqs {
     SPI3 => InterruptHandler<ch32_hal::peripherals::SPI3>;
 });
 
-#[no_mangle]
-pub static mut SPI_RESULT: u32 = 0;
+report_static!(SPI_RESULT);
 #[no_mangle]
 pub static mut SPI_CASES: u32 = 0;
-#[no_mangle]
-pub static mut SPI_LOOPBACK_RESULT: u32 = 0;
+report_static!(SPI_LOOPBACK_RESULT);
 #[no_mangle]
 pub static mut SPI_SNAPSHOTS: [[u32; 3]; 3] = [[0; 3]; 3];
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SPI_RESULT), code) };
-        defmt::panic!("SPI_RESULT=FAIL code={}", code);
-    }
+    report_check!(SPI_RESULT, condition, code, "SPI_RESULT check failed");
 }
 
 async fn exercise<T: spi::Instance>(
@@ -114,7 +110,7 @@ async fn exercise<T: spi::Instance>(
 
 #[cfg(feature = "spi-loopback")]
 async fn loopback(mut peripherals: ch32_hal::Peripherals) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SPI_LOOPBACK_RESULT), 1) };
+    report_set!(SPI_LOOPBACK_RESULT, 1);
     for mode in [MODE_0, MODE_1, MODE_2, MODE_3] {
         for bit_order in [BitOrder::MsbFirst, BitOrder::LsbFirst] {
             let mut config = spi::Config::default();
@@ -207,12 +203,12 @@ async fn loopback(mut peripherals: ch32_hal::Peripherals) {
         ),
         30,
     );
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SPI_LOOPBACK_RESULT), 2) };
+    report_set!(SPI_LOOPBACK_RESULT, 2);
 }
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SPI_RESULT), 1) };
+    report_set!(SPI_RESULT, 1);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-pll") {
         config.rcc.sys = rcc::Sysclk::PLL;
@@ -258,7 +254,7 @@ async fn main(_spawner: Spawner) {
     .await;
     #[cfg(feature = "spi-loopback")]
     loopback(peripherals).await;
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SPI_RESULT), 2) };
+    report_set!(SPI_RESULT, 2);
     defmt::info!("SPI_RESULT=PASS");
     loop {
         Timer::after_secs(1).await;

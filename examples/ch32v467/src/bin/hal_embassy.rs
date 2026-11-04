@@ -13,16 +13,13 @@ use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
 use embassy_time::{Duration, Instant, Timer, TICK_HZ};
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
-#[no_mangle]
-pub static mut EMBASSY_RESULT: u32 = 0;
+report_static!(EMBASSY_RESULT);
 static COMPLETED: AtomicU32 = AtomicU32::new(0);
 
 fn check(condition: bool) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(EMBASSY_RESULT), 3) };
-        defmt::panic!("Embassy check failed");
-    }
+    report_check!(EMBASSY_RESULT, condition, 3, "EMBASSY_RESULT check failed");
 }
 
 fn set_boundary(remaining: u32) {
@@ -77,7 +74,7 @@ async fn worker(id: u32, period_ms: u64, mut led: Option<Output<'static>>) {
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(EMBASSY_RESULT), 1) };
+    report_set!(EMBASSY_RESULT, 1);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-dividers") {
         config.rcc.ahb_pre = ch32_hal::rcc::AHBPrescaler::DIV2;
@@ -161,7 +158,7 @@ async fn main(spawner: Spawner) {
     defmt::info!("WFI measured_sleep_us={}", sleep_us);
     check(sleep_us >= 80_000);
     defmt::info!("WFI with interrupts masked: PASS measured_sleep_us={}", sleep_us);
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(EMBASSY_RESULT), 2) };
+    report_set!(EMBASSY_RESULT, 2);
     defmt::info!("EMBASSY_RESULT=PASS");
     loop {
         Timer::after_secs(1).await;

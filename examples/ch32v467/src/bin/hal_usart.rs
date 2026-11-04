@@ -9,6 +9,7 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::{with_timeout, Duration, Instant, Timer};
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
 bind_interrupts!(struct Irqs {
     USART1 => InterruptHandler<ch32_hal::peripherals::USART1>;
@@ -23,18 +24,14 @@ bind_interrupts!(struct Irqs {
     USART10 => InterruptHandler<ch32_hal::peripherals::USART10>;
 });
 
-#[no_mangle]
-pub static mut USART_RESULT: u32 = 0;
+report_static!(USART_RESULT);
 #[no_mangle]
 pub static mut USART_CHANNELS_PASSED: u32 = 0;
 #[no_mangle]
 pub static mut USART_SNAPSHOTS: [[u32; 4]; 10] = [[0; 4]; 10];
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(USART_RESULT), code) };
-        defmt::panic!("USART_RESULT=FAIL code={}", code);
-    }
+    report_check!(USART_RESULT, condition, code, "USART_RESULT check failed");
 }
 
 #[allow(dead_code)]
@@ -199,7 +196,7 @@ async fn loopback(
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(USART_RESULT), 1) };
+    report_set!(USART_RESULT, 1);
     qingke::riscv::asm::delay(2_000_000);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-pll") {
@@ -247,7 +244,7 @@ async fn main(_spawner: Spawner) {
         peripherals.DMA1_CH5,
     )
     .await;
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(USART_RESULT), 2) };
+    report_set!(USART_RESULT, 2);
     defmt::info!(
         "USART_RESULT=PASS tx_instances=10 loopback={}",
         cfg!(feature = "usart-loopback")

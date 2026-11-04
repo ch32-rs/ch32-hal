@@ -14,6 +14,7 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::{with_timeout, Duration, Timer};
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
 bind_interrupts!(struct Irqs {
     CAN1_TX => TransmitInterruptHandler<peripherals::CAN1>;
@@ -22,23 +23,19 @@ bind_interrupts!(struct Irqs {
     CAN1_SCE => ErrorInterruptHandler<peripherals::CAN1>;
 });
 
-#[no_mangle]
-pub static mut CAN_RESULT: u32 = 0;
+report_static!(CAN_RESULT);
 #[no_mangle]
 pub static mut CAN_SNAPSHOTS: [u32; 6] = [0; 6];
 #[no_mangle]
 pub static mut CAN_FRAMES: [u32; 4] = [0; 4];
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(CAN_RESULT), code) };
-        defmt::panic!("CAN_RESULT=FAIL code={}", code);
-    }
+    report_check!(CAN_RESULT, condition, code, "CAN_RESULT check failed");
 }
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(CAN_RESULT), 1) };
+    report_set!(CAN_RESULT, 1);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-pll") {
         config.rcc.sys = rcc::Sysclk::PLL;
@@ -178,7 +175,7 @@ async fn main(_spawner: Spawner) {
         }
     }
     check(!pac::RCC.pb1pcenr().read().can1en(), 26);
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(CAN_RESULT), 2) };
+    report_set!(CAN_RESULT, 2);
     defmt::info!("CAN_RESULT=PASS clock={} frames=72", clock);
     loop {
         Timer::after_secs(1).await;

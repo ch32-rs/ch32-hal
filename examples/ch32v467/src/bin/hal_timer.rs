@@ -15,6 +15,7 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Instant, Timer as EmbassyTimer};
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
 static UPDATES: AtomicU32 = AtomicU32::new(0);
 
@@ -41,18 +42,14 @@ bind_interrupts!(struct Irqs {
     TIM8_UP => UpdateHandler<ch32_hal::peripherals::TIM8>;
 });
 
-#[no_mangle]
-pub static mut TIMER_RESULT: u32 = 0;
+report_static!(TIMER_RESULT);
 #[no_mangle]
 pub static mut TIMER_CASES: u32 = 0;
 #[no_mangle]
 pub static mut TIMER_SNAPSHOTS: [[u32; 4]; 8] = [[0; 4]; 8];
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(TIMER_RESULT), code) };
-        defmt::panic!("TIMER_RESULT=FAIL code={}", code);
-    }
+    report_check!(TIMER_RESULT, condition, code, "TIMER_RESULT check failed");
 }
 
 async fn exercise<T: BasicInstance>(
@@ -118,7 +115,7 @@ fn exercise_pwm<T: GeneralInstance16bit>(mut peripheral: Peri<'_, T>) {
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(TIMER_RESULT), 1) };
+    report_set!(TIMER_RESULT, 1);
     qingke::riscv::asm::delay(2_000_000);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-pll") {
@@ -173,7 +170,7 @@ async fn main(_spawner: Spawner) {
     check(!pac::TIM1.ccer().read().cce(3), 15);
     pwm.enable(Channel::Ch1);
     check(pac::TIM1.bdtr().read().moe() && pac::TIM1.ccer().read().ccne(0), 16);
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(TIMER_RESULT), 2) };
+    report_set!(TIMER_RESULT, 2);
     defmt::info!("TIMER_RESULT=PASS; TIM1 CH1/CH1N on PE9/PE8 at 1kHz");
     loop {
         EmbassyTimer::after(Duration::from_secs(1)).await;

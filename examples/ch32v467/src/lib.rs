@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod report;
+
 pub use ch32_metapac as pac;
 
 pub const HCLK_HZ: u32 = 20_000_000;

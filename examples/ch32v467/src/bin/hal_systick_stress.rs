@@ -12,9 +12,9 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Instant, Timer, TICK_HZ};
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 
-#[no_mangle]
-pub static mut SYSTICK_STRESS_RESULT: u32 = 0;
+report_static!(SYSTICK_STRESS_RESULT);
 #[no_mangle]
 pub static mut SYSTICK_STRESS_STATS: [u32; 5] = [0; 5];
 #[no_mangle]
@@ -23,10 +23,7 @@ static REFERENCE_PERIODS: AtomicU32 = AtomicU32::new(0);
 static WATCHDOG: critical_section::Mutex<RefCell<Option<Waker>>> = critical_section::Mutex::new(RefCell::new(None));
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SYSTICK_STRESS_RESULT), code) };
-        defmt::panic!("SYSTICK_STRESS_RESULT=FAIL code={}", code);
-    }
+    report_check!(SYSTICK_STRESS_RESULT, condition, code, "SYSTICK_STRESS_RESULT check failed");
 }
 
 #[qingke_rt::interrupt]
@@ -118,7 +115,7 @@ async fn natural_wrap(counter_hz: u64) {
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SYSTICK_STRESS_RESULT), 1) };
+    report_set!(SYSTICK_STRESS_RESULT, 1);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-pll") {
         config.rcc.sys = ch32_hal::rcc::Sysclk::PLL;
@@ -237,7 +234,7 @@ async fn main(_spawner: Spawner) {
     if cfg!(feature = "stress-natural-wrap") {
         natural_wrap(counter_hz).await;
     }
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(SYSTICK_STRESS_RESULT), 2) };
+    report_set!(SYSTICK_STRESS_RESULT, 2);
     defmt::info!("SYSTICK_STRESS_RESULT=PASS rounds=512");
     loop {
         Timer::after_secs(1).await;

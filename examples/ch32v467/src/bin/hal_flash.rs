@@ -5,10 +5,10 @@ use ch32_hal::flash::{Error, Flash, FLASH_SIZE, WRITE_SIZE};
 use ch32_hal::{pac, rcc};
 use defmt_rtt as _;
 use panic_halt as _;
+use ch32v467_examples::{report_check, report_set, report_static};
 use qingke_rt::entry;
 
-#[no_mangle]
-pub static mut FLASH_RESULT: u32 = 0;
+report_static!(FLASH_RESULT);
 #[no_mangle]
 pub static mut FLASH_TEST_RANGE: [u32; 2] = [0; 2];
 #[no_mangle]
@@ -17,10 +17,7 @@ pub static mut FLASH_SNAPSHOTS: [[u32; 3]; 2] = [[0; 3]; 2];
 pub static mut FLASH_TEST_CASES: u32 = 0;
 
 fn check(condition: bool, code: u32) {
-    if !condition {
-        unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(FLASH_RESULT), code) };
-        defmt::panic!("FLASH_RESULT=FAIL code={}", code);
-    }
+    report_check!(FLASH_RESULT, condition, code, "FLASH_RESULT check failed");
 }
 
 fn snapshot() -> [u32; 3] {
@@ -33,7 +30,7 @@ fn snapshot() -> [u32; 3] {
 
 #[entry]
 fn main() -> ! {
-    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(FLASH_RESULT), 1) };
+    report_set!(FLASH_RESULT, 1);
     let mut config = ch32_hal::Config::default();
     if cfg!(feature = "clock-pll") {
         config.rcc.sys = rcc::Sysclk::PLL;
@@ -65,8 +62,8 @@ fn main() -> ! {
     );
     unsafe {
         core::ptr::write_volatile(core::ptr::addr_of_mut!(FLASH_SNAPSHOTS), [before, after]);
-        core::ptr::write_volatile(core::ptr::addr_of_mut!(FLASH_RESULT), 2);
     }
+    report_set!(FLASH_RESULT, 2);
     defmt::info!(
         "FLASH_RESULT=PASS capacity={} write_test={}",
         flash.capacity(),
