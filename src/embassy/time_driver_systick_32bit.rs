@@ -120,7 +120,12 @@ pub(crate) fn init(cs: CriticalSection) {
         w.set_stie(true);
     });
     unsafe {
-        qingke::pfic::set_priority(CoreInterrupt::SysTick as u8, Priority::P15 as u8);
+        // Leave SysTick at the reset priority that every peripheral interrupt
+        // starts with, so the default configuration never nests interrupts.
+        // Nesting is safe since `qingke` 0.8.4 restores `mstatus.MPIE` in its
+        // critical section (older releases parked the executor in `wfi` after
+        // a second-level ISR), but nothing asks for it by default.
+        qingke::pfic::set_priority(CoreInterrupt::SysTick as u8, Priority::P0 as u8);
         qingke::pfic::enable_interrupt(CoreInterrupt::SysTick as u8);
     }
 }
