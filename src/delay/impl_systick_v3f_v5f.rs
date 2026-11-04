@@ -106,3 +106,21 @@ impl Delay {
         Self::wait_cycles(on_v5f, Self::cycles(hz, ms, 1_000));
     }
 }
+
+impl embedded_hal::delay::DelayNs for Delay {
+    #[inline]
+    fn delay_ns(&mut self, ns: u32) {
+        let (on_v5f, hz) = Delay::current_hart();
+        Delay::wait_cycles(on_v5f, Delay::cycles(hz, ns, 1_000_000_000))
+    }
+
+    #[inline]
+    fn delay_us(&mut self, us: u32) {
+        Delay::delay_us(self, us)
+    }
+
+    #[inline]
+    fn delay_ms(&mut self, ms: u32) {
+        Delay::delay_ms(self, ms)
+    }
+}
