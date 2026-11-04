@@ -189,9 +189,10 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
 
     fn find_free_ep_address(&self, _dir: Direction) -> Result<u8, EndpointAllocError> {
         // Endpoint 0 is reserved for the control pipe (claimed in start()).
-        // Match the Embassy USB drivers by only auto-allocating non-control
-        // endpoints from index 1.
-        Ok(self.allocated.next_false_index(1).ok_or(EndpointAllocError)? as u8)
+        // `next_false_index` searches strictly *after* the given index, so
+        // `next_false_index(0)` only returns non-control endpoints (>= 1),
+        // matching the behavior of Embassy USB drivers.
+        Ok(self.allocated.next_false_index(0).ok_or(EndpointAllocError)? as u8)
     }
 
     fn alloc_endpoint<D: Dir>(
