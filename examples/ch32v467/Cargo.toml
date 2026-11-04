@@ -1,0 +1,162 @@
+[package]
+name = "ch32v467-examples"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ch32-hal = { path = "../..", optional = true, default-features = false, features = ["rt", "memory-x", "defmt"] }
+# Keep the PAC revision identical to the HAL dependency.
+ch32-metapac = { version = "0.2.0", features = ["rt", "memory-x"] }
+qingke = { version = "0.8.4", features = ["v3v", "critical-section-impl"] }
+qingke-rt = { version = "0.8.4", features = ["v3v"] }
+panic-halt = "1.0"
+defmt = "1.0"
+embassy-futures = "0.1.2"
+embedded-hal = "1.0.0"
+nb = "1.1.0"
+embedded-storage = { version = "0.3.2", optional = true }
+embassy-executor = { version = "0.10.0", optional = true, features = ["platform-riscv32", "executor-thread"] }
+embassy-time = { version = "0.5.1", optional = true }
+embassy-usb = { version = "0.6.0", optional = true, default-features = false }
+embassy-net-driver = { version = "0.2.0", optional = true }
+embassy-net = { version = "0.9.1", optional = true, default-features = false, features = ["tcp", "medium-ethernet", "proto-ipv4", "defmt"] }
+critical-section = { version = "1.2.0", optional = true }
+# Keep the LED/heartbeat running even if the debugger disconnects.
+defmt-rtt = { version = "1.3.0", features = ["disable-blocking-mode"] }
+
+[features]
+default = ["ch32v467weu6"]
+ch32v467ret6 = ["ch32-metapac/ch32v467ret6", "ch32-hal?/ch32v467ret6"]
+ch32v467vet6 = ["ch32-metapac/ch32v467vet6", "ch32-hal?/ch32v467vet6"]
+ch32v467weu6 = ["ch32-metapac/ch32v467weu6", "ch32-hal?/ch32v467weu6"]
+hal = ["dep:ch32-hal"]
+embassy = ["hal", "ch32-hal/embassy", "dep:embassy-executor", "dep:embassy-time", "dep:critical-section"]
+exti = ["hal", "ch32-hal/exti"]
+clock-dividers = ["hal"]
+stress-disable-systick-irq = ["embassy"]
+stress-natural-wrap = ["embassy"]
+clock-hse = ["hal"]
+clock-pll = ["hal"]
+clock-slow = ["hal"]
+usart-loopback = ["embassy"]
+i2c-eeprom = ["embassy"]
+spi-loopback = ["embassy"]
+rng-usbhs-pll = ["embassy"]
+adc-usbhs-pll = ["embassy"]
+adc-loopback = ["embassy"]
+flash-write-test = ["hal", "ch32-hal/memory-split-usr", "dep:embedded-storage"]
+usbhs = ["embassy", "dep:embassy-usb"]
+usbhs2 = ["usbhs"]
+sdio-4bit = ["embassy"]
+sdio-remap = ["embassy"]
+sdio-high-speed = ["embassy"]
+sdio-bypass = ["embassy"]
+eth = ["embassy", "dep:embassy-net-driver"]
+eth-bench = ["eth", "dep:embassy-net"]
+i3c-daa = ["embassy"]
+i3c-remap = ["embassy"]
+i3c-dma = ["embassy"]
+i3c-dma-loopback = ["i3c-dma", "i3c-daa"]
+
+[[bin]]
+name = "hal_init"
+required-features = ["hal"]
+
+[[bin]]
+name = "hal_blinky"
+required-features = ["hal"]
+
+[[bin]]
+name = "hal_exti"
+required-features = ["exti"]
+
+[[bin]]
+name = "hal_embassy"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_systick_stress"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_rcc"
+required-features = ["hal"]
+
+[[bin]]
+name = "hal_mco"
+required-features = ["hal"]
+
+[[bin]]
+name = "hal_time_scale"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_dma"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_usart"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_timer"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_i2c"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_spi"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_dac"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_rng"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_adc"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_flash"
+required-features = ["hal"]
+
+[[bin]]
+name = "hal_can"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_usbhs"
+required-features = ["usbhs"]
+
+[[bin]]
+name = "hal_sdio"
+required-features = ["embassy"]
+
+[[bin]]
+name = "hal_eth"
+required-features = ["eth"]
+
+[[bin]]
+name = "hal_eth_bench"
+required-features = ["eth-bench"]
+
+[[bin]]
+name = "eth_raw_bench"
+required-features = ["eth"]
+
+[[bin]]
+name = "hal_i3c"
+required-features = ["embassy"]
+
+[profile.release]
+debug = 2
+strip = false
+lto = true
+opt-level = "s"

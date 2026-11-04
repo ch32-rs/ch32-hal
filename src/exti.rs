@@ -77,10 +77,9 @@ mod _exti_24lines {
 }
 
 #[cfg(feature = "exti")]
-pub use exti_inner::*;
-
-#[cfg(feature = "exti")]
 pub(crate) use exti_inner::init;
+#[cfg(feature = "exti")]
+pub use exti_inner::*;
 
 #[cfg(feature = "exti")]
 mod exti_inner {
@@ -96,6 +95,9 @@ mod exti_inner {
     use crate::gpio::{AnyPin, Input, Level, Pin as GpioPin, Pull};
     use crate::Peri;
 
+    #[cfg(exti_v4x7)]
+    const EXTI_COUNT: usize = 16;
+    #[cfg(not(exti_v4x7))]
     const EXTI_COUNT: usize = 24;
     const NEW_AW: AtomicWaker = AtomicWaker::new();
     static EXTI_WAKERS: [AtomicWaker; EXTI_COUNT] = [NEW_AW; EXTI_COUNT];
@@ -106,7 +108,10 @@ mod exti_inner {
         let bits = exti.intfr().read();
 
         // We don't handle or change any EXTI lines above 24.
+        #[cfg(not(exti_v4x7))]
         let bits = bits.0 & 0x00FFFFFF;
+        #[cfg(exti_v4x7)]
+        let bits = bits.0 & exti.intenr().read().0 & 0x0000FFFF;
 
         // Clear pending - Clears the EXTI's line pending bits.
         exti.intfr().write(|w| w.0 = bits);
@@ -143,11 +148,7 @@ mod exti_inner {
     impl<'d> Unpin for ExtiInput<'d> {}
 
     impl<'d> ExtiInput<'d> {
-        pub fn new<T: GpioPin>(
-            pin: Peri<'d, T>,
-            ch: Peri<'d, T::ExtiChannel>,
-            pull: Pull,
-        ) -> Self {
+        pub fn new<T: GpioPin>(pin: Peri<'d, T>, ch: Peri<'d, T::ExtiChannel>, pull: Pull) -> Self {
             // Needed if using AnyPin+AnyChannel.
             assert_eq!(pin.pin(), ch.number());
 
@@ -244,6 +245,9 @@ mod exti_inner {
                 let port = port as u8;
                 let pin = pin as usize;
 
+                #[cfg(exti_v4x7)]
+                exti.intenr().modify(|w| w.set_mr(pin, false));
+
                 #[cfg(any(afio_v003, afio_v00x))]
                 {
                     // AFIO_EXTICR
@@ -251,7 +255,7 @@ mod exti_inner {
                     afio.exticr().modify(|w| w.set_exti(pin, port));
                 }
                 // V1, V2, V3, L1
-                #[cfg(any(afio_v3, afio_l1))]
+                #[cfg(any(afio_v3, afio_l1, afio_v4x7))]
                 {
                     // AFIO_EXTICRx
                     // stride: 4, len: 4, 16 lines
@@ -269,10 +273,17 @@ mod exti_inner {
                 }
 
                 // See-also: 7.4.3
+                #[cfg(not(exti_v4x7))]
                 exti.intenr().modify(|w| w.set_mr(pin, true)); // enable interrupt
 
                 exti.rtenr().modify(|w| w.set_tr(pin, rising));
                 exti.ftenr().modify(|w| w.set_tr(pin, falling));
+
+                #[cfg(exti_v4x7)]
+                {
+                    exti.intfr().write(|w| w.set_if_(pin, true));
+                    exti.intenr().modify(|w| w.set_mr(pin, true));
+                }
             });
 
             Self {

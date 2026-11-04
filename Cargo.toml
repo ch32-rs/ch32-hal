@@ -13,20 +13,20 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# ch32-data rev = 3a947aa (ch32-metapac 0.1.2)
+# ch32-data rev = c6d67848e2e801e0671b8af276c9866e9128a392
 ch32-metapac = { features = [
     "rt",
-], version = "0.1.2" }
+], version = "0.2.0" }
 
 # `unsafe-trust-wch-atomics`: qingke 0.8.2 refuses to build whenever the target
 # claims byte atomics unless this is set, and every A-extension target does.
 # Verified on the CH32H417, where both cores `fetch_add` one word a million
 # times each and the total comes out exact (`examples/ch32h417` `atomics`).
-qingke = { version = "0.8.2", features = [
+qingke = { version = "0.8.4", features = [
     "critical-section-impl",
     "unsafe-trust-wch-atomics",
 ] }
-qingke-rt = { version = "0.8.2", optional = true }
+qingke-rt = { version = "0.8.4", optional = true }
 
 embedded-hal = { package = "embedded-hal", version = "1.0" }
 embedded-hal-async = "1.0.0"
@@ -58,10 +58,10 @@ sdio-host = "0.5.0"
 embedded-storage = "0.3.1"
 
 [build-dependencies]
-# ch32-data rev = 3a947aa (ch32-metapac 0.1.2)
+# ch32-data rev = c6d67848e2e801e0671b8af276c9866e9128a392
 ch32-metapac = { features = [
     "metadata",
-], version = "0.1.2" }
+], version = "0.2.0" }
 
 proc-macro2 = "1.0"
 quote = "1.0"
@@ -77,6 +77,7 @@ embassy = [
 ]
 defmt = ["dep:defmt", "embassy-usb-driver/defmt"]
 memory-x = ["ch32-metapac/memory-x"]
+memory-split-usr = ["memory-x", "ch32-metapac/memory-split-usr"]
 ## Built-in EXTI driver and interrupt handlers. Disable to provide your own.
 exti = []
 
@@ -167,6 +168,12 @@ ch32v305rbt6 = ["ch32-metapac/ch32v305rbt6", "qingke-rt/v4f", "qingke/v4f"]
 ch32v307rct6 = ["ch32-metapac/ch32v307rct6", "qingke-rt/v4f", "qingke/v4f"]
 ch32v307vct6 = ["ch32-metapac/ch32v307vct6", "qingke-rt/v4f", "qingke/v4f"]
 ch32v307wcu6 = ["ch32-metapac/ch32v307wcu6", "qingke-rt/v4f", "qingke/v4f"]
+ch32v407ret6 = ["ch32-metapac/ch32v407ret6", "qingke-rt/v3v", "qingke/v3v"]
+ch32v407vet6 = ["ch32-metapac/ch32v407vet6", "qingke-rt/v3v", "qingke/v3v"]
+ch32v407weu6 = ["ch32-metapac/ch32v407weu6", "qingke-rt/v3v", "qingke/v3v"]
+ch32v467ret6 = ["ch32-metapac/ch32v467ret6", "qingke-rt/v3v", "qingke/v3v"]
+ch32v467vet6 = ["ch32-metapac/ch32v467vet6", "qingke-rt/v3v", "qingke/v3v"]
+ch32v467weu6 = ["ch32-metapac/ch32v467weu6", "qingke-rt/v3v", "qingke/v3v"]
 ch32x033f8p6 = ["ch32-metapac/ch32x033f8p6", "qingke-rt/v4c", "qingke/v4c"]
 ch32x034f8p6 = ["ch32-metapac/ch32x034f8p6", "qingke-rt/v4c", "qingke/v4c"]
 ch32x034f8u6 = ["ch32-metapac/ch32x034f8u6", "qingke-rt/v4c", "qingke/v4c"]

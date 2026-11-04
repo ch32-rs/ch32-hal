@@ -491,10 +491,10 @@ pub trait Instance: SealedInstance + RccPeripheral {
     #[allow(dead_code)]
     fn port_cc_reg(cc: vals::CcSel) -> pac::common::Reg<pac::usbpd::regs::PortCc, pac::common::RW> {
         match cc {
-            vals::CcSel::CC1 => Self::REGS.port_cc(0),
-            vals::CcSel::CC2 => Self::REGS.port_cc(2),
+            vals::CcSel::CC1 => Self::REGS.port_cc1(),
+            vals::CcSel::CC2 => Self::REGS.port_cc2(),
             #[cfg(ch641)]
-            vals::CcSel::CC3 => Self::REGS.port_cc(3),
+            vals::CcSel::CC3 => Self::REGS.port_cc3(),
             #[allow(unreachable_patterns)]
             _ => panic!("Invalid CC"),
         }

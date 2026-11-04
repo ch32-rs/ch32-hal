@@ -2,30 +2,46 @@
 //!
 //! Capabilities:
 //!
-//! - Supports full-duplex synchronous serial mode
-//! - Supports single-wire half-duplex mode
-//! - Supports master and slave modes, multiple slave modes
-//! - Supports 8-bit or 16-bit data structures
-//! - The highest clock frequency supports up to half of F_HCLK
-//! - Data order supports MSB or LSB first (CH32V003 supports MSB first only)
-//! - Supports hardware or software control of NSS pin
-//! - Transmission and reception support hardware CRC check
-//! - Transmission and reception buffers support DMA transfer
-//! - Supports changing clock phase and polarity
+//! Master-mode transfers with software NSS and caller-managed chip select.
+//! Supports 8/16-bit words, all four clock modes, blocking and DMA transfers,
+//! and MSB/LSB first (MSB first only on CH32V003). The maximum serial clock is
+//! half the peripheral bus clock.
 
+use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::ptr;
+use core::task::Poll;
 
 use embassy_futures::join::join;
+#[cfg(spi_v4x7)]
+use embassy_futures::select::{select, Either};
+use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::spi::{Mode, Phase, Polarity, MODE_0};
 use pac::spi::vals::BaudRate;
 use pac::spi::Spi as Regs;
 
 use crate::dma::{slice_ptr_parts, word, ChannelAndRequest};
 use crate::gpio::{AfType, AnyPin, OutputType, Pull, Speed};
+use crate::internal::drop::OnDrop;
 use crate::mode::{Async, Blocking, Mode as PeriMode};
 use crate::time::Hertz;
-use crate::{pac, peripherals, Peri};
+use crate::{interrupt, pac, peripherals, Peri};
+
+/// SPI error interrupt handler.
+pub struct InterruptHandler<T: Instance>(PhantomData<T>);
+
+impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        if check_error_flags(&T::REGS.statr().read()).is_err() {
+            T::REGS.ctlr2().modify(|w| {
+                w.set_errie(false);
+                w.set_txdmaen(false);
+                w.set_rxdmaen(false);
+            });
+            T::state().waker.wake();
+        }
+    }
+}
 
 /// SPI Error
 #[derive(Debug, PartialEq, Eq)]
@@ -39,6 +55,10 @@ pub enum Error {
     ModeFault,
     /// Overrun.
     Overrun,
+    /// Buffer exceeds the DMA transfer counter.
+    BufferTooLong,
+    /// The constructor did not provide the required pins or DMA channel.
+    UnsupportedOperation,
 }
 
 #[derive(Copy, Clone)]
@@ -158,17 +178,17 @@ impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
     ) -> Self {
         let regs = T::REGS;
 
-        let div = calculate_baud_rate(T::frequency().0, config.frequency.0);
+        // Frequencies below `clock / 256` are unrepresentable. Clamping to the
+        // slowest divisor matches the historical behavior of the existing
+        // families instead of panicking the constructor.
+        let div = calculate_baud_rate(T::frequency().0, config.frequency.0).unwrap_or(BaudRate::DIV_256);
 
         let cpha = config.raw_phase();
         let cpol = config.raw_polarity();
 
         T::enable_and_reset();
 
-        // high speed mode
-        if config.frequency.0 >= 36_000_000 && div == BaudRate::DIV_2 && miso.is_some() {
-            regs.hscr().write(|w| w.set_hsrxen(true));
-        }
+        configure_high_speed(regs, T::frequency().0, div, miso.is_some());
 
         regs.ctlr2().modify(|w| w.set_ssoe(false));
         regs.ctlr1().modify(|w| {
@@ -176,15 +196,21 @@ impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
             w.set_cpha(cpha);
             w.set_mstr(true); // master
             w.set_br(div);
-            w.set_spe(true);
+            w.set_spe(false);
             w.set_lsbfirst(config.lsb_first());
             w.set_ssi(true);
             w.set_ssm(true);
             w.set_crcen(false);
             w.set_bidimode(false); // undirectional
-            w.set_rxonly(mosi.is_none());
+            w.set_rxonly(false);
             w.set_dff(false); // u8
         });
+        #[cfg(spi_v4x7)]
+        if tx_dma.is_some() || rx_dma.is_some() {
+            use crate::interrupt::typelevel::Interrupt;
+            T::Interrupt::unpend();
+            unsafe { T::Interrupt::enable() };
+        }
 
         Self {
             _peri: peri,
@@ -205,7 +231,12 @@ impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
 
         let lsbfirst = config.lsb_first();
 
-        let br = calculate_baud_rate(T::frequency().0, config.frequency.0);
+        // Same clamping policy as the constructor.
+        let br = calculate_baud_rate(T::frequency().0, config.frequency.0).unwrap_or(BaudRate::DIV_256);
+        let _cleanup = OnDrop::new(|| cleanup(T::REGS));
+        self.blocking_flush().map_err(|_| ())?;
+        T::REGS.ctlr1().modify(|w| w.set_spe(false));
+        configure_high_speed(T::REGS, T::frequency().0, br, self.miso.is_some());
 
         T::REGS.ctlr1().modify(|w| {
             w.set_cpol(cpol);
@@ -234,62 +265,118 @@ impl<'d, T: Instance, M: PeriMode> Spi<'d, T, M> {
         self.current_word_size = config;
     }
 
-    // blocking functions
+    fn prepare<W: Word>(&mut self, transmit_only: bool) -> Result<(), Error> {
+        self.blocking_flush()?;
+        T::REGS.ctlr1().modify(|w| w.set_spe(false));
+        flush_rx_fifo(T::REGS);
+        self.set_word_size(W::CONFIG);
+        T::REGS.ctlr1().modify(|w| {
+            w.set_mstr(true);
+            w.set_ssm(true);
+            w.set_ssi(true);
+            w.set_bidimode(transmit_only);
+            w.set_bidioe(transmit_only);
+            w.set_rxonly(false);
+        });
+        Ok(())
+    }
+
+    /// Wait for the final bit to leave the peripheral.
+    pub fn blocking_flush(&mut self) -> Result<(), Error> {
+        // A disabled peripheral has no transfer in flight. On CH32V4x7
+        // STATR.TXE reads 0 while SPE=0 (measured on CH32V467), so polling it
+        // before the first `prepare` enabled SPE would never complete.
+        if !T::REGS.ctlr1().read().spe() {
+            return Ok(());
+        }
+        loop {
+            let status = T::REGS.statr().read();
+            if let Err(error) = check_error_flags(&status) {
+                cleanup(T::REGS);
+                return Err(error);
+            }
+            if status.txe() && !status.bsy() {
+                return Ok(());
+            }
+        }
+    }
 
     /// Blocking write.
     pub fn blocking_write<W: Word>(&mut self, words: &[W]) -> Result<(), Error> {
-        T::REGS.ctlr1().modify(|w| w.set_spe(true));
-        flush_rx_fifo(T::REGS);
-        self.set_word_size(W::CONFIG);
-        for word in words.iter() {
-            let _ = transfer_word(&T::REGS, *word)?;
+        if words.is_empty() {
+            return Ok(());
         }
-        Ok(())
-    }
-
-    /// Blocking read.
-    pub fn blocking_read<W: Word>(&mut self, words: &mut [W]) -> Result<(), Error> {
-        T::REGS.ctlr1().modify(|w| w.set_spe(true));
-        flush_rx_fifo(T::REGS);
-        self.set_word_size(W::CONFIG);
-        for word in words.iter_mut() {
-            *word = transfer_word(&T::REGS, W::default())?;
+        if self.mosi.is_none() {
+            return Err(Error::UnsupportedOperation);
         }
-        Ok(())
-    }
-
-    /// Blocking in-place bidirectional transfer.
-    ///
-    /// This writes the contents of `data` on MOSI, and puts the received data on MISO in `data`, at the same time.
-    pub fn blocking_transfer_in_place<W: Word>(&mut self, words: &mut [W]) -> Result<(), Error> {
+        let _cleanup = OnDrop::new(|| cleanup(T::REGS));
+        self.prepare::<W>(true)?;
         T::REGS.ctlr1().modify(|w| w.set_spe(true));
-        flush_rx_fifo(T::REGS);
-        self.set_word_size(W::CONFIG);
-        for word in words.iter_mut() {
-            *word = transfer_word(&T::REGS, *word)?;
-        }
-        Ok(())
-    }
-
-    /// Blocking bidirectional transfer.
-    ///
-    /// This transfers both buffers at the same time, so it is NOT equivalent to `write` followed by `read`.
-    ///
-    /// The transfer runs for `max(read.len(), write.len())` bytes. If `read` is shorter extra bytes are ignored.
-    /// If `write` is shorter it is padded with zero bytes.
-    pub fn blocking_transfer<W: Word>(&mut self, read: &mut [W], write: &[W]) -> Result<(), Error> {
-        T::REGS.ctlr1().modify(|w| w.set_spe(true));
-        flush_rx_fifo(T::REGS);
-        self.set_word_size(W::CONFIG);
-        let len = read.len().max(write.len());
-        for i in 0..len {
-            let wb = write.get(i).copied().unwrap_or_default();
-            let rb = transfer_word(&T::REGS, wb)?;
-            if let Some(r) = read.get_mut(i) {
-                *r = rb;
+        for word in words {
+            spin_until_tx_ready(&T::REGS)?;
+            unsafe {
+                ptr::write_volatile(T::REGS.datar().as_ptr().cast(), *word);
             }
         }
-        Ok(())
+        self.blocking_flush()
+    }
+
+    /// Blocking read, generating exactly one frame of clocks per word.
+    pub fn blocking_read<W: Word>(&mut self, words: &mut [W]) -> Result<(), Error> {
+        if words.is_empty() {
+            return Ok(());
+        }
+        if self.miso.is_none() {
+            return Err(Error::UnsupportedOperation);
+        }
+        let _cleanup = OnDrop::new(|| cleanup(T::REGS));
+        self.prepare::<W>(false)?;
+        T::REGS.ctlr1().modify(|w| w.set_spe(true));
+        for word in words {
+            *word = transfer_word(&T::REGS, W::default())?;
+        }
+        self.blocking_flush()
+    }
+
+    /// Blocking transfer using the same buffer for transmit and receive.
+    pub fn blocking_transfer_in_place<W: Word>(&mut self, words: &mut [W]) -> Result<(), Error> {
+        if words.is_empty() {
+            return Ok(());
+        }
+        if self.mosi.is_none() || self.miso.is_none() {
+            return Err(Error::UnsupportedOperation);
+        }
+        let _cleanup = OnDrop::new(|| cleanup(T::REGS));
+        self.prepare::<W>(false)?;
+        T::REGS.ctlr1().modify(|w| w.set_spe(true));
+        for word in words {
+            *word = transfer_word(&T::REGS, *word)?;
+        }
+        self.blocking_flush()
+    }
+
+    /// Blocking transfer of `max(read.len(), write.len())` words.
+    ///
+    /// Missing transmit words are zero; extra received words are discarded.
+    pub fn blocking_transfer<W: Word>(&mut self, read: &mut [W], write: &[W]) -> Result<(), Error> {
+        let length = read.len().max(write.len());
+        if length == 0 {
+            return Ok(());
+        }
+        if (!read.is_empty() && self.miso.is_none()) || (!write.is_empty() && self.mosi.is_none()) {
+            return Err(Error::UnsupportedOperation);
+        }
+        let _cleanup = OnDrop::new(|| cleanup(T::REGS));
+        self.prepare::<W>(false)?;
+        T::REGS.ctlr1().modify(|w| w.set_spe(true));
+        for index in 0..length {
+            let sent = write.get(index).copied().unwrap_or_default();
+            let received = transfer_word(&T::REGS, sent)?;
+            if let Some(destination) = read.get_mut(index) {
+                *destination = received;
+            }
+        }
+        self.blocking_flush()
     }
 }
 
@@ -324,7 +411,15 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
     ) -> Self {
         apply_remap!();
 
-        Self::new_inner(peri, new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)), None, new_pin!(miso, AfType::input(Pull::None)), None, None, config)
+        Self::new_inner(
+            peri,
+            new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)),
+            None,
+            new_pin!(miso, AfType::input(Pull::None)),
+            None,
+            None,
+            config,
+        )
     }
 
     /// Create a new SPI driver, in TX-only mode (only MOSI pin, no MISO).
@@ -336,7 +431,15 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
     ) -> Self {
         apply_remap!();
 
-        Self::new_inner(peri, new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)), new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)), None, None, None, config)
+        Self::new_inner(
+            peri,
+            new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)),
+            new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)),
+            None,
+            None,
+            None,
+            config,
+        )
     }
 
     /// Create a new SPI driver, in TX-only mode, without SCK pin.
@@ -349,7 +452,15 @@ impl<'d, T: Instance> Spi<'d, T, Blocking> {
     ) -> Self {
         apply_remap!();
 
-        Self::new_inner(peri, None, new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)), None, None, None, config)
+        Self::new_inner(
+            peri,
+            None,
+            new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)),
+            None,
+            None,
+            None,
+            config,
+        )
     }
 }
 
@@ -360,6 +471,7 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         sck: Peri<'d, if_remap!(impl SckPin<T, REMAP>)>,
         mosi: Peri<'d, if_remap!(impl MosiPin<T, REMAP>)>,
         miso: Peri<'d, if_remap!(impl MisoPin<T, REMAP>)>,
+        #[cfg(spi_v4x7)] _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         tx_dma: Peri<'d, impl TxDma<T>>,
         rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
@@ -382,6 +494,7 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         peri: Peri<'d, T>,
         sck: Peri<'d, if_remap!(impl SckPin<T, REMAP>)>,
         miso: Peri<'d, if_remap!(impl MisoPin<T, REMAP>)>,
+        #[cfg(spi_v4x7)] _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         rx_dma: Peri<'d, impl RxDma<T>>,
         config: Config,
     ) -> Self {
@@ -398,11 +511,34 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         )
     }
 
+    /// Create a receive-only driver with DMA-generated dummy transmit words.
+    pub fn new_rxonly_with_tx_dma<#[cfg(not(afio_h4))] const REMAP: u8>(
+        peri: Peri<'d, T>,
+        sck: Peri<'d, if_remap!(impl SckPin<T, REMAP>)>,
+        miso: Peri<'d, if_remap!(impl MisoPin<T, REMAP>)>,
+        #[cfg(spi_v4x7)] _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
+        tx_dma: Peri<'d, impl TxDma<T>>,
+        rx_dma: Peri<'d, impl RxDma<T>>,
+        config: Config,
+    ) -> Self {
+        apply_remap!();
+        Self::new_inner(
+            peri,
+            new_pin!(sck, AfType::output(OutputType::PushPull, Speed::High)),
+            None,
+            new_pin!(miso, AfType::input(Pull::None)),
+            new_dma!(tx_dma),
+            new_dma!(rx_dma),
+            config,
+        )
+    }
+
     /// Create a new SPI driver, in TX-only mode (only MOSI pin, no MISO).
     pub fn new_txonly<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
         sck: Peri<'d, if_remap!(impl SckPin<T, REMAP>)>,
         mosi: Peri<'d, if_remap!(impl MosiPin<T, REMAP>)>,
+        #[cfg(spi_v4x7)] _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         tx_dma: Peri<'d, impl TxDma<T>>,
         config: Config,
     ) -> Self {
@@ -425,142 +561,229 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
     pub fn new_txonly_nosck<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
         mosi: Peri<'d, if_remap!(impl MosiPin<T, REMAP>)>,
+        #[cfg(spi_v4x7)] _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         tx_dma: Peri<'d, impl TxDma<T>>,
         config: Config,
     ) -> Self {
         apply_remap!();
 
-        Self::new_inner(peri, None, new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)), None, new_dma!(tx_dma), None, config)
+        Self::new_inner(
+            peri,
+            None,
+            new_pin!(mosi, AfType::output(OutputType::PushPull, Speed::High)),
+            None,
+            new_dma!(tx_dma),
+            None,
+            config,
+        )
     }
 
-    /// SPI write, using DMA.
+    // Only CH32V4x7 has an SPI error interrupt binding in the constructors.
+    // Polling this future on the other families would wake the executor
+    // continuously for the whole DMA transfer, so they await the transfer and
+    // check the error flags once afterwards instead.
+    #[cfg(spi_v4x7)]
+    async fn wait_error() -> Error {
+        poll_fn(|cx| {
+            T::state().waker.register(cx.waker());
+            if let Err(error) = check_error_flags(&T::REGS.statr().read()) {
+                return Poll::Ready(error);
+            }
+            T::REGS.ctlr2().modify(|w| w.set_errie(true));
+            Poll::Pending
+        })
+        .await
+    }
+
+    /// Wait until the transmit buffer and shift register are empty.
+    pub async fn flush(&mut self) -> Result<(), Error> {
+        // Same boundary as `blocking_flush`: while SPE=0 the CH32V4x7 TXE
+        // flag is not meaningful, and no transfer can be in flight.
+        if !T::REGS.ctlr1().read().spe() {
+            return Ok(());
+        }
+        poll_fn(|cx| {
+            let status = T::REGS.statr().read();
+            if let Err(error) = check_error_flags(&status) {
+                cleanup(T::REGS);
+                return Poll::Ready(Err(error));
+            }
+            if status.txe() && !status.bsy() {
+                Poll::Ready(Ok(()))
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
+    /// Write using DMA; received data is ignored in transmit-only hardware mode.
     pub async fn write<W: Word>(&mut self, data: &[W]) -> Result<(), Error> {
         if data.is_empty() {
             return Ok(());
         }
-
-        self.set_word_size(W::CONFIG);
-        T::REGS.ctlr1().modify(|w| {
-            w.set_spe(false);
-        });
-
-        let tx_dst = T::REGS.datar().as_ptr();
-        let tx_f = unsafe {
+        if data.len() > u16::MAX as usize {
+            return Err(Error::BufferTooLong);
+        }
+        if self.mosi.is_none() || self.tx_dma.is_none() {
+            return Err(Error::UnsupportedOperation);
+        }
+        let _cleanup = OnDrop::new(|| cleanup(T::REGS));
+        self.prepare::<W>(true)?;
+        let transfer = unsafe {
             self.tx_dma
                 .as_mut()
                 .unwrap()
-                .write(data, tx_dst as *mut _, Default::default())
+                .write(data, T::REGS.datar().as_ptr().cast(), Default::default())
         };
-
-        T::REGS.ctlr2().modify(|w| w.set_txdmaen(true)); // set txdma en
-        T::REGS.ctlr1().modify(|w| {
-            w.set_spe(true);
-        });
-
-        tx_f.await;
-
-        finish_dma(T::REGS);
-
-        Ok(())
+        T::REGS.ctlr2().modify(|w| w.set_txdmaen(true));
+        T::REGS.ctlr1().modify(|w| w.set_spe(true));
+        #[cfg(spi_v4x7)]
+        if let Either::First(error) = select(Self::wait_error(), transfer).await {
+            return Err(error);
+        }
+        #[cfg(not(spi_v4x7))]
+        transfer.await;
+        self.flush().await
     }
 
-    /// SPI read, using DMA.
+    /// Read using DMA and exactly one frame of clocks per word.
+    ///
+    /// RX-only constructors generate dummy transmit words in software. Supply
+    /// both DMA channels with `new_rxonly_with_tx_dma` for DMA clock generation.
     pub async fn read<W: Word>(&mut self, data: &mut [W]) -> Result<(), Error> {
         if data.is_empty() {
             return Ok(());
         }
-
-        self.set_word_size(W::CONFIG);
-        T::REGS.ctlr1().modify(|w| {
-            w.set_spe(false);
-        });
-
-        flush_rx_fifo(T::REGS);
-
-        T::REGS.ctlr2().modify(|w| w.set_rxdmaen(true)); // set rxdma en
-
-        let clock_byte_count = data.len();
-
-        let rx_src = T::REGS.datar().as_ptr() as *mut _;
-        let rx_f = unsafe { self.rx_dma.as_mut().unwrap().read(rx_src, data, Default::default()) };
-
-        let tx_dst = T::REGS.datar().as_ptr() as *mut _;
-        let clock_byte = 0x00u8;
-        let tx_f = unsafe {
-            self.tx_dma
+        if data.len() > u16::MAX as usize {
+            return Err(Error::BufferTooLong);
+        }
+        if self.miso.is_none() || self.rx_dma.is_none() {
+            return Err(Error::UnsupportedOperation);
+        }
+        let _cleanup = OnDrop::new(|| cleanup(T::REGS));
+        self.prepare::<W>(false)?;
+        let count = data.len();
+        let dummy = W::default();
+        let receive = unsafe {
+            self.rx_dma
                 .as_mut()
                 .unwrap()
-                .write_repeated(&clock_byte, clock_byte_count, tx_dst, Default::default())
+                .read(T::REGS.datar().as_ptr().cast(), data, Default::default())
         };
-
-        T::REGS.ctlr2().modify(|w| w.set_txdmaen(true));
-
-        T::REGS.ctlr1().modify(|w| {
-            w.set_spe(true);
-        });
-
-        join(tx_f, rx_f).await;
-
-        finish_dma(T::REGS);
-
-        Ok(())
+        if let Some(transmit) = self.tx_dma.as_mut() {
+            let transmit =
+                unsafe { transmit.write_repeated(&dummy, count, T::REGS.datar().as_ptr().cast(), Default::default()) };
+            T::REGS.ctlr2().modify(|w| {
+                w.set_rxdmaen(true);
+                w.set_txdmaen(true);
+            });
+            T::REGS.ctlr1().modify(|w| w.set_spe(true));
+            #[cfg(spi_v4x7)]
+            if let Either::First(error) = select(Self::wait_error(), join(transmit, receive)).await {
+                return Err(error);
+            }
+            #[cfg(not(spi_v4x7))]
+            join(transmit, receive).await;
+        } else {
+            let mut sent = 0;
+            let transmit = poll_fn(|cx| {
+                if T::REGS.statr().read().txe() {
+                    unsafe {
+                        ptr::write_volatile(T::REGS.datar().as_ptr().cast(), dummy);
+                    }
+                    sent += 1;
+                }
+                if sent == count {
+                    Poll::Ready(())
+                } else {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            });
+            T::REGS.ctlr2().modify(|w| w.set_rxdmaen(true));
+            T::REGS.ctlr1().modify(|w| w.set_spe(true));
+            #[cfg(spi_v4x7)]
+            if let Either::First(error) = select(Self::wait_error(), join(transmit, receive)).await {
+                return Err(error);
+            }
+            #[cfg(not(spi_v4x7))]
+            join(transmit, receive).await;
+        }
+        self.flush().await
     }
 
     async fn transfer_inner<W: Word>(&mut self, read: *mut [W], write: *const [W]) -> Result<(), Error> {
-        let (_, rx_len) = slice_ptr_parts(read);
-        let (_, tx_len) = slice_ptr_parts(write);
-        assert_eq!(rx_len, tx_len);
-        if rx_len == 0 {
+        let (_, length) = slice_ptr_parts(read);
+        let (_, sent) = slice_ptr_parts(write);
+        assert_eq!(length, sent);
+        if length == 0 {
             return Ok(());
         }
-
-        self.set_word_size(W::CONFIG);
-        T::REGS.ctlr1().modify(|w| {
-            w.set_spe(false);
-        });
-
-        // SPIv3 clears rxfifo on SPE=0
-        flush_rx_fifo(T::REGS);
-
-        T::REGS.ctlr2().modify(|w| w.set_rxdmaen(true));
-
-        let rx_src = T::REGS.datar().as_ptr() as *mut _;
-        let rx_f = unsafe { self.rx_dma.as_mut().unwrap().read_raw(rx_src, read, Default::default()) };
-
-        let tx_dst = T::REGS.datar().as_ptr() as *mut _;
-        let tx_f = unsafe {
+        if length > u16::MAX as usize {
+            return Err(Error::BufferTooLong);
+        }
+        if self.tx_dma.is_none() || self.rx_dma.is_none() {
+            return Err(Error::UnsupportedOperation);
+        }
+        let _cleanup = OnDrop::new(|| cleanup(T::REGS));
+        self.prepare::<W>(false)?;
+        let receive = unsafe {
+            self.rx_dma
+                .as_mut()
+                .unwrap()
+                .read_raw(T::REGS.datar().as_ptr().cast(), read, Default::default())
+        };
+        let transmit = unsafe {
             self.tx_dma
                 .as_mut()
                 .unwrap()
-                .write_raw(write, tx_dst, Default::default())
+                .write_raw(write, T::REGS.datar().as_ptr().cast(), Default::default())
         };
-
-        T::REGS.ctlr2().modify(|w| w.set_txdmaen(true));
-        T::REGS.ctlr1().modify(|w| {
-            w.set_spe(true);
+        T::REGS.ctlr2().modify(|w| {
+            w.set_rxdmaen(true);
+            w.set_txdmaen(true);
         });
+        T::REGS.ctlr1().modify(|w| w.set_spe(true));
+        #[cfg(spi_v4x7)]
+        if let Either::First(error) = select(Self::wait_error(), join(transmit, receive)).await {
+            return Err(error);
+        }
+        #[cfg(not(spi_v4x7))]
+        join(transmit, receive).await;
+        self.flush().await
+    }
 
-        join(tx_f, rx_f).await;
-
-        finish_dma(T::REGS);
-
+    /// Transfer `max(read.len(), write.len())` words using DMA.
+    ///
+    /// Missing transmit words are zero; extra received words are discarded.
+    pub async fn transfer<W: Word>(&mut self, read: &mut [W], write: &[W]) -> Result<(), Error> {
+        if read.len().max(write.len()) > u16::MAX as usize {
+            return Err(Error::BufferTooLong);
+        }
+        if (!read.is_empty() && self.miso.is_none()) || (!write.is_empty() && self.mosi.is_none()) {
+            return Err(Error::UnsupportedOperation);
+        }
+        let common = read.len().min(write.len());
+        self.transfer_inner(&mut read[..common], &write[..common]).await?;
+        if read.len() > common {
+            self.read(&mut read[common..]).await?;
+        }
+        if write.len() > common {
+            self.write(&write[common..]).await?;
+        }
         Ok(())
     }
 
-    /// Bidirectional transfer, using DMA.
-    ///
-    /// This transfers both buffers at the same time, so it is NOT equivalent to `write` followed by `read`.
-    ///
-    /// The transfer runs for `max(read.len(), write.len())` bytes. If `read` is shorter extra bytes are ignored.
-    /// If `write` is shorter it is padded with zero bytes.
-    pub async fn transfer<W: Word>(&mut self, read: &mut [W], write: &[W]) -> Result<(), Error> {
-        self.transfer_inner(read, write).await
-    }
-
-    /// In-place bidirectional transfer, using DMA.
-    ///
-    /// This writes the contents of `data` on MOSI, and puts the received data on MISO in `data`, at the same time.
+    /// Transfer using the same buffer for transmit and receive.
     pub async fn transfer_in_place<W: Word>(&mut self, data: &mut [W]) -> Result<(), Error> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        if self.miso.is_none() || self.mosi.is_none() {
+            return Err(Error::UnsupportedOperation);
+        }
         self.transfer_inner(data, data).await
     }
 }
@@ -583,13 +806,19 @@ impl<'d, T: Instance, W: Word> embedded_hal_async::spi::SpiBus<W> for Spi<'d, T,
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        Ok(())
+        self.flush().await
     }
 }
 
 impl<'d, T: Instance, M: PeriMode> Drop for Spi<'d, T, M> {
     fn drop(&mut self) {
         use crate::gpio::SealedPin;
+        cleanup(T::REGS);
+        #[cfg(spi_v4x7)]
+        {
+            use crate::interrupt::typelevel::Interrupt;
+            T::Interrupt::disable();
+        }
 
         self.sck.as_ref().map(|x| x.set_as_disconnected());
         self.mosi.as_ref().map(|x| x.set_as_disconnected());
@@ -601,23 +830,37 @@ impl<'d, T: Instance, M: PeriMode> Drop for Spi<'d, T, M> {
 
 // Get CTRL1.BR
 #[inline]
-fn calculate_baud_rate(hclk: u32, clk: u32) -> BaudRate {
-    // only div2, div4 to div256 are valid
-    let div = hclk / clk;
-
-    match div {
-        1..=2 => BaudRate::DIV_2,
-        3..=4 => BaudRate::DIV_4,
-        5..=8 => BaudRate::DIV_8,
-        9..=16 => BaudRate::DIV_16,
-        17..=32 => BaudRate::DIV_32,
-        33..=64 => BaudRate::DIV_64,
-        65..=128 => BaudRate::DIV_128,
-        129..=256 => BaudRate::DIV_256,
-        // fallback to the lowest baudrate
-        0 => BaudRate::DIV_2,
-        _ => BaudRate::DIV_256,
+fn calculate_baud_rate(clock: u32, frequency: u32) -> Option<BaudRate> {
+    if clock == 0 || frequency == 0 {
+        return None;
     }
+    for (divisor, setting) in [
+        (2u64, BaudRate::DIV_2),
+        (4, BaudRate::DIV_4),
+        (8, BaudRate::DIV_8),
+        (16, BaudRate::DIV_16),
+        (32, BaudRate::DIV_32),
+        (64, BaudRate::DIV_64),
+        (128, BaudRate::DIV_128),
+        (256, BaudRate::DIV_256),
+    ] {
+        if u64::from(clock) <= u64::from(frequency) * divisor {
+            return Some(setting);
+        }
+    }
+    None
+}
+
+fn configure_high_speed(regs: Regs, clock: u32, divisor: BaudRate, receive: bool) {
+    #[cfg(spi_v4x7)]
+    let enabled = receive && divisor == BaudRate::DIV_2;
+    #[cfg(not(spi_v4x7))]
+    let enabled = receive && divisor == BaudRate::DIV_2 && clock / 2 >= 36_000_000;
+    regs.hscr().modify(|w| {
+        w.set_hsrxen(enabled);
+        #[cfg(spi_v4x7)]
+        w.set_hsrxen2(enabled && clock >= 120_000_000);
+    });
 }
 
 fn check_error_flags(sr: &pac::spi::regs::Statr) -> Result<(), Error> {
@@ -664,19 +907,23 @@ fn flush_rx_fifo(regs: pac::spi::Spi) {
     }
 }
 
-fn finish_dma(regs: Regs) {
-    while regs.statr().read().bsy() {}
-
-    // Disable the spi peripheral
-    regs.ctlr1().modify(|w| {
-        w.set_spe(false);
-    });
-
-    // The peripheral automatically disables the DMA stream on completion without error,
-    // but it does not clear the RXDMAEN/TXDMAEN flag in CR2.
+fn cleanup(regs: Regs) {
     regs.ctlr2().modify(|reg| {
         reg.set_txdmaen(false);
         reg.set_rxdmaen(false);
+        reg.set_errie(false);
+    });
+    let _ = regs.statr().read();
+    regs.ctlr1().modify(|w| w.set_spe(false));
+    flush_rx_fifo(regs);
+    let _ = regs.datar().read();
+    let _ = regs.statr().read();
+    regs.statr().write(|w| w.set_crcerr(false));
+    regs.ctlr1().modify(|w| {
+        w.set_mstr(true);
+        w.set_bidimode(false);
+        w.set_bidioe(false);
+        w.set_rxonly(false);
     });
 }
 
@@ -699,7 +946,7 @@ impl<'d, T: Instance, M: PeriMode> embedded_hal::spi::ErrorType for Spi<'d, T, M
 
 impl<'d, T: Instance, W: Word, M: PeriMode> embedded_hal::spi::SpiBus<W> for Spi<'d, T, M> {
     fn flush(&mut self) -> Result<(), Self::Error> {
-        Ok(())
+        self.blocking_flush()
     }
 
     fn read(&mut self, words: &mut [W]) -> Result<(), Self::Error> {
@@ -726,6 +973,7 @@ impl embedded_hal::spi::Error for Error {
             Self::Crc => embedded_hal::spi::ErrorKind::Other,
             Self::ModeFault => embedded_hal::spi::ErrorKind::ModeFault,
             Self::Overrun => embedded_hal::spi::ErrorKind::Overrun,
+            Self::BufferTooLong | Self::UnsupportedOperation => embedded_hal::spi::ErrorKind::Other,
         }
     }
 }
@@ -758,25 +1006,35 @@ mod word_impl {
 
 trait SealedInstance {
     const REGS: Regs;
+    fn state() -> &'static State;
+}
+
+struct State {
+    waker: AtomicWaker,
 }
 
 /// SPI instance trait.
 #[allow(private_bounds)]
 pub trait Instance:
-    embassy_hal_internal::PeripheralType
-    + crate::peripheral::RccPeripheral
-    + crate::peripheral::RemapBound
-    + SealedInstance
+    embassy_hal_internal::PeripheralType + crate::peripheral::RccPeripheral + crate::peripheral::RemapBound + SealedInstance
 {
+    /// SPI global interrupt.
+    type Interrupt: interrupt::typelevel::Interrupt;
 }
 
 foreach_peripheral!(
     (spi, $inst:ident) => {
         impl SealedInstance for peripherals::$inst {
             const REGS: Regs = crate::pac::$inst;
+            fn state() -> &'static State {
+                static STATE: State = State { waker: AtomicWaker::new() };
+                &STATE
+            }
         }
 
-        impl Instance for peripherals::$inst {}
+        impl Instance for peripherals::$inst {
+            type Interrupt = crate::_generated::peripheral_interrupts::$inst::GLOBAL;
+        }
     };
 );
 

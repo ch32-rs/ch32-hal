@@ -25,6 +25,9 @@ mod shared;
 #[doc(hidden)]
 pub mod clock_tree_reference;
 
+pub mod mco;
+pub use mco::{Mco, McoPin, McoSource};
+
 #[cfg(ch32v003)]
 #[path = "v003.rs"]
 mod rcc_impl;
@@ -53,6 +56,10 @@ mod rcc_impl;
 #[path = "h4/mod.rs"]
 mod rcc_impl;
 
+#[cfg(rcc_v4x7)]
+#[path = "v4x7.rs"]
+mod rcc_impl;
+
 pub use rcc_impl::*;
 
 /// Nominal HSI frequency for the selected chip.
@@ -60,18 +67,13 @@ pub const HSI_FREQ: Hertz = HSI_FREQUENCY;
 
 #[cfg(rcc_h4)]
 const DEFAULT_FREQUENCY: Hertz = Hertz(25_000_000);
+#[cfg(rcc_v4x7)]
+const DEFAULT_FREQUENCY: Hertz = Hertz(20_000_000);
 #[cfg(all(any(ch32x0, ch643), not(rcc_h4)))]
 const DEFAULT_FREQUENCY: Hertz = Hertz(48_000_000);
-#[cfg(all(
-    not(rcc_h4),
-    not(any(ch32x0, ch643)),
-    any(ch32v003, ch32v0, ch32m0, ch641)
-))]
+#[cfg(all(not(rcc_h4), not(any(ch32x0, ch643)), any(ch32v003, ch32v0, ch32m0, ch641)))]
 const DEFAULT_FREQUENCY: Hertz = Hertz(24_000_000);
-#[cfg(all(
-    not(rcc_h4),
-    not(any(ch32x0, ch643, ch32v003, ch32v0, ch32m0, ch641))
-))]
+#[cfg(all(not(any(rcc_h4, rcc_v4x7)), not(any(ch32x0, ch643, ch32v003, ch32v0, ch32m0, ch641))))]
 const DEFAULT_FREQUENCY: Hertz = Hertz(8_000_000);
 
 static mut CLOCKS: Clocks = Clocks {

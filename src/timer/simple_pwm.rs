@@ -114,19 +114,14 @@ impl<'d, T: GeneralInstance16bit> SimplePwm<'d, T> {
     /// Note: when you call this, the max duty value changes, so you will have to
     /// call `set_duty` on all channels with the duty calculated based on the new max duty.
     pub fn set_frequency(&mut self, freq: Hertz) {
-        let multiplier = if self.inner.get_counting_mode().is_center_aligned() {
-            2u8
-        } else {
-            1u8
-        };
-        self.inner.set_frequency(freq * multiplier);
+        self.inner.set_pwm_frequency(freq);
     }
 
     /// Get max duty value.
     ///
     /// This value depends on the configured frequency and the timer's clock rate from RCC.
     pub fn get_max_duty(&self) -> u32 {
-        self.inner.get_max_compare_value() + 1
+        self.inner.get_max_pwm_duty()
     }
 
     /// Set the duty for a given channel.

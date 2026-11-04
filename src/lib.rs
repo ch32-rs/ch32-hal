@@ -102,7 +102,10 @@ pub mod dma;
 // for fields that carry enum types — H4's HSADC + ADC2 + DAC use a
 // different register convention. Gate the V3 driver out until a dedicated
 // H4 driver is ported.
-#[cfg(all(adc, not(ch32h4)))]
+#[cfg(all(adc, not(any(ch32h4, ch32v4))))]
+pub mod adc;
+#[cfg(adc_v4x7)]
+#[path = "adc/v4x7.rs"]
 pub mod adc;
 #[cfg(all(dac, not(ch32h4)))]
 pub mod dac;
@@ -114,14 +117,19 @@ pub mod gpio;
 // as the V2/V3 families), so the existing V3 driver applies directly.
 #[cfg(i2c)]
 pub mod i2c;
+#[cfg(i3c_v4x7)]
+pub mod i3c;
 #[cfg(all(rng, not(ch32h4)))]
 pub mod rng;
 #[cfg(sdio_v3)]
 pub mod sdio;
+#[cfg(sdio_v4x7)]
+#[path = "sdio/v4x7.rs"]
+pub mod sdio;
 pub mod signature;
 #[cfg(all(spi, not(ch32h4)))]
 pub mod spi;
-#[cfg(any(timer_x0, timer_v3, timer_h4))]
+#[cfg(any(timer_x0, timer_v3, timer_h4, timer_v4x7))]
 pub mod timer;
 pub mod usart;
 
@@ -136,15 +144,24 @@ pub mod usbd;
 
 #[cfg(usbhs_v3)]
 pub mod usbhs;
+#[cfg(usbhs_v4x7)]
+#[path = "usbhs/v4x7/mod.rs"]
+pub mod usbhs;
 
 // H4's USBPD register layout differs from V3 — gate out for now.
 #[cfg(all(usbpd, not(ch32h4)))]
 pub mod usbpd;
 
-#[cfg(any(eth, emac))]
-pub mod eth;
-#[cfg(all(can, not(ch32h4)))]
+#[cfg(all(can, not(any(ch32h4, ch32v4))))]
 pub mod can;
+#[cfg(can_v4x7)]
+#[path = "can/v4x7.rs"]
+pub mod can;
+#[cfg(all(any(eth, emac), not(ch32v4)))]
+pub mod eth;
+#[cfg(emac_v4x7)]
+#[path = "eth/v4x7.rs"]
+pub mod eth;
 
 #[cfg(all(flash, not(ch32h4)))]
 pub mod flash;

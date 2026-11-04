@@ -167,6 +167,18 @@ impl From<OutputPolarity> for bool {
     }
 }
 
+fn period_registers(clock: u32, frequency: u32, bits: u32, center_aligned: bool, pwm: bool) -> (u16, u32) {
+    assert!(frequency > 0);
+    let ticks = u64::from(clock) / (u64::from(frequency) * if center_aligned { 2 } else { 1 });
+    assert!(ticks > 0);
+    let max_ticks = (1u64 << bits) - u64::from(center_aligned || pwm);
+    let prescaler = (ticks - 1) / max_ticks;
+    let prescaler = u16::try_from(prescaler).unwrap();
+    let period = ticks / (u64::from(prescaler) + 1);
+    let reload = period - u64::from(!center_aligned);
+    (prescaler, u32::try_from(reload).unwrap())
+}
+
 /// Low-level timer driver.
 pub struct Timer<'d, T: CoreInstance> {
     tim: Peri<'d, T>,
@@ -225,42 +237,35 @@ impl<'d, T: BasicInstance> Timer<'d, T> {
     /// In center-aligned mode (which not all timers support), the wrap-around frequency is effectively halved
     /// because it needs to count up and down.
     pub fn set_frequency(&self, frequency: Hertz) {
-        let f = frequency.0;
-        assert!(f > 0);
-        let timer_f = T::frequency().0;
+        self.set_frequency_inner(frequency, false, false);
+    }
+
+    fn set_frequency_inner(&self, frequency: Hertz, center_aligned: bool, pwm: bool) {
+        let bits = match T::BITS {
+            TimerBits::Bits16 => 16,
+            #[cfg(any(ch32l1, ch32v203, ch32v208, ch32h4))]
+            TimerBits::Bits32 => 32,
+        };
+        let (psc, arr) = period_registers(T::frequency().0, frequency.0, bits, center_aligned, pwm);
 
         match T::BITS {
             TimerBits::Bits16 => {
-                let pclk_ticks_per_timer_period = timer_f / f;
-                let psc: u16 = (((pclk_ticks_per_timer_period - 1) / (1 << 16)).try_into()).unwrap();
-                let divide_by = pclk_ticks_per_timer_period / (u32::from(psc) + 1);
-
-                // the timer counts `0..=arr`, we want it to count `0..divide_by`
-                let arr = (u16::try_from(divide_by - 1)).unwrap();
-
                 let regs = self.regs_basic();
                 regs.psc().write_value(psc);
-                regs.atrlr().write_value(arr);
-
-                regs.ctlr1().modify(|r| r.set_urs(vals::Urs::COUNTERONLY));
-                regs.swevgr().write(|r| r.set_ug(true));
-                regs.ctlr1().modify(|r| r.set_urs(vals::Urs::ANYEVENT));
+                regs.atrlr().write_value(arr as u16);
             }
             #[cfg(any(ch32l1, ch32v203, ch32v208, ch32h4))]
             TimerBits::Bits32 => {
-                let pclk_ticks_per_timer_period = (timer_f / f) as u64;
-                let psc: u16 = (((pclk_ticks_per_timer_period - 1) / (1 << 32)).try_into()).unwrap();
-                let arr: u32 = ((pclk_ticks_per_timer_period / (psc as u64 + 1)).try_into()).unwrap();
-
                 let regs = self.regs_gp32_unchecked();
                 regs.psc().write_value(psc);
                 regs.atrlr().write_value(arr);
-
-                regs.ctlr1().modify(|r| r.set_urs(vals::Urs::COUNTERONLY));
-                regs.swevgr().write(|r| r.set_ug(true));
-                regs.ctlr1().modify(|r| r.set_urs(vals::Urs::ANYEVENT));
             }
         }
+        let regs = self.regs_basic();
+        let previous_urs = regs.ctlr1().read().urs();
+        regs.ctlr1().modify(|r| r.set_urs(vals::Urs::COUNTERONLY));
+        regs.swevgr().write(|r| r.set_ug(true));
+        regs.ctlr1().modify(|r| r.set_urs(previous_urs));
     }
 
     /// Clear update interrupt.
@@ -270,9 +275,7 @@ impl<'d, T: BasicInstance> Timer<'d, T> {
         let regs = self.regs_basic();
         let intfr = regs.intfr().read();
         if intfr.uif() {
-            regs.intfr().modify(|r| {
-                r.set_uif(false);
-            });
+            regs.intfr().write_value(crate::pac::timer::regs::Intfr(0xfffe));
             true
         } else {
             false
@@ -296,18 +299,18 @@ impl<'d, T: BasicInstance> Timer<'d, T> {
         match T::BITS {
             TimerBits::Bits16 => {
                 let regs = self.regs_basic();
-                let arr = regs.atrlr().read();
-                let psc = regs.psc().read();
+                let arr = u64::from(regs.atrlr().read()) + 1;
+                let psc = u64::from(regs.psc().read()) + 1;
 
-                timer_f / arr / (psc + 1)
+                Hertz((u64::from(timer_f.0) / (arr * psc)) as u32)
             }
             #[cfg(any(ch32l1, ch32v203, ch32v208, ch32h4))]
             TimerBits::Bits32 => {
                 let regs = self.regs_gp32_unchecked();
-                let arr = regs.atrlr().read();
-                let psc = regs.psc().read();
+                let arr = u64::from(regs.atrlr().read()) + 1;
+                let psc = u64::from(regs.psc().read()) + 1;
 
-                timer_f / arr / (psc + 1)
+                Hertz((u64::from(timer_f.0) / (arr * psc)) as u32)
             }
         }
     }
@@ -326,6 +329,14 @@ impl<'d, T: BasicInstance> Timer<'d, T> {
 }
 
 impl<'d, T: GeneralInstance16bit> Timer<'d, T> {
+    pub(crate) fn set_pwm_frequency(&self, frequency: Hertz) {
+        self.set_frequency_inner(frequency, self.get_counting_mode().is_center_aligned(), true);
+    }
+
+    pub(crate) fn get_max_pwm_duty(&self) -> u32 {
+        self.get_max_compare_value() + u32::from(!self.get_counting_mode().is_center_aligned())
+    }
+
     /// Get access to the general purpose 16bit timer registers.
     ///
     /// Note: This works even if the timer is more capable, because registers
@@ -386,7 +397,9 @@ impl<'d, T: GeneralInstance16bit> Timer<'d, T> {
 
     /// Clear input interrupt.
     pub fn clear_input_interrupt(&self, channel: Channel) {
-        self.regs_gp16().intfr().modify(|r| r.set_ccif(channel.index(), false));
+        self.regs_gp16()
+            .intfr()
+            .write_value(crate::pac::timer::regs::Intfr(0xffff & !(1 << (channel.index() + 1))));
     }
 
     /// Enable input interrupt.

@@ -52,6 +52,22 @@ macro_rules! pin_trait_impl {
     };
 }
 
+// MCO is a singleton peripheral (RCC), so its pin trait has no instance
+// parameter; it is still generated from the same ch32-data pin tables.
+macro_rules! mco_pin_impl {
+    ($pin:ident, $n:expr) => {
+        #[cfg(not(afio_h4))]
+        impl crate::rcc::McoPin for crate::peripherals::$pin {}
+
+        #[cfg(afio_h4)]
+        impl crate::rcc::McoPin for crate::peripherals::$pin {
+            fn af_num(&self) -> u8 {
+                $n
+            }
+        }
+    };
+}
+
 #[cfg(not(afio_h4))]
 macro_rules! if_remap {
     ($($t:tt)*) => {

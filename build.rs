@@ -39,6 +39,7 @@ fn main() {
     let qingke_ver = match &*chip_family {
         "ch32v0" | "ch32m0" | "ch641" => "qingke_v2",
         "ch32v1" => "qingke_v3",
+        "ch32v4" => "qingke_v3",
         "ch32v2" | "ch32v3" | "ch32l1" | "ch643" => "qingke_v4", // v4b, v4c, v4f
         _ => "qingke_v4",
     };
@@ -90,6 +91,24 @@ fn main() {
     // `afio_h4` is intentionally unset.
     println!("cargo:rustc-check-cfg=cfg(afio)");
     println!("cargo:rustc-check-cfg=cfg(afio_h4)");
+
+    // Whether the pinned PAC already carries an `Mco` enum for RCC_CFGR0.MCO.
+    // rcc_v1 and rcc_v4x7 got it later than the others, so `src/rcc/mco.rs`
+    // falls back to a local enum when this is unset. The probe reads the
+    // generated IR, not the register file, so it tracks the PAC revision for
+    // free and drops the fallback once the data catches up.
+    println!("cargo:rustc-check-cfg=cfg(ch32_mco_enum)");
+    if METADATA
+        .peripherals
+        .iter()
+        .filter_map(|p| p.registers.as_ref())
+        .filter(|r| r.kind == "rcc")
+        .flat_map(|r| r.ir.fieldsets)
+        .flat_map(|fs| fs.fields)
+        .any(|f| f.name == "mco" && f.enumm == Some("Mco"))
+    {
+        println!("cargo:rustc-cfg=ch32_mco_enum");
+    }
 
     let mut gpio_lines = 16;
     match &*chip_family {
@@ -201,6 +220,10 @@ fn main() {
         }
         _ => panic!("unknown time_driver {:?}", time_driver),
     };
+
+    if chip_family == "ch32v4" && !time_driver_singleton.is_empty() {
+        panic!("CH32V4x7 TIM time drivers are not supported yet; use the default SysTick driver");
+    }
 
     if !time_driver_singleton.is_empty() {
         println!("cargo:rustc-cfg=time_driver_{}", time_driver_singleton.to_lowercase());
@@ -363,6 +386,7 @@ fn main() {
     // afterwards, so the list of modules is written once instead of wrapping
     // half the table in `if`.
     let h4 = chip_family == "ch32h4";
+    let v4 = chip_family == "ch32v4";
     let mut pin_signals: HashMap<(&str, &str), TokenStream> = [
         // Compiled on every family, H4 included: `pub mod usart` is ungated
         // (H4's block is `usart_h4`), and the timer and I2C drivers were brought
@@ -387,6 +411,8 @@ fn main() {
         // the V3 driver applies as-is — keep its pin trait impls.
         (("i2c", "SDA"), quote!(crate::i2c::SdaPin)),
         (("i2c", "SCL"), quote!(crate::i2c::SclPin)),
+        (("i3c", "SDA"), quote!(crate::i3c::SdaPin)),
+        (("i3c", "SCL"), quote!(crate::i3c::SclPin)),
         // No H4 peripheral has these kinds, so the rows match nothing there and
         // the modules they name are never pulled in. The day one grows an
         // `sdio` block, the module gate in lib.rs has to grow with it.
@@ -415,6 +441,9 @@ fn main() {
         // is `#[cfg(usbhs_v3)]`, so the rows are removed below on that family.
         (("usbhs", "DP"), quote!(crate::usbhs::DpPin)),
         (("usbhs", "DM"), quote!(crate::usbhs::DmPin)),
+        // MCO belongs to the RCC singleton, so it uses its own impl macro
+        // below instead of the instance-parameterised pin trait.
+        (("rcc", "MCO"), quote!(crate::rcc::McoPin)),
     ]
     .into();
 
@@ -427,6 +456,14 @@ fn main() {
     if h4 {
         pin_signals.retain(|key, _| !matches!(key.0, "spi" | "can" | "usbhs"));
     }
+    if v4 {
+        pin_signals.retain(|key, _| {
+            matches!(
+                key.0,
+                "usart" | "timer" | "i2c" | "i3c" | "spi" | "can" | "usbhs" | "sdio" | "rcc"
+            )
+        });
+    }
 
     for p in METADATA.peripherals {
         if let Some(regs) = &p.registers {
@@ -436,6 +473,23 @@ fn main() {
                 if let Some(tr) = pin_signals.get(&key) {
                     let peri = format_ident!("{}", p.name);
                     let pin_name = format_ident!("{}", pin.pin);
+
+                    if key == ("rcc", "MCO") {
+                        let n = if h4 { pin.af.unwrap_or(0) } else { 0 };
+                        // H4's MCO pin (PB0/AF0) is the one data entry that
+                        // arrived after the currently pinned PAC. Flag it so
+                        // `src/rcc/mco.rs` can drop its hand-written PB0 impl
+                        // once the PAC carries the pin.
+                        if h4 {
+                            println!("cargo:rustc-check-cfg=cfg(ch32_data_h4_mco_pin)");
+                            println!("cargo:rustc-cfg=ch32_data_h4_mco_pin");
+                        }
+                        g.extend(quote! {
+                            mco_pin_impl!(#pin_name, #n);
+                        });
+                        continue;
+                    }
+
                     // H4 pins carry `af` (AFR index). Every other family carries
                     // `remap` (PCFR group). Emit each (signal, pin, value) on
                     // its own — do not collapse a pin's other signals.
@@ -499,10 +553,13 @@ fn main() {
         (("spi", "TX"), quote!(crate::spi::TxDma)),
         (("i2c", "RX"), quote!(crate::i2c::RxDma)),
         (("i2c", "TX"), quote!(crate::i2c::TxDma)),
+        (("i3c", "RX"), quote!(crate::i3c::RxDma)),
+        (("i3c", "TX"), quote!(crate::i3c::TxDma)),
         (("timer", "CH1"), quote!(crate::timer::Ch1Dma)),
         (("timer", "CH2"), quote!(crate::timer::Ch2Dma)),
         (("timer", "CH3"), quote!(crate::timer::Ch3Dma)),
         (("timer", "CH4"), quote!(crate::timer::Ch4Dma)),
+        (("timer", "UP"), quote!(crate::timer::UpDma)),
         (("sdio", "SDIO"), quote!(crate::sdio::SdioDma)),
         (("dac", "CH1"), quote!(crate::dac::DacDma1)),
         (("dac", "CH2"), quote!(crate::dac::DacDma2)),
@@ -514,6 +571,11 @@ fn main() {
     // the row matches nothing and the module is never named.
     if h4 {
         dma_signals.retain(|key, _| !matches!(key.0, "spi" | "dac"));
+    }
+    if v4 {
+        dma_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "i3c" | "spi" | "dac" | "sdio"));
+        dma_signals.insert(("adc", "ADC1"), quote!(crate::adc::RxDma));
+        dma_signals.insert(("adc", "ADC2"), quote!(crate::adc::RxDma));
     }
 
     for p in METADATA.peripherals {
@@ -641,6 +703,7 @@ fn main() {
             let bi = dma_peri.registers.as_ref().unwrap();
 
             let dma_info = match bi.kind {
+                "dma" if v4 && bi.block == "DMA2" => quote!(crate::dma::DmaInfo::Dma2(crate::pac::#dma)),
                 "dma" => quote!(crate::dma::DmaInfo::Dma(crate::pac::#dma)),
                 "bdma" => quote!(crate::dma::DmaInfo::Bdma(crate::pac::#dma)),
                 "gpdma" => quote!(crate::pac::#dma),

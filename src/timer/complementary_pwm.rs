@@ -99,9 +99,9 @@ impl<'d, T: AdvancedInstance> ComplementaryPwm<'d, T> {
 
     /// Disable the given channel.
     pub fn disable(&mut self, channel: Channel) {
-        self.inner.enable_complementary_channel(channel, false);
+        self.inner.enable_channel(channel, false);
         if channel != Channel::Ch4 {
-            self.inner.enable_channel(channel, false);
+            self.inner.enable_complementary_channel(channel, false);
         }
     }
 
@@ -110,19 +110,14 @@ impl<'d, T: AdvancedInstance> ComplementaryPwm<'d, T> {
     /// Note: when you call this, the max duty value changes, so you will have to
     /// call `set_duty` on all channels with the duty calculated based on the new max duty.
     pub fn set_frequency(&mut self, freq: Hertz) {
-        let multiplier = if self.inner.get_counting_mode().is_center_aligned() {
-            2u8
-        } else {
-            1u8
-        };
-        self.inner.set_frequency(freq * multiplier);
+        self.inner.set_pwm_frequency(freq);
     }
 
     /// Get max duty value.
     ///
     /// This value depends on the configured frequency and the timer's clock rate from RCC.
     pub fn get_max_duty(&self) -> u16 {
-        self.inner.get_max_compare_value() as u16 + 1
+        self.inner.get_max_pwm_duty().try_into().unwrap()
     }
 
     /// Set the duty for a given channel.
@@ -139,7 +134,9 @@ impl<'d, T: AdvancedInstance> ComplementaryPwm<'d, T> {
         self.inner.set_complementary_output_polarity(channel, polarity);
     }
 
-    /// Set the dead time as a proportion of max_duty
+    /// Set dead time in timer input clock ticks, rounded down to a supported value.
+    ///
+    /// Values above the hardware maximum are clamped to 4032 ticks.
     pub fn set_dead_time(&mut self, value: u16) {
         let (ckd, value) = compute_dead_time_value(value);
 
@@ -200,12 +197,12 @@ fn compute_dead_time_value(value: u16) -> (Ckd, u8) {
         let target = value / outdiv;
         let (these_bits, result) = if target < 128 {
             (target as u8, target)
-        } else if target < 255 {
+        } else if target < 256 {
             (64 + (target / 2) as u8, (target - target % 2))
-        } else if target < 508 {
-            (32 + (target / 8) as u8, (target - target % 8))
+        } else if target < 512 {
+            (0xc0 | ((target / 8) as u8 - 32), (target - target % 8))
         } else if target < 1008 {
-            (32 + (target / 16) as u8, (target - target % 16))
+            (0xe0 | ((target / 16) as u8 - 32), (target - target % 16))
         } else {
             (u8::MAX, 1008)
         };

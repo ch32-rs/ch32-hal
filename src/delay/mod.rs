@@ -11,7 +11,11 @@ mod delay_impl;
 #[path = "./impl_qingke_v2_v4.rs"]
 mod delay_impl;
 
-#[cfg(qingke_v3)]
+#[cfg(systick_v4x7)]
+#[path = "./impl_systick_v4x7.rs"]
+mod delay_impl;
+
+#[cfg(all(qingke_v3, not(systick_v4x7)))]
 #[path = "./impl_qingke_v3.rs"]
 mod delay_impl;
 

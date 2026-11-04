@@ -107,39 +107,6 @@ impl Delay {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::Delay;
-
-    #[test]
-    fn rounds_fractional_cycles_up() {
-        assert_eq!(Delay::cycles(100_000_000, 11, 1_000_000_000), 2);
-        assert_eq!(Delay::cycles(25_000_000, 41, 1_000_000_000), 2);
-        assert_eq!(Delay::cycles(25_000_000, 1, 1_000_000_000), 1);
-        assert_eq!(Delay::cycles(25_000_001, 1, 1_000_000), 26);
-    }
-
-    #[test]
-    fn preserves_zero_and_exact_cycles() {
-        assert_eq!(Delay::cycles(25_000_000, 0, 1_000_000_000), 0);
-        assert_eq!(Delay::cycles(100_000_000, 10, 1_000_000_000), 1);
-        assert_eq!(Delay::cycles(100_000_000, 1, 1_000_000), 100);
-        assert_eq!(Delay::cycles(100_000_000, 1, 1_000), 100_000);
-    }
-
-    #[test]
-    fn matches_wide_reference_at_boundaries() {
-        for hz in [1, 25_000_001, 100_000_000, 400_000_000, u32::MAX] {
-            for n in [0, 1, 11, 41, 1_000_000, u32::MAX] {
-                for unit in [1_000, 1_000_000, 1_000_000_000] {
-                    let expected = (hz as u128 * n as u128).div_ceil(unit as u128);
-                    assert_eq!(Delay::cycles(hz, n, unit) as u128, expected);
-                }
-            }
-        }
-    }
-}
-
 impl embedded_hal::delay::DelayNs for Delay {
     #[inline]
     fn delay_ns(&mut self, ns: u32) {

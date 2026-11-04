@@ -11,6 +11,10 @@
 #[path = "time_driver_systick.rs"]
 pub mod time_driver_impl;
 
+#[cfg(all(systick_v4x7, not(time_driver_timer)))]
+#[path = "time_driver_systick_32bit.rs"]
+pub mod time_driver_impl;
+
 #[cfg(time_driver_timer)]
 #[path = "time_driver_tim.rs"]
 pub mod time_driver_impl;
@@ -32,6 +36,6 @@ pub unsafe fn init() {
     #[cfg(feature = "rt-wfi")]
     crate::pac::PFIC.sctlr().modify(|w| w.set_sevonpend(true));
 
-    #[cfg(any(all(qingke_v4, not(ch32h4)), time_driver_timer))]
+    #[cfg(any(all(any(qingke_v4, systick_v4x7), not(ch32h4)), time_driver_timer))]
     critical_section::with(|cs| time_driver_impl::init(cs));
 }
