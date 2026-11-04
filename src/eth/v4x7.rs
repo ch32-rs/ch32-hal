@@ -331,39 +331,37 @@ impl<'d, const TX: usize, const RX: usize> Ethernet<'d, TX, RX> {
         };
         if link != self.link {
             critical_section::with(|_| {
+                // Do not poll `DMASR.RPS`/`TPS` for the stop to complete: this
+                // chip reports an idle pattern (110) that the RM does not
+                // define, and the fields never read 0 after `ST`/`SR` clear.
                 let enabled = eth().dmaier().read();
                 eth().dmaier().write_value(pac::emac::regs::Dmaier(enabled.0 & !0x102));
-                eth().dmaomr().modify(|register| {
-                    register.set_st(false);
-                    register.set_sr(false);
-                });
                 eth().maccr().modify(|register| {
                     register.set_te(false);
                     register.set_re(false);
                 });
-                wait(
-                    self.config.poll_limit,
-                    || eth().dmasr().read().0 & 0x007e_0000 == 0,
-                    Error::ResetTimeout,
-                )?;
-                eth().dmasr().write_value(pac::emac::regs::Dmasr(0x102));
-                PENDING.store(PENDING.load(Ordering::Relaxed) & !0x102, Ordering::Release);
-                eth().maccr().write(|register| {
-                    register.set_dm(link.full_duplex);
-                    register.set_te(link.up);
-                    register.set_re(link.up);
-                });
                 if link.up {
+                    eth().maccr().modify(|register| {
+                        register.set_dm(link.full_duplex);
+                        register.set_te(true);
+                        register.set_re(true);
+                    });
                     eth().dmaomr().modify(|register| {
                         register.set_st(true);
                         register.set_sr(true);
                     });
                     resume_receive();
                     resume_transmit();
+                } else {
+                    eth().dmaomr().modify(|register| {
+                        register.set_st(false);
+                        register.set_sr(false);
+                    });
                 }
+                eth().dmasr().write_value(pac::emac::regs::Dmasr(0x102));
+                PENDING.store(PENDING.load(Ordering::Relaxed) & !0x102, Ordering::Release);
                 eth().dmaier().write_value(enabled);
-                Ok(())
-            })?;
+            });
             self.link = link;
         }
         Ok(())
