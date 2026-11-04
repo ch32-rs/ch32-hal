@@ -236,9 +236,9 @@ because a live RTT/debug attach halts the core.
   (24 cases), `hal_i2c` (configuration/cleanup), `hal_spi` (24 cases),
   `hal_dac`, `hal_rng`, `hal_adc`, `hal_can` (72-frame loopback), `hal_i3c` and
   `hal_flash` (read-only plus `flash-write-test`) passed.
-- `hal_eth` initialized (PHY ID `0x73719011`) but had no cable; `hal_sdio`
-  correctly reported no card response. `hal_usbhs` (USBHS1 CDC echo) passed
-  later, on 2026-11-04, against a macOS host.
+- `hal_eth` passed raw-frame echo and TCP throughput on 2026-11-04 (PHY ID
+  `0x73719011`); `hal_sdio` correctly reported no card response. `hal_usbhs`
+  (USBHS1 CDC echo) passed on 2026-11-04 against a macOS host.
 - Two driver bugs were found and fixed: `SPI::blocking_flush` polled `TXE`
   while `SPE=0` (first `hal_spi` write deadlocked), and fast page programming
   waited for `BSY|WRBSY` instead of `WRBSY` (`flash-write-test` timed out).
@@ -249,8 +249,8 @@ The user visually confirmed the `hal_blinky` PE8/PE9 alternation on 2026-11-04.
 
 Still requiring hardware or equipment: the natural 32-bit SysTick wrap, GPIO
 input/EXTI wiring, USART/SPI loopback wiring, an external I2C EEPROM, external
-I3C/CAN/SD/Ethernet peers, option-byte RAM split and measured HSI frequency,
-and analog measurements.
+I3C/CAN/SD peers, option-byte RAM split and measured HSI frequency, and analog
+measurements.
 
 SDI did not work on the user's board; an address/handshake mismatch is a
 hypothesis, not a diagnosed cause. These examples no longer touch SDI registers.
@@ -813,23 +813,90 @@ sudo python3 eth_echo_test.py eth0
 Replace `eth0` with the wired interface. The script needs root or CAP_NET_RAW.
 It verifies 100 echoes over payload lengths 46/47/128/512/1500 bytes, including
 per-frame sequence and data checks. The example echoes only EtherType 0x88b5
-frames addressed to its MAC with the `CH32V4-ECHO` prefix. Real frame exchange
-has not yet been tested; the script's echo, timeout and corruption paths passed
-a host socket model.
+frames addressed to its MAC with the `CH32V4-ECHO` prefix. On macOS, use a BPF
+peer instead: `eth_echo_test.py` relies on Linux `AF_PACKET`.
+
+On 2026-11-04 the example passed 25 echoes (5 rounds of payload lengths
+46/47/128/512/1500) from a macOS host over a USB Ethernet adapter at 100 Mbit/s
+full duplex. `ETH_STATS` reported 115 received frames, 25 echoes and no TX, RX
+or DMA errors.
 
 `ETH_RESULT`: 1 entering init, 2 initialized with no link, 3 link up, 4 an echo
 queued, 10 init failure, 11 runtime error. Result 4 alone is not proof of delivery;
 the peer script must verify the returned frame. `ETH_PHY_ID` records the PHY ID;
 `ETH_STATS` contains received frames, queued echoes, TX errors, RX errors and DMA
-errors. No cable is required for the first PHY identification check. On
-2026-11-03 initialization succeeded with PHY ID `0x73719011`; frame exchange was
-not tested because no cable was attached.
+errors. No cable is required for the first PHY identification check.
+Initialization has reported PHY ID `0x73719011` since 2026-11-03.
 
 The implementation follows the RM's reduced DMA register map and PHY interrupt
-at bit 11. FES access and fatal bus-error bit 13 have conflicting RM/EVT details.
-Physical 10/100M negotiation, half duplex,
-reset timing and recovery remain hardware acceptance items. Hardware checksum
-offload, PTP, wake-on-LAN, VLAN/jumbo frames and a TCP/IP example are not included.
+at bit 11. Link changes reconfigure the MAC without polling `DMASR[22:17]`: this
+chip reports an undocumented idle value of 110 there, which previously made the
+first link-up wait time out. FES access and fatal bus-error bit 13 have
+conflicting RM/EVT details. 100M full-duplex negotiation passed; 10M, half
+duplex, reset timing and post-fault recovery remain hardware acceptance items.
+Hardware checksum offload, PTP, wake-on-LAN and VLAN/jumbo frames are not
+included.
+
+### TCP throughput
+
+`hal_eth_bench` runs `embassy-net` over the same driver with a static address:
+board `192.168.47.1/24`, TCP port 5001, and the 200 MHz PLL configuration.
+
+```sh
+cargo run --release --bin hal_eth_bench --features eth-bench
+```
+
+Give the wired host interface an address in the same subnet, then run the
+stdlib-only peer (no root needed for the transfer):
+
+```sh
+sudo ifconfig en9 inet 192.168.47.2 netmask 255.255.255.0
+python3 eth_throughput_test.py
+```
+
+The peer sends `UP <bytes>` or `DOWN <bytes>` lines; the board counts and
+discards uplink payload, or generates downlink payload, and replies
+`OK <bytes>`. On 2026-11-04, 8 MiB x 3 rounds over 100BASE-TX measured 94.12
+Mbit/s median uplink and 91.95 Mbit/s median downlink (line rate is about
+94.9 Mbit/s of payload). `ETH_BENCH_RESULT` is 1 during init, 2 listening,
+3 connected, 4 after an uplink session, 5 after a downlink session, and 10 on
+init failure. `ETH_BENCH_BYTES` holds the cumulative uplink and downlink byte
+counts; `ETH_BENCH_PHY_ID` records the PHY ID.
+
+### Raw-frame throughput
+
+`eth_raw_bench` stays below IP: `eth_raw_bench.py` drives it through a macOS BPF
+socket with EtherType 0x88b5 frames addressed to `02:00:00:00:00:48`, so no host
+routing or address configuration is involved.
+
+```sh
+cargo run --release --bin eth_raw_bench --features eth
+sudo python3 eth_raw_bench.py en9
+```
+
+Control frames are 60 bytes `dst|src|88b5|cmd|count_le32|padding`. The peer
+sends `D` + count to make the board transmit that many 1514-byte frames, `U` +
+count to count incoming data frames, and `P` for an immediate acknowledgement.
+`--rate` paces the uplink writes and `--batch` sets how many frames go out per
+write burst.
+
+On 2026-11-04, 8192 x 1514-byte frames over 100BASE-TX measured 92.5 Mbit/s
+median downlink with no missing frames, and 82.3 Mbit/s median uplink with 6-8%
+of frames missing. The uplink loss is on the host side: it drops to 2-3% with
+`--batch 1`, because the RTL8156 USB adapter cannot absorb a 100 Mbit/s transmit
+burst. `RAW_RESULT` is 1 during init, 2 for an acknowledged ping, 4 after an
+uplink request, 5 after a downlink round, 10 on init failure and 12 while the
+link is down.
+
+Running this benchmark exposed an interrupt-nesting bug. With the time driver
+at a lower priority than the Ethernet interrupt the controller preempts, and
+only one nesting level is allowed: a second-level ISR runs with `mstatus.MIE`
+clear, the `qingke` critical section cleared `MPIE` without restoring it, and
+`mret` returned with interrupts disabled, so the executor never left its `wfi`
+loop. The symptom was a board that answered nothing while SysTick and ETH
+stayed pending in `PFIC.IPR` with `PFIC.IACTR` clear. `qingke` 0.8.4 restores
+`MPIE`; the HAL also keeps SysTick at the reset P0 priority so the default
+configuration never nests.
 
 ## HAL I3C validation
 
