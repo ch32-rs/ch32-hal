@@ -29,17 +29,14 @@ use crate::gpio::{AnyPin, Pull, SealedPin};
 use crate::interrupt::typelevel::Interrupt;
 use crate::{interrupt, pac, peripherals, Peri, RccPeripheral};
 
-#[path = "v4x7_control.rs"]
 mod control;
-#[path = "v4x7_endpoint.rs"]
 mod endpoint;
-#[path = "v4x7_regs.rs"]
-mod registers;
+mod regs;
 
 pub use control::ControlPipe;
 pub use embassy_usb_driver::Speed;
 pub use endpoint::Endpoint;
-use registers::Registers;
+use regs::Registers;
 
 const ENDPOINTS: usize = 8;
 const SLOTS: usize = ENDPOINTS * 2;
