@@ -36,12 +36,6 @@ cd examples/<name> && cargo build --release
 cd examples/ch32h417 && cargo xtask build   # dual-core, both V3F and V5F images
 ```
 
-Run a host-side driver test (plain `std`, runs natively on macOS/Linux):
-
-```sh
-cargo test --manifest-path tools/flash-host-tests/Cargo.toml -- --test-threads=1
-```
-
 Flash / observe the H4 dual-core examples:
 
 ```sh
@@ -105,21 +99,18 @@ Current state and the direction it should move in:
   no HIL.
 - The dead `src/` `#[cfg(test)]` modules and `*_tests.rs` files were removed
   (2026-11-04): they needed a real PAC and CI never ran them.
-- Only two host harnesses remain: `tools/flash-host-tests` and
-  `tools/spi-host-tests`. They compile the real driver source against a
-  hand-written mock register model to pin down the two boundary bugs fixed on
-  2026-11-03 (flash `WRBSY` stall, SPI `TXE` while `SPE=0`). Shared scaffolding
-  is `tools/host-tests-common/{common_word.rs,build_helpers.rs}`; each harness
-  exposes its model through a `record_read`/`record_write` seam and appends its
-  `lifecycle` tests in `build.rs`. The five protocol harnesses
-  (i2c/sdio/usbhs/i3c/eth) were deleted as low-ROI: their models were large and
-  duplicated the on-board `examples/ch32v467` coverage.
+- All `tools/*-host-tests` harnesses were deleted (2026-11-04). They compiled
+  the real driver against hand-written mock register models, but a mock is only
+  as good as the model and none ran in CI; on-board `examples/ch32v467` runs
+  (`hal_spi`, `hal_flash --flash-write-test`, …) are the acceptance tests. No
+  host driver tests remain.
 - Examples share the `ch32v467_examples::report_*!` macros instead of
   per-binary marker statics.
 
 Direction (updated 2026-11-04):
 
-1. Add a host `cargo test -- --test-threads=1` CI job for the two harnesses.
+1. Add a host `cargo test` CI job only if host driver tests are reintroduced;
+   today validation is on-board.
 2. Eventually move to HIL (embassy's `tests/stm32` + `teleprobe` style); deferred
    — only a single dev board is available.
 

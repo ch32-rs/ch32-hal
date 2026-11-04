@@ -242,8 +242,8 @@ because a live RTT/debug attach halts the core.
 - Two driver bugs were found and fixed: `SPI::blocking_flush` polled `TXE`
   while `SPE=0` (first `hal_spi` write deadlocked), and fast page programming
   waited for `BSY|WRBSY` instead of `WRBSY` (`flash-write-test` timed out).
-  Host models in `tools/spi-host-tests` and `tools/flash-host-tests` now cover
-  both boundaries.
+  Both boundaries are covered by the on-board `hal_spi` and
+  `hal_flash --flash-write-test` runs.
 
 The user visually confirmed the `hal_blinky` PE8/PE9 alternation on 2026-11-04.
 
@@ -506,8 +506,8 @@ automatic vectorization, vector context switching, or atomic correctness.
 
 A host-side I2C/DMA model (bus events and DMA completion) was used during
 development but has since been removed; the on-board example below carries the
-check. SPI and Flash keep their host models in `tools/spi-host-tests` and
-`tools/flash-host-tests`, covering the two boundary bugs fixed on 2026-11-03.
+check, as do `hal_spi` and `hal_flash --flash-write-test` for the two boundary
+bugs fixed on 2026-11-03.
 
 `cargo run --release --bin hal_i2c --features embassy` checks the default PB6/PB7
 mapping and PB8/PB9 remap at 100kHz and both 400kHz duty ratios. Add
