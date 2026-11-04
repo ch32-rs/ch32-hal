@@ -27,8 +27,8 @@ ch32h417-ipc = { path = "../ipc" }
 # refuses to build a target that advertises atomics, because its critical-section
 # implementation only masks *this* hart's interrupts (`SingleHartCriticalSection`)
 # and therefore cannot serialise the two cores.
-qingke = { version = "0.8.2", features = ["v5f", "dual-core", "unsafe-trust-wch-atomics"] }
-qingke-rt = { version = "0.8.2", features = ["v5f"] }
+qingke = { version = "0.8.4", features = ["v5f", "dual-core", "unsafe-trust-wch-atomics"] }
+qingke-rt = { version = "0.8.4", features = ["v5f"] }
 panic-halt = "1.0"
 
 # The BME280/BMP280 driver, used by `src/bin/bme280.rs`. Pulled in here rather

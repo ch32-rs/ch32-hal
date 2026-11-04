@@ -22,11 +22,11 @@ ch32-metapac = { features = [
 # claims byte atomics unless this is set, and every A-extension target does.
 # Verified on the CH32H417, where both cores `fetch_add` one word a million
 # times each and the total comes out exact (`examples/ch32h417` `atomics`).
-qingke = { version = "0.8.3", features = [
+qingke = { version = "0.8.4", features = [
     "critical-section-impl",
     "unsafe-trust-wch-atomics",
 ] }
-qingke-rt = { version = "0.8.3", optional = true }
+qingke-rt = { version = "0.8.4", optional = true }
 
 embedded-hal = { package = "embedded-hal", version = "1.0" }
 embedded-hal-async = "1.0.0"

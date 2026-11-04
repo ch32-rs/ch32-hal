@@ -27,9 +27,9 @@ cargo build --release --bins --no-default-features --features ch32v467vet6
 ### HAL stages 0–1
 
 The Git PAC revision is fixed in both Cargo manifests until the corrected
-V4x7 metadata is released. HAL dependencies require qingke/qingke-rt 0.8.3
-or newer for V3V. The host models under `tools/` still require the generated
-sibling PAC as described in their READMEs.
+V4x7 metadata is released. HAL dependencies require qingke/qingke-rt 0.8.4
+or newer for V3V (0.8.4 is the first release with the `mstatus.MPIE`
+critical-section fix).
 
 ```sh
 cargo run --release --bin hal_init --features hal
@@ -141,7 +141,7 @@ flag; keep this toolchain available when reproducing the test. `xwchc` is not
 exposed through Rust's `cfg(target_feature)`, so the ISA example checks vector
 features at compile time and tests WCH compressed instructions at runtime.
 
-qingke-rt 0.8.3 from crates.io provides V3V core startup via `qingke-rt/v3v`,
+qingke-rt 0.8.4 from crates.io provides V3V core startup via `qingke-rt/v3v`,
 and the PAC provides the device vectors and memory layout.
 No custom linker memory map is maintained.
 The PAC's default `c512_r200` split is 512 KiB primary flash + 200 KiB SRAM;
