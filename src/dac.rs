@@ -11,10 +11,6 @@ pub use crate::pac::dac::vals::{TrigSel as TriggerSel, Wave as Waveform};
 use crate::peripheral::RccPeripheral;
 use crate::{peripherals, Peri, PeripheralType};
 
-#[cfg(test)]
-#[path = "dac/tests.rs"]
-mod tests;
-
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {

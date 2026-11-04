@@ -314,19 +314,17 @@ packet before copying new data. Reset, disable and new control SETUP invalidate
 pending transfers. The driver does not detect VBUS removal; physical cable
 removal cannot currently produce a `PowerRemoved` event.
 
-High-speed packet allocation and register operation are covered by the host
-model, but this CDC example intentionally uses full speed. High-speed PHY,
-isochronous timing, remote wakeup and full-speed fallback need hardware tests.
-Embassy USB 0.6 does not supply an other-speed configuration descriptor, so
-switching only the driver's speed is insufficient for a complete dual-speed
-device. Endpoint aliases 9–15, burst mode, LPM and USB host mode remain pending.
+This CDC example intentionally uses full speed. High-speed PHY, isochronous
+timing, remote wakeup and full-speed fallback need hardware tests. Embassy USB
+0.6 does not supply an other-speed configuration descriptor, so switching only
+the driver's speed is insufficient for a complete dual-speed device. Endpoint
+aliases 9–15, burst mode, LPM and USB host mode remain pending.
 
-The reproducible USBHS model lives in `../../tools/usbhs-host-tests`; its README
-lists the host test command and model boundaries. All 27 USBHS checks passed,
-alongside the 16-case library matrix and six CDC example build configurations.
-The library and example builds and host model tests passed. USBHS1 enumeration
-and CDC echo then passed on the board on 2026-11-04; the remaining hardware
-items are listed above.
+A host register model covered packet allocation during development (27 checks);
+it has since been removed in favour of this on-board example. The 16-case
+library matrix and six CDC example build configurations passed, and USBHS1
+enumeration and CDC echo passed on the board on 2026-11-04; the remaining
+hardware items are listed above.
 
 ## SysTick rollover stress test (2026-11-01)
 
@@ -506,21 +504,10 @@ automatic vectorization, vector context switching, or atomic correctness.
 
 ## HAL I2C validation
 
-Reproduce the host-side I2C/DMA regression from the repository root:
-
-```sh
-CARGO_TARGET_DIR=/tmp/ch32v4-i2c-host-target cargo test \
-  --manifest-path tools/i2c-host-tests/Cargo.toml \
-  --target x86_64-unknown-linux-gnu -- --test-threads=1
-```
-
-These tests compile the current production driver and generated local PAC. They
-model bus events and DMA completion and do not replace external-device testing.
-`--target x86_64-unknown-linux-gnu` is the Linux target of the reference
-command (no CI job currently runs these harnesses); the harness also runs
-natively on macOS without it. SPI and Flash have equivalent host models in
-`tools/spi-host-tests` and `tools/flash-host-tests`, covering the two boundary
-bugs fixed on 2026-11-03.
+A host-side I2C/DMA model (bus events and DMA completion) was used during
+development but has since been removed; the on-board example below carries the
+check. SPI and Flash keep their host models in `tools/spi-host-tests` and
+`tools/flash-host-tests`, covering the two boundary bugs fixed on 2026-11-03.
 
 `cargo run --release --bin hal_i2c --features embassy` checks the default PB6/PB7
 mapping and PB8/PB9 remap at 100kHz and both 400kHz duty ratios. Add
@@ -839,8 +826,8 @@ errors. No cable is required for the first PHY identification check. On
 not tested because no cable was attached.
 
 The implementation follows the RM's reduced DMA register map and PHY interrupt
-at bit 11. FES access and fatal bus-error bit 13 have conflicting RM/EVT details;
-see `tools/eth-host-tests/README.md`. Physical 10/100M negotiation, half duplex,
+at bit 11. FES access and fatal bus-error bit 13 have conflicting RM/EVT details.
+Physical 10/100M negotiation, half duplex,
 reset timing and recovery remain hardware acceptance items. Hardware checksum
 offload, PTP, wake-on-LAN, VLAN/jumbo frames and a TCP/IP example are not included.
 

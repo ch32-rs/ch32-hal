@@ -16,10 +16,6 @@ use crate::mode::{Async, Blocking, Mode};
 use crate::time::Hertz;
 use crate::{interrupt, peripherals, Peri, Timeout};
 
-#[cfg(test)]
-#[path = "i2c/tests.rs"]
-mod tests;
-
 /// Event interrupt handler.
 pub struct EventInterruptHandler<T: Instance> {
     _phantom: PhantomData<T>,

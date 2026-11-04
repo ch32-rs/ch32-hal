@@ -1,6 +1,6 @@
 #[path = "../host-tests-common/build_helpers.rs"]
 mod build_helpers;
-use build_helpers::{canonical, read, replace, strip_inner_docs};
+use build_helpers::{canonical, read, strip_inner_docs};
 
 use std::path::PathBuf;
 use std::{env, fs};
@@ -17,11 +17,9 @@ fn main() {
         println!("cargo:rerun-if-changed={}", path.display());
     }
     let driver = strip_inner_docs(read(&source));
-    let driver = replace(
-        driver,
-        "#[cfg(test)]\n#[path = \"spi/tests.rs\"]\nmod tests;",
-        &format!("#[cfg(test)]\n#[path = {lifecycle:?}]\nmod lifecycle;"),
-    );
+    // The production driver no longer carries an inline test module; the
+    // harness owns the only tests, so append its lifecycle module.
+    let driver = format!("{driver}\n#[cfg(test)]\n#[path = {lifecycle:?}]\nmod lifecycle;\n");
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set by cargo"));
     fs::write(output.join("spi.rs"), driver).expect("cannot write the generated SPI module");
 }

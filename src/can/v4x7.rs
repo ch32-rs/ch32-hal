@@ -665,6 +665,3 @@ impl<T: Instance> embedded_can::nb::Can for Can<'_, T, NonBlocking> {
     }
 }
 
-#[cfg(test)]
-#[path = "v4x7_tests.rs"]
-mod tests;

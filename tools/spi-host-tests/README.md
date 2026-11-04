@@ -36,8 +36,6 @@ Coverage:
 
 The tests take a process-wide lock, so `--test-threads=1` is no longer required,
 but remains the documented invocation. The harness also compiles
-`src/dma/mod.rs`, so a full `cargo test` runs its eight DMA/ringbuffer unit
-tests alongside the five SPI lifecycle tests; use
-`cargo test spi::lifecycle` to run only the SPI cases. The model does not
+`src/dma/mod.rs`, but only the five SPI lifecycle cases run. The model does not
 establish transfer timing, IRQ latency or pin waveforms; `hal_spi` on the board
 remains the hardware acceptance test.

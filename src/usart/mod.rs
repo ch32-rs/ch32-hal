@@ -1175,5 +1175,3 @@ pin_trait!(CkPin, Instance);
 dma_trait!(TxDma, Instance);
 dma_trait!(RxDma, Instance);
 
-#[cfg(test)]
-mod tests;

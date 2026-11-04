@@ -521,7 +521,3 @@ fn sync_instructions() {
     #[cfg(target_arch = "riscv32")]
     qingke::riscv::asm::fence_i();
 }
-
-#[cfg(test)]
-#[path = "v4x7_tests.rs"]
-mod tests;

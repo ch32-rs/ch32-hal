@@ -103,30 +103,24 @@ Current state and the direction it should move in:
 - **CI only compiles** (`.github/workflows/build.yml` runs `cargo build` for a
   chip matrix and for the examples). There is no `cargo test`, no host-test job,
   no HIL.
-- `src/` has `#[cfg(test)]` modules and `*_tests.rs` files, but they are
-  effectively dead: they need a real PAC (`pac::MEMORY_LAYOUT` etc.) and CI
-  never runs them on-target.
-- `tools/*-host-tests` (7 crates) compile the real driver source against a
-  hand-written mock register model. Shared scaffolding lives in
-  `tools/host-tests-common/`: `common_word.rs`/`common_reg.rs` (the two `Reg`
-  access shapes, each reached through a `record_read`/`record_write` seam in
-  the harness `lib.rs`) and `build_helpers.rs` (production-source rewrite
-  helpers). The mock `qingke` preamble (`extern crate self as qingke`, `pac`
-  word arrays, mock `interrupt`/`gpio`/`peripherals`, the DMA `_generated`
-  scaffold) and each `*_model.rs`/`lifecycle.rs` are still duplicated per
-  harness; consolidating the `qingke` preamble is the next step.
-- Examples copy-paste a `static mut X_RESULT` + `write_volatile` + `check()`
-  marker per binary instead of sharing a helper.
+- The dead `src/` `#[cfg(test)]` modules and `*_tests.rs` files were removed
+  (2026-11-04): they needed a real PAC and CI never ran them.
+- Only two host harnesses remain: `tools/flash-host-tests` and
+  `tools/spi-host-tests`. They compile the real driver source against a
+  hand-written mock register model to pin down the two boundary bugs fixed on
+  2026-11-03 (flash `WRBSY` stall, SPI `TXE` while `SPE=0`). Shared scaffolding
+  is `tools/host-tests-common/{common_word.rs,build_helpers.rs}`; each harness
+  exposes its model through a `record_read`/`record_write` seam and appends its
+  `lifecycle` tests in `build.rs`. The five protocol harnesses
+  (i2c/sdio/usbhs/i3c/eth) were deleted as low-ROI: their models were large and
+  duplicated the on-board `examples/ch32v467` coverage.
+- Examples share the `ch32v467_examples::report_*!` macros instead of
+  per-binary marker statics.
 
-Direction (from the 2026-11-04 review, referencing how embassy-stm32 tests):
+Direction (updated 2026-11-04):
 
-1. Consolidate the 7 host harnesses into one shared mock-PAC infrastructure
-   (one `build.rs`/model), so each peripheral only adds test functions.
-2. Extract a shared example test helper (`marker!`/`check!`/`report_pass!`)
-   instead of per-binary marker statics.
-3. Add a host `cargo test` job to CI and drop the dead `src/` inline tests or
-   move them into the test crate.
-4. Eventually move to HIL (embassy's `tests/stm32` + `teleprobe` style); deferred
+1. Add a host `cargo test -- --test-threads=1` CI job for the two harnesses.
+2. Eventually move to HIL (embassy's `tests/stm32` + `teleprobe` style); deferred
    — only a single dev board is available.
 
 ## Dev-time notes

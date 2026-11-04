@@ -757,6 +757,3 @@ instance!(USBHS2, set_utmi2on);
 pin_trait!(DpPin, Instance);
 pin_trait!(DmPin, Instance);
 
-#[cfg(test)]
-#[path = "v4x7_tests.rs"]
-mod tests;

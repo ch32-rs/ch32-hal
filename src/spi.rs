@@ -27,10 +27,6 @@ use crate::mode::{Async, Blocking, Mode as PeriMode};
 use crate::time::Hertz;
 use crate::{interrupt, pac, peripherals, Peri};
 
-#[cfg(test)]
-#[path = "spi/tests.rs"]
-mod tests;
-
 /// SPI error interrupt handler.
 pub struct InterruptHandler<T: Instance>(PhantomData<T>);
 

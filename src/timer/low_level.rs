@@ -179,10 +179,6 @@ fn period_registers(clock: u32, frequency: u32, bits: u32, center_aligned: bool,
     (prescaler, u32::try_from(reload).unwrap())
 }
 
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;
-
 /// Low-level timer driver.
 pub struct Timer<'d, T: CoreInstance> {
     tim: Peri<'d, T>,

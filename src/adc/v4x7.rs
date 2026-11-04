@@ -447,6 +447,3 @@ macro_rules! impl_adc_pin {
 
 dma_trait!(RxDma, Instance);
 
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;

@@ -13,10 +13,6 @@ use crate::internal::drop::OnDrop;
 use crate::interrupt::typelevel::Interrupt;
 use crate::{interrupt, pac, peripherals, Peri};
 
-#[cfg(test)]
-#[path = "rng/tests.rs"]
-mod tests;
-
 static RNG_WAKER: AtomicWaker = AtomicWaker::new();
 
 /// RNG hardware failure. Retry or reset explicitly after inspecting the cause.

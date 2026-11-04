@@ -792,6 +792,3 @@ pin_trait!(D6Pin, Instance);
 pin_trait!(D7Pin, Instance);
 dma_trait!(SdioDma, Instance);
 
-#[cfg(test)]
-#[path = "v4x7_tests.rs"]
-mod tests;

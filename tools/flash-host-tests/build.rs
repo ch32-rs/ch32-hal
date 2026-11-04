@@ -30,11 +30,9 @@ fn main() {
         "expected three ELF link-section attributes in src/flash/v4x7.rs"
     );
     let driver = driver.replace(LINK_SECTION, "");
-    let driver = replace(
-        driver,
-        "#[cfg(test)]\n#[path = \"v4x7_tests.rs\"]\nmod tests;",
-        &format!("#[cfg(test)]\n#[path = {lifecycle:?}]\nmod lifecycle;"),
-    );
+    // The production driver no longer carries an inline test module; the
+    // harness owns the only tests, so append its lifecycle module.
+    let driver = format!("{driver}\n#[cfg(test)]\n#[path = {lifecycle:?}]\nmod lifecycle;\n");
     fs::write(&inner, driver).expect("cannot write the generated v4x7 module");
 
     let mut module = strip_inner_docs(read(&module_source));

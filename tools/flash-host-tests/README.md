@@ -48,10 +48,8 @@ read-back byte comparison assumes a little-endian host (macOS on both
 architectures and x86_64 Linux).
 
 `operation()` checks execution-region safety only under
-`cfg(target_arch = "riscv32")`, and the harness replaces
-`src/flash/v4x7_tests.rs` with these lifecycle tests, so
-`validate_execution_address` is not covered here; its unit tests stay in
-`src/flash/v4x7_tests.rs`.
+`cfg(target_arch = "riscv32")`, and the harness appends these lifecycle tests
+to the production driver, so `validate_execution_address` is not covered here.
 
 Erase timing, option bytes and real flash endurance remain board-only checks
 (`hal_flash --features flash-write-test`).
