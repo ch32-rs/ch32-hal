@@ -406,3 +406,37 @@ impl Protocol for FlashCheck {
         readback: AtomicU32::new(0),
     };
 }
+
+/// `sdio_check`: the boot core's SDIO self-check.
+///
+/// `stage` is 1 once the controller was constructed and 2 once card init was
+/// attempted. `card` is 0 for no card, 1 for SDSC and 2 for SDHC/SDXC.
+/// `error` carries the init error code (`0` = none, `1` = timeout, `2` =
+/// other). `blocks`, `clock` and `first_word` describe a successfully
+/// initialized card; `status` is the raw `STA` register at the end.
+#[repr(C)]
+pub struct SdioCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub card: AtomicU32,
+    pub error: AtomicU32,
+    pub blocks: AtomicU32,
+    pub clock: AtomicU32,
+    pub first_word: AtomicU32,
+    pub status: AtomicU32,
+}
+
+impl Protocol for SdioCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        card: AtomicU32::new(0),
+        error: AtomicU32::new(0),
+        blocks: AtomicU32::new(0),
+        clock: AtomicU32::new(0),
+        first_word: AtomicU32::new(0),
+        status: AtomicU32::new(0),
+    };
+}

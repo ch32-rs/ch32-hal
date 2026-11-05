@@ -422,9 +422,8 @@ fn main() {
         (("i2c", "SCL"), quote!(crate::i2c::SclPin)),
         (("i3c", "SDA"), quote!(crate::i3c::SdaPin)),
         (("i3c", "SCL"), quote!(crate::i3c::SclPin)),
-        // No H4 peripheral has these kinds, so the rows match nothing there and
-        // the modules they name are never pulled in. The day one grows an
-        // `sdio` block, the module gate in lib.rs has to grow with it.
+        // H4's SDIO block is `version: v4x7`, so the V4x7 driver applies; the
+        // driver only swaps the PCFR group remap for per-pin AF numbers.
         (("sdio", "CK"), quote!(crate::sdio::CkPin)),
         (("sdio", "CMD"), quote!(crate::sdio::CmdPin)),
         (("sdio", "D0"), quote!(crate::sdio::D0Pin)),
@@ -576,8 +575,7 @@ fn main() {
     .into();
 
     // Same rule as the pin table: drop the rows whose driver module `lib.rs`
-    // compiles out on CH32H4. `sdio` stays — no H4 peripheral has that kind, so
-    // the row matches nothing and the module is never named.
+    // compiles out on CH32H4. SDIO stays — its block is `version: v4x7`.
     if h4 {
         dma_signals.insert(("adc", "ADC1"), quote!(crate::adc::RxDma));
         dma_signals.insert(("adc", "ADC2"), quote!(crate::adc::RxDma));

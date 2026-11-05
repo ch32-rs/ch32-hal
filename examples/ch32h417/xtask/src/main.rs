@@ -664,6 +664,7 @@ fn report(opts: &Options) {
         "delay_systick" => size_of::<ch32h417_ipc::Mailbox<ipc::DelaySystick>>(),
         "rcc_delay_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RccDelayCheck>>(),
         "spi_check" => size_of::<ch32h417_ipc::Mailbox<ipc::SpiCheck>>(),
+        "sdio_check" => size_of::<ch32h417_ipc::Mailbox<ipc::SdioCheck>>(),
         "rng_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RngCheck>>(),
         "adc_check" => size_of::<ch32h417_ipc::Mailbox<ipc::AdcCheck>>(),
         "dac_check" => size_of::<ch32h417_ipc::Mailbox<ipc::DacCheck>>(),
@@ -758,6 +759,17 @@ fn report(opts: &Options) {
             field!(ipc::SpiCheck, ctlr1, "CTLR1");
             field!(ipc::SpiCheck, hscr, "HSCR");
             field!(ipc::SpiCheck, loopback, "loopback");
+        }
+        "sdio_check" => {
+            field!(ipc::SdioCheck, stage, "stage");
+            field!(ipc::SdioCheck, failures, "failures");
+            field!(ipc::SdioCheck, checks, "checks");
+            field!(ipc::SdioCheck, card, "card");
+            field!(ipc::SdioCheck, error, "error");
+            field!(ipc::SdioCheck, blocks, "blocks");
+            field!(ipc::SdioCheck, clock, "clock");
+            field!(ipc::SdioCheck, first_word, "first word");
+            field!(ipc::SdioCheck, status, "STA");
         }
         "rng_check" => {
             field!(ipc::RngCheck, stage, "stage");

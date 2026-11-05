@@ -1,11 +1,13 @@
-//! SD memory cards over the CH32V407/CH32V467 SDIO host.
+//! SD memory cards over the CH32V407/CH32V467/CH32H4 SDIO host.
 //!
 //! Supports 1/4-bit SDSC, SDHC and SDXC cards, SDR12/SDR25, single/multiple
 //! blocks and DMA. Blocking operations have bounded polling. Embassy operations
 //! additionally use a software timeout. An interrupted or failed data transfer
-//! invalidates the card: call `init_card` again before reuse. The controller has
-//! no RCC reset bit; cleanup explicitly stops both state machines and flushes
-//! the FIFO. eMMC, SDIO functions and 1.8 V signalling are not implemented.
+//! invalidates the card: call `init_card` again before reuse. The V4x7 RCC has
+//! no SDIO reset bit, so cleanup explicitly stops both state machines and
+//! flushes the FIFO; H4 has one and its metadata pulses it. The pin mux is a
+//! PCFR group remap on V4x7 and a per-pin AF number on H4. eMMC, SDIO functions
+//! and 1.8 V signalling are not implemented.
 
 #[cfg(feature = "embassy")]
 use core::future::{poll_fn, Future};
@@ -19,11 +21,13 @@ use embassy_sync::waitqueue::AtomicWaker;
 use sdio_host::{CardCapacity, CardStatus, SDStatus, SCR};
 
 use crate::dma::{Transfer, TransferOptions};
-use crate::gpio::{AFType, AnyPin, SealedPin, Speed};
+use crate::gpio::{AfType, AnyPin, OutputType, SealedPin, Speed};
 use crate::internal::drop::OnDrop;
 use crate::interrupt::typelevel::Interrupt;
 use crate::time::Hertz;
-use crate::{interrupt, pac, peripherals, Peri, RccPeripheral, RemapPeripheral};
+#[cfg(not(afio_h4))]
+use crate::RemapPeripheral;
+use crate::{interrupt, pac, peripherals, Peri, RccPeripheral};
 
 #[path = "v4x7_types.rs"]
 mod types;
@@ -241,11 +245,27 @@ fn start_data<'a, T: Instance, D: SdioDma<T>>(
     let request = dma.request();
     let transfer = unsafe {
         match buffer {
+            // Only the V4x7 DMA controller reports transfer errors through the
+            // channel state; elsewhere a DMA error panics in the handler.
             Buffer::Read(words) => {
-                Transfer::new_read_checked(dma, request, T::REGS.fifo().as_ptr().cast(), words, DMA_OPTIONS)
+                #[cfg(dma_v4x7)]
+                {
+                    Transfer::new_read_checked(dma, request, T::REGS.fifo().as_ptr().cast(), words, DMA_OPTIONS)
+                }
+                #[cfg(not(dma_v4x7))]
+                {
+                    Transfer::new_read(dma, request, T::REGS.fifo().as_ptr().cast(), words, DMA_OPTIONS)
+                }
             }
             Buffer::Write(words) => {
-                Transfer::new_write_checked(dma, request, words, T::REGS.fifo().as_ptr().cast(), DMA_OPTIONS)
+                #[cfg(dma_v4x7)]
+                {
+                    Transfer::new_write_checked(dma, request, words, T::REGS.fifo().as_ptr().cast(), DMA_OPTIONS)
+                }
+                #[cfg(not(dma_v4x7))]
+                {
+                    Transfer::new_write(dma, request, words, T::REGS.fifo().as_ptr().cast(), DMA_OPTIONS)
+                }
             }
         }
     };
@@ -270,6 +290,7 @@ fn start_data<'a, T: Instance, D: SdioDma<T>>(
 fn data_complete<T: Instance>(transfer: &mut Transfer<'_>) -> Result<bool, Error> {
     let status = T::REGS.sta().read().0;
     data_error(status)?;
+    #[cfg(dma_v4x7)]
     if transfer.has_error() {
         return Err(Error::Dma);
     }
@@ -278,6 +299,7 @@ fn data_complete<T: Instance>(transfer: &mut Transfer<'_>) -> Result<bool, Error
     }
     let status = T::REGS.sta().read().0;
     data_error(status)?;
+    #[cfg(dma_v4x7)]
     if transfer.has_error() {
         return Err(Error::Dma);
     }
@@ -323,48 +345,55 @@ pub struct Sdmmc<'d, T: Instance, D: SdioDma<T>> {
 }
 
 impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
-    pub fn new_1bit<const REMAP: u8>(
+    pub fn new_1bit<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         dma: Peri<'d, D>,
         clk: Peri<'d, impl CkPin<T>>,
         cmd: Peri<'d, impl CmdPin<T>>,
-        d0: Peri<'d, impl D0Pin<T, REMAP>>,
+        d0: Peri<'d, if_remap!(impl D0Pin<T, REMAP>)>,
         config: Config,
     ) -> Result<Self, Error> {
-        Self::new_inner(
-            peri,
-            dma,
-            [Some(clk.into()), Some(cmd.into()), Some(d0.into()), None, None, None],
-            REMAP,
-            config,
-        )
-    }
-
-    pub fn new_4bit<const REMAP: u8>(
-        peri: Peri<'d, T>,
-        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        dma: Peri<'d, D>,
-        clk: Peri<'d, impl CkPin<T>>,
-        cmd: Peri<'d, impl CmdPin<T>>,
-        d0: Peri<'d, impl D0Pin<T, REMAP>>,
-        d1: Peri<'d, impl D1Pin<T, REMAP>>,
-        d2: Peri<'d, impl D2Pin<T, REMAP>>,
-        d3: Peri<'d, impl D3Pin<T, REMAP>>,
-        config: Config,
-    ) -> Result<Self, Error> {
+        apply_remap!();
         Self::new_inner(
             peri,
             dma,
             [
-                Some(clk.into()),
-                Some(cmd.into()),
-                Some(d0.into()),
-                Some(d1.into()),
-                Some(d2.into()),
-                Some(d3.into()),
+                new_pin!(clk, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(cmd, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(d0, AfType::output(OutputType::PushPull, Speed::High)),
+                None,
+                None,
+                None,
             ],
-            REMAP,
+            config,
+        )
+    }
+
+    pub fn new_4bit<#[cfg(not(afio_h4))] const REMAP: u8>(
+        peri: Peri<'d, T>,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+        dma: Peri<'d, D>,
+        clk: Peri<'d, impl CkPin<T>>,
+        cmd: Peri<'d, impl CmdPin<T>>,
+        d0: Peri<'d, if_remap!(impl D0Pin<T, REMAP>)>,
+        d1: Peri<'d, if_remap!(impl D1Pin<T, REMAP>)>,
+        d2: Peri<'d, if_remap!(impl D2Pin<T, REMAP>)>,
+        d3: Peri<'d, if_remap!(impl D3Pin<T, REMAP>)>,
+        config: Config,
+    ) -> Result<Self, Error> {
+        apply_remap!();
+        Self::new_inner(
+            peri,
+            dma,
+            [
+                new_pin!(clk, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(cmd, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(d0, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(d1, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(d2, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(d3, AfType::output(OutputType::PushPull, Speed::High)),
+            ],
             config,
         )
     }
@@ -373,7 +402,6 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
         peri: Peri<'d, T>,
         dma: Peri<'d, D>,
         pins: [Option<Peri<'d, AnyPin>>; 6],
-        remap: u8,
         config: Config,
     ) -> Result<Self, Error> {
         if config.poll_limit == 0
@@ -387,10 +415,6 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
         critical_section::with(|_| {
             T::enable_and_reset();
             reset_controller::<T>();
-            T::set_remap(remap);
-            for pin in pins.iter().flatten() {
-                pin.set_as_af_output(AFType::OutputPushPull, Speed::High);
-            }
             unsafe { T::Interrupt::enable() };
         });
         Ok(Self {
@@ -764,8 +788,15 @@ trait SealedInstance {
     fn waker() -> &'static AtomicWaker;
 }
 
+#[cfg(not(afio_h4))]
 #[allow(private_bounds)]
 pub trait Instance: SealedInstance + RccPeripheral + RemapPeripheral + embassy_hal_internal::PeripheralType {
+    type Interrupt: Interrupt;
+}
+
+#[cfg(afio_h4)]
+#[allow(private_bounds)]
+pub trait Instance: SealedInstance + RccPeripheral + embassy_hal_internal::PeripheralType {
     type Interrupt: Interrupt;
 }
 
@@ -791,4 +822,3 @@ pin_trait!(D5Pin, Instance);
 pin_trait!(D6Pin, Instance);
 pin_trait!(D7Pin, Instance);
 dma_trait!(SdioDma, Instance);
-
