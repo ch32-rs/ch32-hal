@@ -46,8 +46,9 @@ impl<const N_RX: usize, const N_TX: usize> State<N_RX, N_TX> {
 /// Using embassy_sync Channels instead of bare flags so the Runner
 /// can `.recv().await` without busy-polling.
 static RX_CH: Channel<CriticalSectionRawMutex, u16, 1> = Channel::new();
-static TX_CH: Channel<CriticalSectionRawMutex, (), 2> = Channel::new();
-static LINK_CH: Channel<CriticalSectionRawMutex, (), 2> = Channel::new();
+/// Timer wake-up latency allowance for the TX completion check (measured
+/// ~20 us at 120 MHz: aiming 20 us early needs one re-check for ~3 % of frames).
+const TX_WAKE_EARLY_US: u64 = 20;
 
 #[interrupt]
 unsafe fn ETH() {
@@ -57,22 +58,16 @@ unsafe fn ETH() {
     mac.eie().modify(|w| w.set_intie(false));
     fence(Ordering::SeqCst);
 
+    // Only RX raises this interrupt (see `new()`). A write to EIR, whatever its
+    // value, drops any EIR flag the MAC sets at that moment. With RX as the only
+    // source, the write follows the RXIF that caused it by the interrupt
+    // latency, and the next RXIF cannot come before the next frame ends.
     let flags = mac.eir().read();
-    // Clear handled flags (write-1-to-clear)
-    mac.eir().write_value(flags);
-
     if flags.rxif() {
+        mac.eir().write(|w| w.set_rxif(true));
         let len = mac.erxln().read().erxln();
         // Try to send; if full, packet is dropped (better than blocking in ISR)
         let _ = RX_CH.try_send(len);
-    }
-
-    if flags.txif() {
-        let _ = TX_CH.try_send(());
-    }
-
-    if flags.linkif() {
-        let _ = LINK_CH.try_send(());
     }
 
     fence(Ordering::SeqCst);
@@ -108,8 +103,6 @@ impl<'d, P: PHY> Runner<'d, P> {
 
         // Drain any stale signals
         while RX_CH.try_receive().is_ok() {}
-        while TX_CH.try_receive().is_ok() {}
-        while LINK_CH.try_receive().is_ok() {}
 
         let rx_fut = async {
             loop {
@@ -120,9 +113,8 @@ impl<'d, P: PHY> Runner<'d, P> {
                 mac.mamxfl().write(|w| w.set_mamxfl(buf.len() as u16));
                 mac.erxst().write(|w| w.set_erxst(buf.as_ptr() as u16));
                 mac.macon1().write(|w| w.set_marxen(true));
-                mac.econ1().modify(|w| {
-                    w.set_rx_en(true);
-                });
+                // RX_EN is set once in `new()`: a read-modify-write of ECON1 here
+                // could write back a TX_RTS bit the MAC has just cleared.
 
                 // Wait for RX interrupt - len comes from the ISR
                 let len = RX_CH.receive().await as usize;
@@ -148,8 +140,16 @@ impl<'d, P: PHY> Runner<'d, P> {
                     w.set_tx_rts(true);
                 });
 
-                // Wait for TX complete interrupt
-                TX_CH.receive().await;
+                // Wait for completion without TXIF (see `new()`). The frame's time
+                // on the 10 Mbit/s wire is known: 0.8 us per byte including padding
+                // to 60 bytes, FCS and preamble (the MAC adds the inter-frame gap
+                // itself). Wake up TX_WAKE_EARLY_US before, which is about the timer
+                // wake-up latency; TX_RTS clears when the transmission is done.
+                let wire_us = (len.max(60) as u64 + 4 + 8) * 8 / 10;
+                Timer::after_micros(wire_us.saturating_sub(TX_WAKE_EARLY_US)).await;
+                while mac.econ1().read().tx_rts() {
+                    Timer::after_micros(10).await;
+                }
 
                 // Tell the channel we're done with this buffer
                 tx_chan.tx_done();
@@ -165,12 +165,7 @@ impl<'d, P: PHY> Runner<'d, P> {
                     LinkState::Down
                 });
 
-                // Wait for link change interrupt or poll periodically
-                embassy_futures::select::select(
-                    LINK_CH.receive(),
-                    Timer::after_millis(500),
-                )
-                .await;
+                Timer::after_millis(500).await;
             }
         };
 
@@ -268,12 +263,15 @@ pub async fn new<'d, P: PHY, const N_RX: usize, const N_TX: usize>(
         w.set_crcen(true); // CRC check
     });
 
-    // Configure and enable interrupts
+    // Enable the receiver once, before any transmission (see the RX loop).
+    mac.econ1().modify(|w| w.set_rx_en(true));
+
+    // Interrupts: RX only. Writing EIR drops any flag the MAC sets at the same
+    // moment (seen for TXIF and RXIF), so acknowledging one source can lose
+    // another. TX completion is taken from TX_RTS, the link state is polled.
     mac.eie().write(|w| {
         w.set_intie(true); // global interrupt enable
         w.set_rxie(true); // receive interrupt
-        w.set_linkie(true); // link change interrupt
-        w.set_txie(true); // transmit done interrupt
         w.set_r_en50(true); // enable 50 Ohm termination resistor on RX
     });
 
