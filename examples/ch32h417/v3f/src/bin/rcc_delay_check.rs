@@ -37,13 +37,13 @@ fn main() -> ! {
     let mut failures = u32::from(clocks.v3f.0 != 100_000_000) + u32::from(clocks.v5f.0 != 400_000_000);
     let mut delay = hal::delay::Delay;
     delay.delay_ns(11);
-    failures += u32::from(hal::pac::SYSTICK.cmp_0().read().cmp() != 2);
+    failures += u32::from(hal::pac::SYSTICK.cmp(0).read() != 2);
     delay.delay_ns(0);
-    failures += u32::from(hal::pac::SYSTICK.cmp_0().read().cmp() != 2);
+    failures += u32::from(hal::pac::SYSTICK.cmp(0).read() != 2);
     delay.delay_us(1);
-    failures += u32::from(hal::pac::SYSTICK.cmp_0().read().cmp() != 100);
+    failures += u32::from(hal::pac::SYSTICK.cmp(0).read() != 100);
     delay.delay_ms(1);
-    failures += u32::from(hal::pac::SYSTICK.cmp_0().read().cmp() != 100_000);
+    failures += u32::from(hal::pac::SYSTICK.cmp(0).read() != 100_000);
 
     // Refresh reads RCC without changing the PLL or the effective frequencies.
     unsafe { hal::rcc::refresh(Some(hal::time::Hertz(25_000_000))) };

@@ -7,12 +7,8 @@ edition = "2021"
 # Default to the V3F hart (boot core). For V5F examples, switch the
 # feature to `ch32h417qeu6-v5f` and update the target JSON to use the
 # riscv32imafbc-style profile (V5F adds the B extension and ICache).
-# `default-features = false` drops `embassy`: the CH32H4 embassy time
-# driver is still pending (the systick one reaches for V3-only register
-# names and `time-driver-timN` starves main in its interrupt handler), and
-# this crate's examples are all blocking. Without `embassy` the I2C
-# driver's timeout uses the plain counter `Timeout` instead of
-# `embassy_time`, so no time driver is needed.
+# `embassy` stays off by default. The blocking examples own SysTick through
+# `hal::delay`, and only `embassy_systick` opts into the time driver.
 ch32-hal = { path = "../../../", default-features = false, features = [
     "ch32h417qeu6-v3f",
     "memory-x",
@@ -31,9 +27,30 @@ qingke-rt = { version = "0.8.4" }
 
 panic-halt = "1.0"
 embedded-hal = "1.0.0"
+embedded-storage = "0.3.1"
+
+embassy-executor = { version = "0.10.0", optional = true, features = [
+    "platform-spin",
+    "executor-thread",
+] }
+embassy-time = { version = "0.5.1", optional = true }
 
 # I2C sensor used by `src/bin/bme280_blocking.rs`.
 edrv-bme280 = "0.1.1"
+
+[features]
+# Pulls in the H4 SysTick time driver. Other bins keep the blocking delay, which
+# owns the same counter, so this stays off unless the example asks for it.
+embassy = ["ch32-hal/embassy", "dep:embassy-executor", "dep:embassy-time"]
+
+# `spi_check` with PA7 (MOSI) jumpered to PA6 (MISO) verifies the received
+# bytes instead of only transfer completion.
+spi-loopback = []
+
+[[bin]]
+name = "embassy_systick"
+path = "src/bin/embassy_systick.rs"
+required-features = ["embassy"]
 
 [profile.release]
 debug = 2

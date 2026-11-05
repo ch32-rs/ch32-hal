@@ -1,15 +1,12 @@
 //! SYSTICK polling delay for CH32H4 (QingKe V3F + V5F dual-core).
 //!
-//! H4 ships two independent 32-bit SysTick counters: `CTLR_0` / `CNT_0` /
-//! `CMP_0` / `ISR.ISR0` run on hart 0 (V3F), `CTLR_1` / `CNT_1` / `CMP_1` /
-//! `ISR.ISR1` run on hart 1 (V5F). Each counter ticks at its own hart's core
-//! clock, so the cycles per microsecond depend on which hart calls the delay:
+//! H4 has two independent 32-bit counters, indexed by hart: `CTLR(0)` / `CNT(0)`
+//! / `CMP(0)` / `SR.CNTIF0` on hart 0 (V3F), and index 1 on hart 1 (V5F). `SR` is
+//! shared, so a flag clear only touches the calling hart's bit.
 //!
-//! - hart 0 (V3F): `rcc::clocks().v3f`
-//! - hart 1 (V5F): `rcc::clocks().v5f`
-//!
-//! Both values are read from the `rcc::clocks()` cache on every call, so the
-//! delay follows `rcc::init` / `rcc::refresh` and is never stale. The cache is
+//! RM §4.6 clocks both counters from the V3F HCLK domain, not from each hart's
+//! own core clock. The delay therefore always scales from `rcc::clocks().v3f`,
+//! read on every call so it follows `rcc::init` / `rcc::refresh`. The cache is
 //! per image: hart 1's image must call `rcc::refresh(hse)` once before using
 //! this delay. That only reads RCC registers and does not reprogram the PLL.
 
@@ -28,14 +25,14 @@ impl Delay {
     /// Conflicts with embassy's systick time driver — pick one.
     pub(crate) unsafe fn init() {}
 
-    /// Whether the calling hart is hart 1, and its core clock in Hz.
+    /// The calling hart's counter index, and the V3F HCLK both counters run from.
     #[inline(always)]
-    fn current_hart() -> (bool, u32) {
-        let clocks = crate::rcc::clocks();
-        match HartId::current() {
-            HartId::C0 => (false, clocks.v3f.0),
-            HartId::C1 => (true, clocks.v5f.0),
-        }
+    fn current_hart() -> (usize, u32) {
+        let index = match HartId::current() {
+            HartId::C0 => 0,
+            HartId::C1 => 1,
+        };
+        (index, crate::rcc::clocks().v3f.0)
     }
 
     /// Core cycles for `n` units of `1 / unit` seconds at `hz`, rounded up.
@@ -56,62 +53,64 @@ impl Delay {
         cycles
     }
 
-    /// Busy-wait `cycles` core clocks on the calling hart's SysTick counter.
+    /// Busy-wait `cycles` V3F HCLK clocks on the calling hart's SysTick counter.
     /// Longer waits are split into chunks that fit the 32-bit `CMP` register.
     #[inline(always)]
-    fn wait_cycles(on_v5f: bool, mut cycles: u64) {
+    fn wait_cycles(index: usize, mut cycles: u64) {
         while cycles > 0 {
             let chunk = cycles.min(u32::MAX as u64) as u32;
-            Self::wait_chunk(on_v5f, chunk);
+            Self::wait_chunk(index, chunk);
             cycles -= chunk as u64;
         }
     }
 
     #[inline(always)]
-    fn wait_chunk(on_v5f: bool, cycles: u32) {
-        if on_v5f {
-            SYSTICK.isr().modify(|w| w.set_isr1(false));
-            SYSTICK.cmp_1().write(|w| w.set_cmp(cycles));
-            SYSTICK.cnt_1().write(|w| w.set_cnt(0));
-            SYSTICK.ctlr_1().modify(|w| {
-                w.set_no_rtc(vals::Stclk::HCLK);
-                w.set_down_mode(vals::Mode::UPCOUNT);
-                w.set_en(true);
-            });
-            while !SYSTICK.isr().read().isr1() {}
-            SYSTICK.ctlr_1().modify(|w| w.set_en(false));
-        } else {
-            SYSTICK.isr().modify(|w| w.set_isr0(false));
-            SYSTICK.cmp_0().write(|w| w.set_cmp(cycles));
-            SYSTICK.cnt_0().write(|w| w.set_cnt(0));
-            SYSTICK.ctlr_0().modify(|w| {
-                w.set_no_rtc(vals::Stclk::HCLK);
-                w.set_down_mode(vals::Mode::UPCOUNT);
-                w.set_en(true);
-            });
-            while !SYSTICK.isr().read().isr0() {}
-            SYSTICK.ctlr_0().modify(|w| w.set_en(false));
-        }
+    fn wait_chunk(index: usize, cycles: u32) {
+        // `SR` is shared. Clear only this counter's flag; writing the whole
+        // register would drop the other hart's pending compare.
+        SYSTICK.sr().modify(|w| {
+            if index == 0 {
+                w.set_cntif0(false);
+            } else {
+                w.set_cntif1(false);
+            }
+        });
+        SYSTICK.cmp(index).write_value(cycles);
+        SYSTICK.cnt(index).write_value(0);
+        SYSTICK.ctlr(index).modify(|w| {
+            w.set_stclk(vals::Stclk::HCLK);
+            w.set_mode(vals::Mode::UPCOUNT);
+            w.set_ste(true);
+        });
+        while {
+            let sr = SYSTICK.sr().read();
+            if index == 0 {
+                !sr.cntif0()
+            } else {
+                !sr.cntif1()
+            }
+        } {}
+        SYSTICK.ctlr(index).modify(|w| w.set_ste(false));
     }
 
     #[inline(always)]
     pub fn delay_us(&mut self, us: u32) {
-        let (on_v5f, hz) = Self::current_hart();
-        Self::wait_cycles(on_v5f, Self::cycles(hz, us, 1_000_000));
+        let (index, hz) = Self::current_hart();
+        Self::wait_cycles(index, Self::cycles(hz, us, 1_000_000));
     }
 
     #[inline]
     pub fn delay_ms(&mut self, ms: u32) {
-        let (on_v5f, hz) = Self::current_hart();
-        Self::wait_cycles(on_v5f, Self::cycles(hz, ms, 1_000));
+        let (index, hz) = Self::current_hart();
+        Self::wait_cycles(index, Self::cycles(hz, ms, 1_000));
     }
 }
 
 impl embedded_hal::delay::DelayNs for Delay {
     #[inline]
     fn delay_ns(&mut self, ns: u32) {
-        let (on_v5f, hz) = Delay::current_hart();
-        Delay::wait_cycles(on_v5f, Delay::cycles(hz, ns, 1_000_000_000))
+        let (index, hz) = Delay::current_hart();
+        Delay::wait_cycles(index, Delay::cycles(hz, ns, 1_000_000_000))
     }
 
     #[inline]

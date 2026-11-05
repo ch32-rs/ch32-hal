@@ -33,13 +33,12 @@
 //! target JSON and `build-std`) apply. Running `cargo --manifest-path v3f/…`
 //! from here would silently fall back to the host target.
 
-use ch32h417_ipc::protocols as ipc;
-use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command};
-use std::thread;
 use std::time::{Duration, Instant};
+use std::{env, fs, thread};
+
+use ch32h417_ipc::protocols as ipc;
 
 /// Bytes an erased flash byte reads as, used to pad the merged image.
 const ERASED: u8 = 0xFF;
@@ -263,10 +262,7 @@ fn root() -> PathBuf {
 
 /// Source file of `example` on `core`, if that core carries it.
 fn example_source(core: &Core, example: &str) -> PathBuf {
-    root()
-        .join(core.name)
-        .join("src/bin")
-        .join(format!("{example}.rs"))
+    root().join(core.name).join("src/bin").join(format!("{example}.rs"))
 }
 
 /// Built (release) ELF of `example` on `core`.
@@ -299,11 +295,7 @@ fn run(program: &str, args: &[&str], dir: &Path) {
 /// for a ready bit that never arrives. Without a deadline the whole xtask hangs
 /// there, so the caller can reset the chip and retry instead.
 fn run_timed(program: &str, args: &[&str], dir: &Path, timeout: Duration) -> bool {
-    let mut child = match Command::new(program)
-        .args(args)
-        .current_dir(dir)
-        .spawn()
-    {
+    let mut child = match Command::new(program).args(args).current_dir(dir).spawn() {
         Ok(child) => child,
         Err(e) => {
             println!("  failed to run `{program}`: {e}");
@@ -379,6 +371,13 @@ fn build_core(job: &Job) {
     if !job.example.is_empty() {
         args.extend(["--bin", &job.example]);
     }
+    // This bin is the only V3F example that starts the SysTick time driver.
+    // The blocking examples keep that counter for `hal::delay`.
+    let embassy;
+    if job.example == "embassy_systick" {
+        embassy = String::from("embassy");
+        args.extend(["--features", &embassy]);
+    }
     println!("building {} ...", job.core.name);
     run("cargo", &args, &dir);
 }
@@ -436,10 +435,7 @@ fn mailbox_symbol(elf: &Path) -> Option<(u32, u32)> {
     for i in 0..sym_size / 16 {
         let sym = sym_off + i * 16;
         let name_at = str_off + u32_at(sym) as usize;
-        let name = data[name_at..]
-            .split(|byte| *byte == 0)
-            .next()
-            .unwrap_or_default();
+        let name = data[name_at..].split(|byte| *byte == 0).next().unwrap_or_default();
         if name == b"MAILBOX" {
             return Some((u32_at(sym + 4), u32_at(sym + 8)));
         }
@@ -505,11 +501,7 @@ fn flash(opts: &Options, watch: bool) {
             args.push(elf.to_str().expect("utf-8 path"));
             run("wlink", &args, &root());
         } else {
-            let args = [
-                "flash",
-                "--no-run",
-                elf.to_str().expect("utf-8 path"),
-            ];
+            let args = ["flash", "--no-run", elf.to_str().expect("utf-8 path")];
             program_verified(core, &job.example, &elf, &args, true);
         }
     }
@@ -592,7 +584,9 @@ struct Segment {
 
 fn merge(opts: &Options) {
     let jobs = opts.jobs();
-    let boot = jobs.iter().find(|job| job.core.name == BOOT_CORE && !job.example.is_empty());
+    let boot = jobs
+        .iter()
+        .find(|job| job.core.name == BOOT_CORE && !job.example.is_empty());
     let second = jobs
         .iter()
         .find(|job| job.core.name == SECOND_CORE && !job.example.is_empty());
@@ -632,13 +626,11 @@ fn merge(opts: &Options) {
     }
 
     let out_dir = opts.out.clone().unwrap_or_else(|| root().join("out"));
-    fs::create_dir_all(&out_dir)
-        .unwrap_or_else(|e| fail(&format!("cannot create {}: {e}", out_dir.display())));
+    fs::create_dir_all(&out_dir).unwrap_or_else(|e| fail(&format!("cannot create {}: {e}", out_dir.display())));
     let bin = out_dir.join(format!("{name}.bin"));
     let hex = out_dir.join(format!("{name}.hex"));
     fs::write(&bin, &image).unwrap_or_else(|e| fail(&format!("cannot write {}: {e}", bin.display())));
-    fs::write(&hex, intel_hex(&segments))
-        .unwrap_or_else(|e| fail(&format!("cannot write {}: {e}", hex.display())));
+    fs::write(&hex, intel_hex(&segments)).unwrap_or_else(|e| fail(&format!("cannot write {}: {e}", hex.display())));
 
     for segment in &segments {
         println!(
@@ -671,13 +663,19 @@ fn report(opts: &Options) {
         "dualcore" => size_of::<ch32h417_ipc::Mailbox<ipc::Dualcore>>(),
         "delay_systick" => size_of::<ch32h417_ipc::Mailbox<ipc::DelaySystick>>(),
         "rcc_delay_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RccDelayCheck>>(),
+        "spi_check" => size_of::<ch32h417_ipc::Mailbox<ipc::SpiCheck>>(),
+        "rng_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RngCheck>>(),
+        "adc_check" => size_of::<ch32h417_ipc::Mailbox<ipc::AdcCheck>>(),
+        "dac_check" => size_of::<ch32h417_ipc::Mailbox<ipc::DacCheck>>(),
+        "flash_check" => size_of::<ch32h417_ipc::Mailbox<ipc::FlashCheck>>(),
+        "embassy_systick" => size_of::<ch32h417_ipc::Mailbox<ipc::EmbassySystick>>(),
         "atomics" => size_of::<ch32h417_ipc::Mailbox<ipc::Atomics>>(),
         "cpuid" => size_of::<ch32h417_ipc::Mailbox<ipc::Cpuid>>(),
         "pingpong" => size_of::<ch32h417_ipc::Mailbox<ipc::Pingpong>>(),
         "sdi_cpuid" => size_of::<ch32h417_ipc::Mailbox<ipc::SdiCpuid>>(),
         "bme280" => size_of::<ch32h417_ipc::Mailbox<ipc::Bme280>>(),
         "launcher" => size_of::<ch32h417_ipc::Mailbox<ipc::Empty>>(),
-        other => fail(&format!( "{other} publishes nothing `report` knows how to read")),
+        other => fail(&format!("{other} publishes nothing `report` knows how to read")),
     };
 
     check_mailbox_address(example);
@@ -687,21 +685,14 @@ fn report(opts: &Options) {
     let length = len.to_string();
     let read = run_timed(
         "wlink",
-        &[
-            "dump",
-            &address,
-            &length,
-            "-o",
-            tmp.to_str().expect("utf-8 path"),
-        ],
+        &["dump", &address, &length, "-o", tmp.to_str().expect("utf-8 path")],
         &root(),
         QUICK_TIMEOUT,
     );
     if !read {
         fail("could not read the mailbox");
     }
-    let bytes =
-        fs::read(&tmp).unwrap_or_else(|e| fail(&format!("reading {}: {e}", tmp.display())));
+    let bytes = fs::read(&tmp).unwrap_or_else(|e| fail(&format!("reading {}: {e}", tmp.display())));
     let _ = fs::remove_file(&tmp);
 
     let word = |offset: usize| -> u32 {
@@ -724,18 +715,28 @@ fn report(opts: &Options) {
             println!(
                 "  {:<18}= {}",
                 $label,
-                word(core::mem::offset_of!(ch32h417_ipc::Mailbox<$payload>, payload.$field))
+                word(core::mem::offset_of!(
+                    ch32h417_ipc::Mailbox<$payload>,
+                    payload.$field
+                ))
             )
         };
     }
 
     match example {
         "dualcore" => {
-            let marker = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Dualcore>, payload.marker));
+            let marker = word(core::mem::offset_of!(
+                ch32h417_ipc::Mailbox<ipc::Dualcore>,
+                payload.marker
+            ));
             println!(
                 "  {:<18}= {marker:#010x}{}",
                 "marker",
-                if marker == ipc::DUALCORE_MARKER { "  (hart 1 ran)" } else { "" }
+                if marker == ipc::DUALCORE_MARKER {
+                    "  (hart 1 ran)"
+                } else {
+                    ""
+                }
             );
             field!(ipc::Dualcore, counter, "counter");
         }
@@ -750,18 +751,68 @@ fn report(opts: &Options) {
             field!(ipc::RccDelayCheck, v5f_hz, "v5f Hz");
             field!(ipc::RccDelayCheck, heartbeat, "heartbeat");
         }
+        "spi_check" => {
+            field!(ipc::SpiCheck, stage, "stage");
+            field!(ipc::SpiCheck, failures, "failures");
+            field!(ipc::SpiCheck, cases, "cases");
+            field!(ipc::SpiCheck, ctlr1, "CTLR1");
+            field!(ipc::SpiCheck, hscr, "HSCR");
+            field!(ipc::SpiCheck, loopback, "loopback");
+        }
+        "rng_check" => {
+            field!(ipc::RngCheck, stage, "stage");
+            field!(ipc::RngCheck, failures, "failures");
+            field!(ipc::RngCheck, words, "words");
+            field!(ipc::RngCheck, checksum, "checksum");
+        }
+        "adc_check" => {
+            field!(ipc::AdcCheck, stage, "stage");
+            field!(ipc::AdcCheck, failures, "failures");
+            field!(ipc::AdcCheck, pa1, "PA1");
+            field!(ipc::AdcCheck, vref, "VREFINT");
+            field!(ipc::AdcCheck, temperature, "temperature");
+        }
+        "dac_check" => {
+            field!(ipc::DacCheck, stage, "stage");
+            field!(ipc::DacCheck, failures, "failures");
+            field!(ipc::DacCheck, dor1, "DOR1");
+            field!(ipc::DacCheck, dor2, "DOR2");
+        }
+        "flash_check" => {
+            field!(ipc::FlashCheck, stage, "stage");
+            field!(ipc::FlashCheck, failures, "failures");
+            field!(ipc::FlashCheck, checks, "checks");
+            field!(ipc::FlashCheck, capacity, "capacity");
+            field!(ipc::FlashCheck, geometry, "geometry");
+            field!(ipc::FlashCheck, erased_word, "erased word");
+            field!(ipc::FlashCheck, readback, "readback");
+        }
+        "embassy_systick" => {
+            field!(ipc::EmbassySystick, stage, "stage");
+            field!(ipc::EmbassySystick, error_us, "error us");
+            field!(ipc::EmbassySystick, ticks, "ticks");
+        }
         "atomics" => report_atomics(&word),
         "bme280" => report_bme280(&word),
-        "cpuid" => report_cpuid(&word, core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Cpuid>, payload.cpuid)),
+        "cpuid" => report_cpuid(
+            &word,
+            core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Cpuid>, payload.cpuid),
+        ),
         "pingpong" => {
-            report_cpuid(&word, core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Pingpong>, payload.cpuid));
+            report_cpuid(
+                &word,
+                core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Pingpong>, payload.cpuid),
+            );
             field!(ipc::Pingpong, ping, "ping");
             field!(ipc::Pingpong, pong, "pong");
         }
         "sdi_cpuid" => {
             field!(ipc::SdiCpuid, token, "token");
             field!(ipc::SdiCpuid, ticks, "ticks");
-            report_cpuid(&word, core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::SdiCpuid>, payload.cpuid));
+            report_cpuid(
+                &word,
+                core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::SdiCpuid>, payload.cpuid),
+            );
         }
         "launcher" => {}
         _ => unreachable!(),
@@ -771,13 +822,20 @@ fn report(opts: &Options) {
 /// `atomics`: both cores `fetch_add` the same word, so the total is the litmus
 /// test for the A extension actually performing the atomics.
 fn report_atomics(word: &impl Fn(usize) -> u32) {
-    let total = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Atomics>, payload.total));
+    let total = word(core::mem::offset_of!(
+        ch32h417_ipc::Mailbox<ipc::Atomics>,
+        payload.total
+    ));
     let done = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Atomics>, payload.done));
     let expected = ipc::CAS_INCREMENTS * 2;
     println!(
         "  total             = {total} (expected {expected}, done mask {done:#x}){}",
         if done & (ipc::CAS_DONE_V3F | ipc::CAS_DONE_V5F) == (ipc::CAS_DONE_V3F | ipc::CAS_DONE_V5F) {
-            if total == expected { "  OK" } else { "  LOST UPDATES" }
+            if total == expected {
+                "  OK"
+            } else {
+                "  LOST UPDATES"
+            }
         } else {
             "  (not finished)"
         }
@@ -787,7 +845,10 @@ fn report_atomics(word: &impl Fn(usize) -> u32) {
 /// `bme280`: hart 1 reads the sensor, this prints the last sample it stored.
 /// Temperature is 1/100 °C, pressure 1/100 Pa, humidity 1/100 %RH.
 fn report_bme280(word: &impl Fn(usize) -> u32) {
-    let status = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.status));
+    let status = word(core::mem::offset_of!(
+        ch32h417_ipc::Mailbox<ipc::Bme280>,
+        payload.status
+    ));
     let seq = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.seq));
     let state = match status {
         ipc::BME280_IDLE => "idle",
@@ -799,9 +860,18 @@ fn report_bme280(word: &impl Fn(usize) -> u32) {
     };
     println!("  status            = {status} ({state}), sample {seq}");
     if seq != ipc::BME280_NO_SAMPLE {
-        let temperature = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.temperature));
-        let pressure = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.pressure));
-        let humidity = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.humidity));
+        let temperature = word(core::mem::offset_of!(
+            ch32h417_ipc::Mailbox<ipc::Bme280>,
+            payload.temperature
+        ));
+        let pressure = word(core::mem::offset_of!(
+            ch32h417_ipc::Mailbox<ipc::Bme280>,
+            payload.pressure
+        ));
+        let humidity = word(core::mem::offset_of!(
+            ch32h417_ipc::Mailbox<ipc::Bme280>,
+            payload.humidity
+        ));
         println!(
             "  reading           = {:.2} C, {:.2} hPa, {:.2} %RH",
             temperature as i32 as f32 / 100.0,
@@ -847,10 +917,7 @@ fn report_cpuid(word: &impl Fn(usize) -> u32, base: usize) {
             .filter(|(bit, _)| misa & (1 << bit) != 0)
             .map(|(_, letter)| letter)
             .collect();
-        println!(
-            "    misa decode        MXL={} extensions={letters}",
-            (misa >> 30) & 3
-        );
+        println!("    misa decode        MXL={} extensions={letters}", (misa >> 30) & 3);
     }
 }
 
@@ -882,8 +949,7 @@ fn flatten(elf: &Path, core: &Core) -> Vec<u8> {
         ],
         &root(),
     );
-    let bytes =
-        fs::read(&tmp).unwrap_or_else(|e| fail(&format!("cannot read {}: {e}", tmp.display())));
+    let bytes = fs::read(&tmp).unwrap_or_else(|e| fail(&format!("cannot read {}: {e}", tmp.display())));
     let _ = fs::remove_file(&tmp);
 
     if bytes.len() as u64 > core.flash_limit {
@@ -954,12 +1020,7 @@ fn intel_hex(segments: &[Segment]) -> String {
 /// extended-address records ended up claiming zero bytes, which made `wlink`
 /// reject the whole file with "payload length does not match record header".
 fn record(record_type: u8, address: u16, data: &[u8]) -> String {
-    let mut bytes = vec![
-        data.len() as u8,
-        (address >> 8) as u8,
-        address as u8,
-        record_type,
-    ];
+    let mut bytes = vec![data.len() as u8, (address >> 8) as u8, address as u8, record_type];
     bytes.extend_from_slice(data);
     let sum = bytes.iter().fold(0u8, |acc, b| acc.wrapping_add(*b));
     let checksum = (!sum).wrapping_add(1);

@@ -97,29 +97,38 @@ pub mod delay;
 pub mod dma;
 
 // ADC / DAC drivers are written against the V3-family register layout
-// (`pac::adc::vals::SampleTime`, `pac::dac::vals::TrigSel`, ...). On H4
-// these `vals` submodules don't exist because chiptool only emits them
-// for fields that carry enum types — H4's HSADC + ADC2 + DAC use a
-// different register convention. Gate the V3 driver out until a dedicated
-// H4 driver is ported.
+// (`pac::adc::vals::SampleTime`, `pac::dac::vals::TrigSel`, ...). On H4 and
+// V4x7 these `vals` submodules don't exist because chiptool only emits them
+// for fields that carry enum types, so those families use the V4x7 driver,
+// which defines its own sample-time enum. H4's block keeps the V4x7 layout
+// apart from the regular-data split; the driver covers both.
 #[cfg(all(adc, not(any(ch32h4, ch32v4))))]
 pub mod adc;
 #[cfg(adc_v4x7)]
 #[path = "adc/v4x7.rs"]
 pub mod adc;
+#[cfg(adc_h4)]
+#[path = "adc/v4x7.rs"]
+pub mod adc;
 #[cfg(all(dac, not(ch32h4)))]
+pub mod dac;
+// H4's DAC uses per-channel registers (`R12BDHR1`, `EN1`, ...) instead of the
+// V3 arrays, so it needs its own module.
+#[cfg(dac_h4)]
+#[path = "dac/h4.rs"]
 pub mod dac;
 pub mod exti;
 pub mod gpio;
-// spi/can/flash drivers reach into V3-specific register fields that
-// don't exist on `*_h4`-versioned peripherals. I2C is the exception:
-// H4 chip metadata flags I2C as `version: v3` (same register layout
-// as the V2/V3 families), so the existing V3 driver applies directly.
+// H4 flags I2C as `version: v3` (same register layout as the V2/V3
+// families), so the existing V3 driver applies directly. SPI is `version:
+// h4`, but its block is the V3 one plus `HSCR.HSRXEN2`, so it shares the
+// same driver. CAN is still gated: its H4 block renames or reshapes most
+// registers.
 #[cfg(i2c)]
 pub mod i2c;
 #[cfg(i3c_v4x7)]
 pub mod i3c;
-#[cfg(all(rng, not(ch32h4)))]
+#[cfg(rng)]
 pub mod rng;
 #[cfg(sdio_v3)]
 pub mod sdio;
@@ -127,7 +136,7 @@ pub mod sdio;
 #[path = "sdio/v4x7.rs"]
 pub mod sdio;
 pub mod signature;
-#[cfg(all(spi, not(ch32h4)))]
+#[cfg(spi)]
 pub mod spi;
 #[cfg(any(timer_x0, timer_v3, timer_h4, timer_v4x7))]
 pub mod timer;
@@ -163,7 +172,7 @@ pub mod eth;
 #[path = "eth/v4x7.rs"]
 pub mod eth;
 
-#[cfg(all(flash, not(ch32h4)))]
+#[cfg(flash)]
 pub mod flash;
 
 mod patches;

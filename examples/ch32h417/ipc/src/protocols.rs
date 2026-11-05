@@ -83,6 +83,26 @@ impl Protocol for RccDelayCheck {
     };
 }
 
+/// `embassy_systick`: the boot core's Embassy timer against a free-running TIM2.
+///
+/// `stage` is 1 once the executor starts, 2 once the measured wait passes.
+/// `error_us` is the TIM2-measured length of an Embassy 100 ms wait, minus
+/// 100 ms. `ticks` advances once a second from `embassy_time`.
+#[repr(C)]
+pub struct EmbassySystick {
+    pub stage: AtomicU32,
+    pub error_us: AtomicU32,
+    pub ticks: AtomicU32,
+}
+
+impl Protocol for EmbassySystick {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        error_us: AtomicU32::new(0),
+        ticks: AtomicU32::new(0),
+    };
+}
+
 /// Increments each core performs in the `atomics` example, on the *same* word.
 pub const CAS_INCREMENTS: u32 = 1_000_000;
 
@@ -257,5 +277,132 @@ impl Protocol for Bme280 {
         temperature: AtomicU32::new(0),
         pressure: AtomicU32::new(0),
         humidity: AtomicU32::new(0),
+    };
+}
+
+/// `spi_check`: the boot core's SPI1 blocking self-check.
+///
+/// `stage` is 1 once init returns, 2 once every mode and bit order ran, and 3
+/// once none of them failed. `failures` counts failed checks and `cases` the
+/// completed transfers. `ctlr1` and `hscr` are the registers read back after
+/// the last configuration. `loopback` is 1 only when the `spi-loopback`
+/// feature ran with PA7 jumpered to PA6 and the received bytes matched.
+#[repr(C)]
+pub struct SpiCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub cases: AtomicU32,
+    pub ctlr1: AtomicU32,
+    pub hscr: AtomicU32,
+    pub loopback: AtomicU32,
+}
+
+impl Protocol for SpiCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        cases: AtomicU32::new(0),
+        ctlr1: AtomicU32::new(0),
+        hscr: AtomicU32::new(0),
+        loopback: AtomicU32::new(0),
+    };
+}
+
+/// `rng_check`: the boot core's RNG blocking self-check.
+///
+/// `stage` is 1 once init returns and 2 once the sample passed. `failures`
+/// counts failed checks, `words` the accepted 32-bit samples, and `checksum`
+/// their XOR, which is nonzero for a live generator.
+#[repr(C)]
+pub struct RngCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub words: AtomicU32,
+    pub checksum: AtomicU32,
+}
+
+impl Protocol for RngCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        words: AtomicU32::new(0),
+        checksum: AtomicU32::new(0),
+    };
+}
+
+/// `adc_check`: the boot core's ADC1 blocking self-check.
+///
+/// `stage` is 1 once init returned and 2 once calibration and the three reads
+/// completed. `failures` counts failed checks; `pa1`, `vref` and `temperature`
+/// are the raw 12-bit results. The analog accuracy of the first two is not
+/// judged, only that the conversion path produced an in-range value.
+#[repr(C)]
+pub struct AdcCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub pa1: AtomicU32,
+    pub vref: AtomicU32,
+    pub temperature: AtomicU32,
+}
+
+impl Protocol for AdcCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        pa1: AtomicU32::new(0),
+        vref: AtomicU32::new(0),
+        temperature: AtomicU32::new(0),
+    };
+}
+
+/// `dac_check`: the boot core's DAC self-check.
+///
+/// `stage` is 1 once init returned and 2 once every write was read back.
+/// `failures` counts failed checks; `dor1` and `dor2` are the two output
+/// registers after the last software-triggered write.
+#[repr(C)]
+pub struct DacCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub dor1: AtomicU32,
+    pub dor2: AtomicU32,
+}
+
+impl Protocol for DacCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        dor1: AtomicU32::new(0),
+        dor2: AtomicU32::new(0),
+    };
+}
+
+/// `flash_check`: the boot core's FPEC self-check.
+///
+/// `stage` is 1 once init returned and 2 once every erase/program case ran.
+/// `failures` counts failed checks and `checks` the cases attempted.
+/// `erased_word` is the word read back after a sector erase, `readback` the
+/// first word after a fast page write. `geometry` packs the sector and block
+/// sizes as `(block << 16) | sector` in 256-byte units.
+#[repr(C)]
+pub struct FlashCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub capacity: AtomicU32,
+    pub geometry: AtomicU32,
+    pub erased_word: AtomicU32,
+    pub readback: AtomicU32,
+}
+
+impl Protocol for FlashCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        capacity: AtomicU32::new(0),
+        geometry: AtomicU32::new(0),
+        erased_word: AtomicU32::new(0),
+        readback: AtomicU32::new(0),
     };
 }

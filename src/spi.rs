@@ -61,7 +61,7 @@ pub enum Error {
     UnsupportedOperation,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum BitOrder {
     // CH32V003 supports MSB first only
     #[cfg(not(spi_v0))]
@@ -858,7 +858,9 @@ fn configure_high_speed(regs: Regs, clock: u32, divisor: BaudRate, receive: bool
     let enabled = receive && divisor == BaudRate::DIV_2 && clock / 2 >= 36_000_000;
     regs.hscr().modify(|w| {
         w.set_hsrxen(enabled);
-        #[cfg(spi_v4x7)]
+        // CH32H4 and CH32V4x7 both add a second high-speed receive bit; the
+        // remaining families stop at `HSRXEN`.
+        #[cfg(any(spi_v4x7, spi_h4))]
         w.set_hsrxen2(enabled && clock >= 120_000_000);
     });
 }

@@ -2,9 +2,9 @@
 //! CH32 FLASH is relatively close to STM32. This module is heavily inspired from embassy-stm32
 use embedded_storage::nor_flash::{NorFlashError, NorFlashErrorKind};
 
-#[cfg(not(flash_v4x7))]
+#[cfg(not(any(flash_v4x7, flash_h4)))]
 mod common;
-#[cfg(not(flash_v4x7))]
+#[cfg(not(any(flash_v4x7, flash_h4)))]
 pub use common::*;
 
 #[cfg(flash_v4x7)]
@@ -12,18 +12,23 @@ mod v4x7;
 #[cfg(flash_v4x7)]
 pub use v4x7::*;
 
+#[cfg(flash_h4)]
+mod h4;
+#[cfg(flash_h4)]
+pub use h4::*;
+
 // Re-declare the legacy geometry instead of re-exporting the PAC constants:
 // the current metapac marks them deprecated in favor of `MEMORY_LAYOUT`, and
-// re-exporting would push that warning into every non-V4 build (including
+// re-exporting would push that warning into every legacy build (including
 // downstream crates that deny warnings). The values are unchanged.
-#[cfg(not(flash_v4x7))]
+#[cfg(not(any(flash_v4x7, flash_h4)))]
 #[allow(deprecated)]
 pub const FLASH_SIZE: usize = crate::pac::FLASH_SIZE;
-#[cfg(not(flash_v4x7))]
+#[cfg(not(any(flash_v4x7, flash_h4)))]
 #[allow(deprecated)]
 pub const WRITE_SIZE: usize = crate::pac::WRITE_SIZE;
 
-#[cfg(flash_v4x7)]
+#[cfg(any(flash_v4x7, flash_h4))]
 pub const FLASH_SIZE: usize = {
     let regions = crate::pac::MEMORY_LAYOUT.regions;
     let mut capacity = 0;
@@ -38,14 +43,14 @@ pub const FLASH_SIZE: usize = {
     capacity
 };
 
-#[cfg(flash_v4x7)]
+#[cfg(any(flash_v4x7, flash_h4))]
 pub const WRITE_SIZE: usize =
     match crate::pac::MEMORY_LAYOUT.find_by_role(crate::pac::mem_layout::MemoryRole::Application) {
         Some(region) => match region.page_program_size() {
             Some(size) => size as usize,
-            None => core::panic!("V4 flash requires page programming geometry"),
+            None => core::panic!("V4/H4 flash requires page programming geometry"),
         },
-        None => core::panic!("V4 flash requires application memory"),
+        None => core::panic!("V4/H4 flash requires application memory"),
     };
 
 /// Read size (always 1)
@@ -68,11 +73,11 @@ pub struct FlashSector {
 
 #[cfg_attr(flash_v3, path = "v3.rs")]
 #[cfg_attr(not(flash_v3), path = "other.rs")]
-#[cfg(not(flash_v4x7))]
+#[cfg(not(any(flash_v4x7, flash_h4)))]
 mod family;
 
 #[allow(unused_imports)]
-#[cfg(not(flash_v4x7))]
+#[cfg(not(any(flash_v4x7, flash_h4)))]
 pub use family::*;
 
 /// Flash error
@@ -89,13 +94,13 @@ pub enum Error {
     Protected,
     Unaligned,
     Parallelism,
-    #[cfg(flash_v4x7)]
+    #[cfg(any(flash_v4x7, flash_h4))]
     Busy,
-    #[cfg(flash_v4x7)]
+    #[cfg(any(flash_v4x7, flash_h4))]
     Timeout,
-    #[cfg(flash_v4x7)]
+    #[cfg(any(flash_v4x7, flash_h4))]
     Verify,
-    #[cfg(flash_v4x7)]
+    #[cfg(any(flash_v4x7, flash_h4))]
     NotErased,
     #[cfg(flash_v4x7)]
     InvalidExecutionRegion,

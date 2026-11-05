@@ -17,16 +17,14 @@ mod prescale;
 
 pub use mux::KernelMux;
 pub use pll::{AuxPlls, UsbhsPll, UsbssPll};
+use prescale::{ahb_from_sysclk, hclk_from_ahb};
 pub use prescale::{ahb_hz, hclk_hz, pclk_hz, pll_mul_x2};
 
 use crate::pac::rcc::vals::{
-    Adcpre, Fpre, Hpre, Mco, Pllmul, Pllsrc, Ppre, Sw as SysclkSw, SyspllSel, UsbhspllRefsel,
-    Usbhspllsrc,
+    Adcpre, Adcsrc, Fpre, Hpre, Mco, Pllmul, Pllsrc, Ppre, Sw as SysclkSw, SyspllSel, UsbhspllRefsel, Usbhspllsrc,
 };
 use crate::pac::{FLASH, RCC};
 use crate::time::Hertz;
-
-use prescale::{ahb_from_sysclk, hclk_from_ahb};
 
 /// HSI frequency (25 MHz on CH32H4).
 pub const HSI_FREQUENCY: Hertz = Hertz(25_000_000);
@@ -226,6 +224,30 @@ pub unsafe fn init(config: Config) {
         _ => None,
     });
     refresh_clocks(hse_hz);
+}
+
+/// Selected ADC clock as `(source, divisor)`, or `None` when the USBHS PLL is
+/// selected before it is ready.
+///
+/// RM §3.4.4: with `ADCSRC=0` the clock is `HCLK / PPRE2 / ADCPRE`; with
+/// `ADCSRC=1` the 480 MHz USBHS PLL is divided by
+/// `{ADCPRE[1:0], PPRE2[2:0]} + 5`.
+pub(crate) fn adc_clock_ratio() -> Option<(u32, u32)> {
+    let cfgr0 = RCC.cfgr0().read();
+    let adcpre = u32::from(cfgr0.adcpre().to_bits());
+    let ppre2 = u32::from(cfgr0.ppre2().to_bits());
+    match cfgr0.adcsrc() {
+        Adcsrc::HCLK => {
+            let ppre_div = if ppre2 >= 0b100 { 1 << (ppre2 - 0b011) } else { 1 };
+            Some((super::clocks().hclk.0, ppre_div * (adcpre + 1) * 2))
+        }
+        Adcsrc::USBHS_PLL => {
+            if !RCC.ctlr().read().usbhs_pllrdy() {
+                return None;
+            }
+            Some((480_000_000, ((adcpre << 3) | ppre2) + 5))
+        }
+    }
 }
 
 /// Re-read RCC and update [`super::clocks`].
