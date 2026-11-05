@@ -95,6 +95,8 @@ pub struct Ethernet<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> {
     smi: Smi,
     mac_addr: [u8; 6],
     phy_interface: PhyInterface,
+    /// An RX FIFO overflow recovery could not complete and is retried.
+    rx_recovery_pending: bool,
     _pins: Option<[Peri<'d, crate::gpio::AnyPin>; 9]>,
     _phantom: PhantomData<T>,
 }
@@ -233,9 +235,51 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             smi,
             mac_addr,
             phy_interface,
+            rx_recovery_pending: false,
             _pins: pins,
             _phantom: PhantomData,
         })
+    }
+
+    /// Reset and reconfigure the MAC and DMA after an RX FIFO overflow.
+    ///
+    /// On the CH32V307 (seen with the built-in 10M PHY), an RX FIFO overflow
+    /// leaves the MAC reporting a stale frame length (the previous frame's) for
+    /// every later frame whose length including FCS is a multiple of 4, so those
+    /// frames are truncated. Only a MAC/DMA software reset clears it; toggling the
+    /// receiver, restarting DMA or resetting the PHY does not.
+    ///
+    /// Both descriptor lists restart at the descriptor the DMA would have used
+    /// next, so the rings stay in sync. Frames in the FIFOs are lost.
+    fn recover_rx_overflow(&mut self) {
+        // The CH32V307 does not set DMASR.ROS on an RX FIFO overflow; it only
+        // counts the dropped frames in DMAMFBOCR (cleared on read).
+        let e = T::regs();
+        let missed = e.dmamfbocr().read();
+        if missed.mfa() == 0 && !missed.ofoc() && !self.rx_recovery_pending {
+            return;
+        }
+        self.rx_recovery_pending = false;
+        let rx_next = e.dmachrdr().read();
+        let tx_next = e.dmachtdr().read();
+
+        // Stop TX DMA, then MAC TX/RX, then RX DMA.
+        e.dmaomr().modify(|w| w.set_st(false));
+        e.maccr().modify(|w| {
+            w.set_te(false);
+            w.set_re(false);
+        });
+        e.dmaomr().modify(|w| w.set_sr(false));
+
+        if configure_mac_dma::<T>(self.phy_interface, self.mac_addr).is_err() {
+            // The soft reset did not complete. Retry on the next poll.
+            self.rx_recovery_pending = true;
+            return;
+        }
+        e.dmardlar().write(|w| w.set_srl(rx_next.hrdap()));
+        e.dmatdlar().write(|w| w.set_stl(tx_next.htdap()));
+        fence(Ordering::SeqCst);
+        start_mac_dma::<T>();
     }
 
     /// Get the SMI interface for direct PHY register access.
@@ -477,6 +521,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driv
     fn receive(&mut self, cx: &mut Context) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let s = T::state();
         s.waker.register(cx.waker());
+        self.recover_rx_overflow();
         if self.rx.available().is_some() && self.tx.available().is_some() {
             // rx and tx are disjoint struct fields, Rust permits simultaneous &mut borrows.
             Some((RxToken { rx: &mut self.rx }, TxToken { tx: &mut self.tx }))
@@ -488,6 +533,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driv
     fn transmit(&mut self, cx: &mut Context) -> Option<Self::TxToken<'_>> {
         let s = T::state();
         s.waker.register(cx.waker());
+        self.recover_rx_overflow();
         if self.tx.available().is_some() {
             Some(TxToken { tx: &mut self.tx })
         } else {
