@@ -179,8 +179,6 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             });
         });
 
-        let e = T::regs();
-
         // 2. Interface-specific setup
         if phy_interface == PhyInterface::Internal10M {
             // Configure PLL3 to 60MHz for the 10M PHY clock.
@@ -206,80 +204,9 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             }
         }
 
-        // 3. DMA soft reset
-        e.dmabmr().write(|w| w.set_sr(true));
-        let mut timeout = 10_000u32;
-        while e.dmabmr().read().sr() {
-            for _ in 0..1000 {
-                qingke::riscv::asm::nop();
-            }
-            timeout -= 1;
-            if timeout == 0 {
-                return Err(InitError::DmaResetTimeout);
-            }
-        }
-
-        // 4. Select SMI clock divider — div42 for HCLK 60-100MHz+
-        let hclk = crate::rcc::clocks().hclk.0;
-        let clock_range: u8 = if hclk < 35_000_000 {
-            0b010 // div16
-        } else if hclk < 60_000_000 {
-            0b011 // div26
-        } else {
-            0b000 // div42
-        };
-        e.macmiiar().write(|w| w.set_cr(clock_range));
+        // 3.-11. Soft reset and MAC/DMA configuration
+        let clock_range = configure_mac_dma::<T>(phy_interface, mac_addr)?;
         let mut smi = Smi::new(T::regs(), clock_range);
-
-        // 5. Configure MAC
-        e.maccr().write(|w| {
-            w.set_ipco(true); // IPv4 checksum offload
-            w.set_dm(true); // Full duplex
-
-            if phy_interface == PhyInterface::Internal10M {
-                w.set_ire(true); // Internal 50-ohm pull-up (10M PHY only)
-            } else {
-                w.set_fes(1); // 100 Mbps for external PHY
-                w.set_apcs(true); // Auto pad/CRC strip
-                w.set_rd(true); // Retry disable
-            }
-        });
-
-        // 6. Frame filter
-        e.macffr().write(|w| {
-            w.set_pam(true); // Pass all multicast (needed for ARP/DHCP)
-            if phy_interface == PhyInterface::Internal10M {
-                // Promiscuous + receive-all required for 10M PHY polarity detection
-                w.set_ra(true);
-                w.set_pm(true);
-            }
-        });
-
-        // 7. Hash table (unused, zero)
-        e.machthr().write(|w| w.set_hth(0));
-        e.machtlr().write(|w| w.set_htl(0));
-
-        // 8. Flow control: pause time 0x100
-        e.macfcr().write(|w| w.set_pt(0x100));
-
-        // 9. Set MAC address
-        // MACA0HR: bytes [5:4], MACA0LR: bytes [3:0]
-        let mac_high = ((mac_addr[5] as u16) << 8) | (mac_addr[4] as u16);
-        let mac_low = ((mac_addr[3] as u32) << 24)
-            | ((mac_addr[2] as u32) << 16)
-            | ((mac_addr[1] as u32) << 8)
-            | (mac_addr[0] as u32);
-        e.maca0hr().write(|w| w.set_maca0h(mac_high));
-        e.maca0lr().write(|w| w.set_maca0l(mac_low)); // LR write triggers sync
-
-        // 10. DMA bus mode: 32-beat burst length
-        e.dmabmr().write(|w| w.set_pbl(32));
-
-        // 11. DMA operation mode: store-and-forward for both TX and RX
-        e.dmaomr().write(|w| {
-            w.set_rsf(true);
-            w.set_tsf(true);
-        });
 
         // Complete fallible PHY setup before DMA can access the packet queue.
         phy.phy_reset(&mut smi)?;
@@ -291,30 +218,8 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
 
         fence(Ordering::SeqCst);
 
-        // 13. Enable MAC receiver and transmitter
-        e.maccr().modify(|w| {
-            w.set_re(true);
-            w.set_te(true);
-        });
-
-        // 14. Start DMA: flush TX FIFO, then start TX and RX
-        e.dmaomr().modify(|w| w.set_ftf(true));
-        e.dmaomr().modify(|w| {
-            w.set_st(true);
-            w.set_sr(true);
-        });
-
-        // Demand poll RX to start receiving
-        e.dmarpdr().write(|w| w.set_rpd(0));
-
-        // 15. Enable DMA interrupts
-        e.dmaier().write(|w| {
-            w.set_tie(true); // TX complete
-            w.set_rie(true); // RX complete
-            w.set_nise(true); // Normal interrupt summary
-            w.set_aise(true); // Abnormal interrupt summary
-            w.set_rbuie(true); // RX buffer unavailable
-        });
+        // 13.-15. Start MAC, DMA and interrupts
+        start_mac_dma::<T>();
 
         // 17. Enable ETH interrupt in PFIC
         unsafe {
@@ -342,6 +247,118 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
     pub fn mac_addr(&self) -> [u8; 6] {
         self.mac_addr
     }
+}
+
+/// DMA soft reset and MAC/DMA configuration (steps 3-11). Shared by
+/// initialization and RX overflow recovery. Returns the SMI clock range.
+fn configure_mac_dma<T: Instance>(phy_interface: PhyInterface, mac_addr: [u8; 6]) -> Result<u8, InitError> {
+    let e = T::regs();
+
+    // 3. DMA soft reset
+    e.dmabmr().write(|w| w.set_sr(true));
+    let mut timeout = 10_000u32;
+    while e.dmabmr().read().sr() {
+        for _ in 0..1000 {
+            qingke::riscv::asm::nop();
+        }
+        timeout -= 1;
+        if timeout == 0 {
+            return Err(InitError::DmaResetTimeout);
+        }
+    }
+
+    // 4. Select SMI clock divider — div42 for HCLK 60-100MHz+
+    let hclk = crate::rcc::clocks().hclk.0;
+    let clock_range: u8 = if hclk < 35_000_000 {
+        0b010 // div16
+    } else if hclk < 60_000_000 {
+        0b011 // div26
+    } else {
+        0b000 // div42
+    };
+    e.macmiiar().write(|w| w.set_cr(clock_range));
+
+    // 5. Configure MAC
+    e.maccr().write(|w| {
+        w.set_ipco(true); // IPv4 checksum offload
+        w.set_dm(true); // Full duplex
+
+        if phy_interface == PhyInterface::Internal10M {
+            w.set_ire(true); // Internal 50-ohm pull-up (10M PHY only)
+        } else {
+            w.set_fes(1); // 100 Mbps for external PHY
+            w.set_apcs(true); // Auto pad/CRC strip
+            w.set_rd(true); // Retry disable
+        }
+    });
+
+    // 6. Frame filter
+    e.macffr().write(|w| {
+        w.set_pam(true); // Pass all multicast (needed for ARP/DHCP)
+        if phy_interface == PhyInterface::Internal10M {
+            // Promiscuous + receive-all required for 10M PHY polarity detection
+            w.set_ra(true);
+            w.set_pm(true);
+        }
+    });
+
+    // 7. Hash table (unused, zero)
+    e.machthr().write(|w| w.set_hth(0));
+    e.machtlr().write(|w| w.set_htl(0));
+
+    // 8. Flow control: pause time 0x100
+    e.macfcr().write(|w| w.set_pt(0x100));
+
+    // 9. Set MAC address
+    // MACA0HR: bytes [5:4], MACA0LR: bytes [3:0]
+    let mac_high = ((mac_addr[5] as u16) << 8) | (mac_addr[4] as u16);
+    let mac_low = ((mac_addr[3] as u32) << 24)
+        | ((mac_addr[2] as u32) << 16)
+        | ((mac_addr[1] as u32) << 8)
+        | (mac_addr[0] as u32);
+    e.maca0hr().write(|w| w.set_maca0h(mac_high));
+    e.maca0lr().write(|w| w.set_maca0l(mac_low)); // LR write triggers sync
+
+    // 10. DMA bus mode: 32-beat burst length
+    e.dmabmr().write(|w| w.set_pbl(32));
+
+    // 11. DMA operation mode: store-and-forward for both TX and RX
+    e.dmaomr().write(|w| {
+        w.set_rsf(true);
+        w.set_tsf(true);
+    });
+
+    Ok(clock_range)
+}
+
+/// Enable MAC RX/TX, start DMA and enable DMA interrupts (steps 13-15).
+fn start_mac_dma<T: Instance>() {
+    let e = T::regs();
+
+    // 13. Enable MAC receiver and transmitter
+    e.maccr().modify(|w| {
+        w.set_re(true);
+        w.set_te(true);
+    });
+
+    // 14. Start DMA: flush TX FIFO, then start TX and RX
+    e.dmaomr().modify(|w| w.set_ftf(true));
+    e.dmaomr().modify(|w| {
+        w.set_st(true);
+        w.set_sr(true);
+    });
+
+    // Demand poll RX to start receiving
+    e.dmarpdr().write(|w| w.set_rpd(0));
+
+    // 15. Enable DMA interrupts
+    e.dmaier().write(|w| {
+        w.set_tie(true); // TX complete
+        w.set_rie(true); // RX complete
+        w.set_nise(true); // Normal interrupt summary
+        w.set_aise(true); // Abnormal interrupt summary
+        w.set_rbuie(true); // RX buffer unavailable
+    });
 }
 
 impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Drop for Ethernet<'d, T, TX, RX, P> {
