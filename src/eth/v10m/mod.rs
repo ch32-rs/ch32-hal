@@ -14,6 +14,7 @@ use embassy_net_driver::LinkState;
 use embassy_net_driver_channel as ch;
 use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+#[cfg(feature = "embassy")]
 use embassy_time::Timer;
 
 use crate::eth::{Instance, StationManagement, PHY};
@@ -100,6 +101,8 @@ impl<'d, P: PHY> Runner<'d, P> {
     /// Run the ethernet driver forever.
     ///
     /// This handles RX, TX, and link state monitoring concurrently.
+    /// Without the `embassy` feature, link monitoring relies on PHY interrupts;
+    /// the periodic polling fallback requires an Embassy time driver.
     pub async fn run(self) -> ! {
         let mac = self.mac;
         let mut phy = self.phy;
@@ -166,11 +169,14 @@ impl<'d, P: PHY> Runner<'d, P> {
                 });
 
                 // Wait for link change interrupt or poll periodically
+                #[cfg(feature = "embassy")]
                 embassy_futures::select::select(
                     LINK_CH.receive(),
                     Timer::after_millis(500),
                 )
                 .await;
+                #[cfg(not(feature = "embassy"))]
+                LINK_CH.receive().await;
             }
         };
 
@@ -235,11 +241,11 @@ pub async fn new<'d, P: PHY, const N_RX: usize, const N_TX: usize>(
         w.set_rx_rst(true);
         w.set_tx_rst(true);
     });
-    Timer::after_micros(1).await;
+    crate::internal::delay::wait_for_us(1).await;
 
     // Release reset
     mac.econ1().write(|_w| {});
-    Timer::after_micros(1).await;
+    crate::internal::delay::wait_for_us(1).await;
 
     // Clear all interrupt flags
     mac.eir().write(|w| w.0 = 0xff);

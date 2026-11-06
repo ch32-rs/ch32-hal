@@ -44,6 +44,8 @@ pub mod mode {
     impl_mode!(NonBlocking);
 }
 
+// Without an Embassy time driver, hardware waits have no deadline and may
+// block indefinitely if the peripheral or bus does not make progress.
 #[derive(Copy, Clone)]
 struct Timeout {
     #[cfg(feature = "embassy")]
