@@ -357,13 +357,11 @@ fn configure_mac_dma<T: Instance>(
     });
 
     // 6. Frame filter
+    // No receive-all / promiscuous mode: the built-in PHY handles the cable
+    // polarity itself (automatic PN polarity, see `InternalPhy`), so frames for
+    // other hosts are not needed and would only cost RX descriptors.
     e.macffr().write(|w| {
         w.set_pam(true); // Pass all multicast (needed for ARP/DHCP)
-        if phy_interface == PhyInterface::Internal10M {
-            // Promiscuous + receive-all required for 10M PHY polarity detection
-            w.set_ra(true);
-            w.set_pm(true);
-        }
     });
 
     // 7. Hash table (unused, zero)
