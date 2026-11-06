@@ -238,26 +238,21 @@ impl<'d, T: Instance, const N: usize> RDesRing<'d, T, N> {
     pub fn available(&mut self) -> Option<&mut [u8]> {
         self.resume_rx();
 
-        let d = &self.desc[self.index];
-        let rdes0 = d.rdes0();
-
-        // Check if DMA still owns this descriptor
-        if rdes0 & RDES0_OWN != 0 {
-            return None;
-        }
-
-        // Check for first+last segment (single descriptor per frame)
-        if rdes0 & (RDES0_FS | RDES0_LS) != (RDES0_FS | RDES0_LS) {
-            // Not a single-descriptor frame; skip it and give back to DMA
+        // Skip frames spanning several descriptors and erroneous frames, so
+        // that good frames queued behind them are not delayed until the next
+        // interrupt. Ends at a good frame or at a descriptor the DMA owns
+        // (every skipped descriptor is given back to the DMA).
+        let rdes0 = loop {
+            let rdes0 = self.desc[self.index].rdes0();
+            if rdes0 & RDES0_OWN != 0 {
+                return None;
+            }
+            let single = rdes0 & (RDES0_FS | RDES0_LS) == (RDES0_FS | RDES0_LS);
+            if single && rdes0 & RDES0_ES == 0 {
+                break rdes0;
+            }
             self.pop_packet();
-            return None;
-        }
-
-        // Check for errors
-        if rdes0 & RDES0_ES != 0 {
-            self.pop_packet();
-            return None;
-        }
+        };
 
         // Extract frame length (includes CRC, subtract 4)
         let len = ((rdes0 & RDES0_FL_MASK) >> RDES0_FL_SHIFT) as usize;
