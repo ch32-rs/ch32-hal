@@ -16,12 +16,20 @@ pub trait Phy {
     fn phy_init(&mut self, smi: &mut Smi) -> Result<(), SmiError>;
     /// Poll the link state. Returns true if link is up.
     fn poll_link(&mut self, smi: &mut Smi, cx: &mut Context) -> Result<bool, SmiError>;
+    /// Duplex mode of the established link (called on each link-up).
+    /// Returns true for full duplex. The default keeps the MAC in full duplex.
+    fn full_duplex(&mut self, _smi: &mut Smi) -> Result<bool, SmiError> {
+        Ok(true)
+    }
 }
 
 /// MII PHY register constants.
 mod phy_regs {
     pub const BCR: u8 = 0x00;
     pub const BSR: u8 = 0x01;
+    pub const ANLPAR: u8 = 0x05;
+    pub const ANLPAR_SELECTOR: u16 = 0x1F;
+    pub const ANLPAR_SELECTOR_IEEE802_3: u16 = 0x01;
 
     pub const BCR_RESET: u16 = 1 << 15;
     pub const BCR_AUTONEG: u16 = 1 << 12;
@@ -78,6 +86,9 @@ impl InternalPhy {
     const PHY_ADDR: u8 = 1;
     /// WCH internal 10M PHY MDIX/polarity control register.
     const MDIX: u8 = 0x1E;
+    /// WCH internal 10M PHY status register; bit 2 = full duplex.
+    const STATUS: u8 = 0x10;
+    const STATUS_FULL_DUPLEX: u16 = 1 << 2;
     /// Auto PN polarity detection (bits 3:2 = 0b10).
     const MDIX_PN_AUTO: u16 = 2 << 2;
 
@@ -102,5 +113,16 @@ impl Phy for InternalPhy {
 
     fn poll_link(&mut self, smi: &mut Smi, cx: &mut Context) -> Result<bool, SmiError> {
         self.phy.poll_link(smi, cx)
+    }
+
+    fn full_duplex(&mut self, smi: &mut Smi) -> Result<bool, SmiError> {
+        // As in WCH's driver (ETH_PHYLink): full duplex if the PHY reports it.
+        // Otherwise half duplex if the partner auto-negotiated, full duplex if
+        // it did not (no valid base page).
+        if smi.read(Self::PHY_ADDR, Self::STATUS)? & Self::STATUS_FULL_DUPLEX != 0 {
+            return Ok(true);
+        }
+        let anlpar = smi.read(Self::PHY_ADDR, phy_regs::ANLPAR)?;
+        Ok(anlpar & phy_regs::ANLPAR_SELECTOR != phy_regs::ANLPAR_SELECTOR_IEEE802_3)
     }
 }

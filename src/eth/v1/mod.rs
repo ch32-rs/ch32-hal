@@ -97,6 +97,10 @@ pub struct Ethernet<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> {
     phy_interface: PhyInterface,
     /// An RX FIFO overflow recovery could not complete and is retried.
     rx_recovery_pending: bool,
+    /// Link state at the last `link_state()` poll.
+    link_up: bool,
+    /// MAC duplex mode, from the PHY at link-up.
+    full_duplex: bool,
     _pins: Option<[Peri<'d, crate::gpio::AnyPin>; 9]>,
     _phantom: PhantomData<T>,
 }
@@ -207,7 +211,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         }
 
         // 3.-11. Soft reset and MAC/DMA configuration
-        let clock_range = configure_mac_dma::<T>(phy_interface, mac_addr)?;
+        let clock_range = configure_mac_dma::<T>(phy_interface, mac_addr, true)?;
         let mut smi = Smi::new(T::regs(), clock_range);
 
         // Complete fallible PHY setup before DMA can access the packet queue.
@@ -236,9 +240,21 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             mac_addr,
             phy_interface,
             rx_recovery_pending: false,
+            link_up: false,
+            full_duplex: true,
             _pins: pins,
             _phantom: PhantomData,
         })
+    }
+
+    /// Apply the duplex mode of the new link.
+    fn on_link_up(&mut self) {
+        let e = T::regs();
+        let full = self.phy.full_duplex(&mut self.smi).unwrap_or(true);
+        if full != self.full_duplex {
+            e.maccr().modify(|w| w.set_dm(full));
+            self.full_duplex = full;
+        }
     }
 
     /// Reset and reconfigure the MAC and DMA after an RX FIFO overflow.
@@ -271,7 +287,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         });
         e.dmaomr().modify(|w| w.set_sr(false));
 
-        if configure_mac_dma::<T>(self.phy_interface, self.mac_addr).is_err() {
+        if configure_mac_dma::<T>(self.phy_interface, self.mac_addr, self.full_duplex).is_err() {
             // The soft reset did not complete. Retry on the next poll.
             self.rx_recovery_pending = true;
             return;
@@ -295,7 +311,11 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
 
 /// DMA soft reset and MAC/DMA configuration (steps 3-11). Shared by
 /// initialization and RX overflow recovery. Returns the SMI clock range.
-fn configure_mac_dma<T: Instance>(phy_interface: PhyInterface, mac_addr: [u8; 6]) -> Result<u8, InitError> {
+fn configure_mac_dma<T: Instance>(
+    phy_interface: PhyInterface,
+    mac_addr: [u8; 6],
+    full_duplex: bool,
+) -> Result<u8, InitError> {
     let e = T::regs();
 
     // 3. DMA soft reset
@@ -325,7 +345,7 @@ fn configure_mac_dma<T: Instance>(phy_interface: PhyInterface, mac_addr: [u8; 6]
     // 5. Configure MAC
     e.maccr().write(|w| {
         w.set_ipco(true); // IPv4 checksum offload
-        w.set_dm(true); // Full duplex
+        w.set_dm(full_duplex);
 
         if phy_interface == PhyInterface::Internal10M {
             w.set_ire(true); // Internal 50-ohm pull-up (10M PHY only)
@@ -549,7 +569,12 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driv
     }
 
     fn link_state(&mut self, cx: &mut Context) -> LinkState {
-        if self.phy.poll_link(&mut self.smi, cx).unwrap_or(false) {
+        let up = self.phy.poll_link(&mut self.smi, cx).unwrap_or(false);
+        if up && !self.link_up {
+            self.on_link_up();
+        }
+        self.link_up = up;
+        if up {
             LinkState::Up
         } else {
             LinkState::Down
