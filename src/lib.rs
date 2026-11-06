@@ -122,8 +122,8 @@ pub mod gpio;
 // H4 flags I2C as `version: v3` (same register layout as the V2/V3
 // families), so the existing V3 driver applies directly. SPI is `version:
 // h4`, but its block is the V3 one plus `HSCR.HSRXEN2`, so it shares the
-// same driver. CAN is still gated: its H4 block renames or reshapes most
-// registers.
+// same driver. CAN is `version: h4` and reuses the V4x7 bxCAN driver with the
+// 42-bank shared filter table handled behind `can_h4`.
 #[cfg(i2c)]
 pub mod i2c;
 #[cfg(i3c_v4x7)]
@@ -163,7 +163,9 @@ pub mod usbpd;
 
 #[cfg(all(can, not(any(ch32h4, ch32v4))))]
 pub mod can;
-#[cfg(can_v4x7)]
+// H4's CAN block is the same bxCAN layout as V4x7 plus the shared 42-bank
+// filter table, so the V4x7 driver covers both (see `can/v4x7.rs`).
+#[cfg(any(can_v4x7, can_h4))]
 #[path = "can/v4x7.rs"]
 pub mod can;
 #[cfg(all(any(eth, emac), not(ch32v4)))]

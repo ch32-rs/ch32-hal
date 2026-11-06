@@ -457,12 +457,12 @@ fn main() {
 
     // Modules `lib.rs` compiles out on CH32H4 while the chip still has pins of
     // that kind, so a row naming one would not resolve. SPI is `version: h4`
-    // but keeps the V3 layout, so it stays. CAN and USBHS are still gated:
-    // their H4 blocks rename most registers, and USBHS is `usbhs_h4` while the
-    // module is `#[cfg(usbhs_v3)]`. ADC and DAC are not in this table: their
-    // pin macros live inside the gated modules and are emitted below.
+    // but keeps the V3 layout, and CAN now reuses the V4x7 driver, so both
+    // stay. USBHS is still gated: its block is `usbhs_h4` while the module is
+    // `#[cfg(usbhs_v3)]`/`usbhs_v4x7`. ADC and DAC are not in this table:
+    // their pin macros live inside the gated modules and are emitted below.
     if h4 {
-        pin_signals.retain(|key, _| !matches!(key.0, "can" | "usbhs"));
+        pin_signals.retain(|key, _| !matches!(key.0, "usbhs"));
     }
     if v4 {
         pin_signals.retain(|key, _| {

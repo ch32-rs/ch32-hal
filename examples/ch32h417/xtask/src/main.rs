@@ -664,6 +664,7 @@ fn report(opts: &Options) {
         "delay_systick" => size_of::<ch32h417_ipc::Mailbox<ipc::DelaySystick>>(),
         "rcc_delay_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RccDelayCheck>>(),
         "spi_check" => size_of::<ch32h417_ipc::Mailbox<ipc::SpiCheck>>(),
+        "can_check" => size_of::<ch32h417_ipc::Mailbox<ipc::CanCheck>>(),
         "sdio_check" => size_of::<ch32h417_ipc::Mailbox<ipc::SdioCheck>>(),
         "rng_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RngCheck>>(),
         "adc_check" => size_of::<ch32h417_ipc::Mailbox<ipc::AdcCheck>>(),
@@ -759,6 +760,20 @@ fn report(opts: &Options) {
             field!(ipc::SpiCheck, ctlr1, "CTLR1");
             field!(ipc::SpiCheck, hscr, "HSCR");
             field!(ipc::SpiCheck, loopback, "loopback");
+        }
+        "can_check" => {
+            field!(ipc::CanCheck, stage, "stage");
+            field!(ipc::CanCheck, failures, "failures");
+            field!(ipc::CanCheck, checks, "checks");
+            field!(ipc::CanCheck, frames, "CAN1 frames");
+            field!(ipc::CanCheck, can2_frames, "CAN2 frames");
+            field!(ipc::CanCheck, filter_banks, "filter banks");
+            field!(ipc::CanCheck, tx_ok, "tx ok");
+            field!(ipc::CanCheck, rx_ok, "rx ok");
+            field!(ipc::CanCheck, last_id, "last id");
+            field!(ipc::CanCheck, tstatr, "TSTATR");
+            field!(ipc::CanCheck, errsr, "ERRSR");
+            field!(ipc::CanCheck, pclk1, "PCLK1 Hz");
         }
         "sdio_check" => {
             field!(ipc::SdioCheck, stage, "stage");

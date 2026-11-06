@@ -111,7 +111,8 @@ pub(super) fn encode_id(id: Id) -> u32 {
     }
 }
 
-/// One of the 14 filter banks. Raw fields follow RM §25.7.16–25.7.20.
+/// One filter bank. The count is family-specific (14 on V4x7, 42 on H4). Raw
+/// fields follow RM §25.7.16–25.7.20 (V4x7) or RM §28.7.29 (H4).
 #[derive(Clone, Copy, Debug)]
 pub struct Filter {
     pub bank: u8,

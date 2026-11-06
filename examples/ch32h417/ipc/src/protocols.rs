@@ -440,3 +440,45 @@ impl Protocol for SdioCheck {
         status: AtomicU32::new(0),
     };
 }
+
+/// `can_check`: the boot core's bxCAN self-check.
+///
+/// `stage` is 1 once CAN1 is up, 2 once its loopback and filter cases ran, and
+/// 3 once the CAN2-through-CAN1-filter-master path also ran. `failures` counts
+/// failed checks, `checks` the assertions attempted and `frames` the loopback
+/// frames verified on CAN1; `can2_frames` is the same count on CAN2.
+/// `filter_banks` is the H4 shared-bank count (42), `tx_ok`/`rx_ok` the
+/// successful transmit/receive calls, `last_id` the identifier of the last
+/// frame received. `tstatr`, `errsr` and `pclk1` are read back at the end.
+#[repr(C)]
+pub struct CanCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub frames: AtomicU32,
+    pub can2_frames: AtomicU32,
+    pub filter_banks: AtomicU32,
+    pub tx_ok: AtomicU32,
+    pub rx_ok: AtomicU32,
+    pub last_id: AtomicU32,
+    pub tstatr: AtomicU32,
+    pub errsr: AtomicU32,
+    pub pclk1: AtomicU32,
+}
+
+impl Protocol for CanCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        frames: AtomicU32::new(0),
+        can2_frames: AtomicU32::new(0),
+        filter_banks: AtomicU32::new(0),
+        tx_ok: AtomicU32::new(0),
+        rx_ok: AtomicU32::new(0),
+        last_id: AtomicU32::new(0),
+        tstatr: AtomicU32::new(0),
+        errsr: AtomicU32::new(0),
+        pclk1: AtomicU32::new(0),
+    };
+}
