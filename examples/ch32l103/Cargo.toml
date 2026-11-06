@@ -24,7 +24,7 @@ qingke-rt = "0.8"
 panic-halt = "1.0"
 embedded-hal = "1.0.0"
 embedded-can = "0.4.1"
-usbpd = "2.0.0"
+usbpd = "3.0.0"
 usbpd-traits = "2.0.0"
 
 [profile.release]
