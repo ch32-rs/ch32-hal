@@ -4,7 +4,7 @@
 //!
 //! Brings up the SDIO host on the EVT wiring — CK=PB11, CMD=PB10 and
 //! D0..D3=PE8..PE11, all AF8 — with DMA1 channel 1, then initializes a card at
-//! 25 MHz. The data path needs an inserted microSD card; without one the check
+//! 2.5 MHz. The data path needs an inserted microSD card; without one the check
 //! still validates controller bring-up and reports the no-response outcome
 //! instead of failing. Mailbox (`SdioCheck`): stage 1 = controller
 //! constructed, 2 = card init attempted (and the read checks done when a card
@@ -13,6 +13,12 @@
 
 #![no_std]
 #![no_main]
+
+use defmt_rtt as _;
+macro_rules! log {
+    () => { defmt::info!("") };
+    ($($args:tt)*) => { defmt::info!("{}", defmt::Display2Format(&format_args!($($args)*))) };
+}
 
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -40,6 +46,7 @@ fn error_code(error: Error) -> u32 {
 fn check(failures: &mut u32, checks: &mut u32, condition: bool) {
     *checks += 1;
     *failures += u32::from(!condition);
+    log!("check {}: {}", *checks, if condition { "ok" } else { "FAIL" });
 }
 
 #[ch32_hal::entry]
@@ -48,7 +55,12 @@ fn main() -> ! {
     mailbox.clear();
     mailbox.payload.stage.store(1, Relaxed);
 
-    let p = hal::init(hal::Config::default());
+    // Use the EVT clock tree with a conservative SDIO rate verified on this board.
+    let config = hal::Config {
+        rcc: hal::rcc::Config::with_sysclk_400m_v5f_400m_v3f_100m_hse(),
+        ..Default::default()
+    };
+    let p = hal::init(config);
     let mut failures = 0u32;
     let mut checks = 0u32;
 
@@ -87,13 +99,16 @@ fn main() -> ! {
     );
 
     mailbox.payload.stage.store(2, Relaxed);
-    match sd.blocking_init_card(Hertz(25_000_000)) {
+    log!("init at 2.5 MHz");
+    let init = sd.blocking_init_card(Hertz(2_500_000));
+    match init {
         Ok(()) => {
+            log!("init ok, clock {}", sd.clock().0);
             mailbox.payload.card.store(1, Relaxed);
             let card = *sd.card().expect("card was just initialized");
             mailbox.payload.blocks.store(card.block_count as u32, Relaxed);
             mailbox.payload.clock.store(sd.clock().0, Relaxed);
-            check(&mut failures, &mut checks, sd.clock().0 <= 25_000_000);
+            check(&mut failures, &mut checks, sd.clock().0 <= 2_500_000);
 
             let mut first = DataBlock([0; 512]);
             check(
@@ -133,12 +148,14 @@ fn main() -> ! {
             check(&mut failures, &mut checks, sd.blocking_read_sd_status().is_ok());
         }
         Err(error) => {
+            log!("init failed: err {}", error_code(error));
             // No card is a valid outcome: the controller still came up and the
             // command path timed out as designed. Anything else is a defect.
             mailbox.payload.error.store(error_code(error), Relaxed);
             failures += u32::from(error_code(error) != 1);
         }
     }
+    log!("done: {}/{} failed", failures, checks);
 
     mailbox.payload.status.store(hal::pac::SDIO.sta().read().0, Relaxed);
     mailbox.payload.failures.store(failures, Relaxed);
