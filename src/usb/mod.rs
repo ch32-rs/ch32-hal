@@ -70,6 +70,15 @@ impl<const SIZE: usize> Default for EndpointDataBuffer<SIZE> {
 }
 
 impl<const SIZE: usize> EndpointDataBuffer<SIZE> {
+    pub(crate) const fn new() -> Self {
+        const { assert!(validate_buffer_size(SIZE), "Invalid buffer size") };
+        Self { data: [0; SIZE] }
+    }
+
+    pub(crate) fn write(&mut self, buf: &[u8]) {
+        self.data[..buf.len()].copy_from_slice(buf);
+    }
+
     pub(crate) fn read_volatile(&self, buf: &mut [u8]) {
         assert!(buf.len() <= self.data.len());
         let len = buf.len();
