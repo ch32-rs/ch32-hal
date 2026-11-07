@@ -28,9 +28,9 @@
 //!
 //! A `v5f/src/bin/NAME.rs` without its V3F half is rejected.
 //!
-//! Every `cargo`/`wlink` invocation runs with the working directory set to the
-//! core's crate: that is what makes the crate's `.cargo/config.toml` (custom
-//! target JSON and `build-std`) apply. Running `cargo --manifest-path v3f/…`
+//! Every `cargo`/`wlink`/`probe-rs` invocation runs with the working directory
+//! set to the core's crate: that is what makes the crate's `.cargo/config.toml`
+//! (custom target JSON and `build-std`) apply. Running `cargo --manifest-path v3f/…`
 //! from here would silently fall back to the host target.
 
 use std::path::{Path, PathBuf};
@@ -58,6 +58,22 @@ const RECOVER_SETTLE: Duration = Duration::from_secs(2);
 
 /// Deadline for a request that only moves registers or a few bytes.
 const QUICK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `probe-rs --chip` value for this board.
+const PROBE_RS_CHIP: &str = "CH32H417QEU6";
+
+/// Which tool programs the flash.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Flasher {
+    /// `wlink`, WCH's own tool. Picks the first attached probe by itself, but a
+    /// write can report success without reaching the flash, so images other
+    /// than the last are read back and retried.
+    Wlink,
+    /// `probe-rs`, which verifies every image after writing and resets the chip
+    /// only when asked. It cannot choose between two attached probes, so
+    /// `PROBE_RS_PROBE` has to name one in that case.
+    ProbeRs,
+}
 
 /// One core of the chip.
 ///
@@ -98,12 +114,18 @@ usage: cargo xtask <command> [options]
 commands:
   build [--example NAME] [--dual-core | --jump-v5f]     build one example (or all)
   flash --example NAME [--dual-core | --jump-v5f] [--no-build]
-                                            build, then flash and reset
+        [--flasher wlink | probe-rs]        build, then flash and reset
   run   --example NAME [--dual-core | --jump-v5f] [--no-build]
                                             flash and view the V3F defmt RTT console
   merge --example NAME [--dual-core | --jump-v5f] [--out DIR]
                                             merge the images into .bin + .hex
   report --example NAME                    read that example's mailbox back
+
+flashing:
+  --flasher wlink        (default) WCH's tool; picks the first probe, but the
+                         final image cannot be read back, so it is unverified
+  --flasher probe-rs     verifies every image and resets once at the end; set
+                         PROBE_RS_PROBE=VID:PID:SERIAL when two probes are up
 
 what gets programmed:
   (default)      the boot core alone (same as --v3f-only); the V5F region keeps
@@ -139,6 +161,7 @@ struct Options {
     layout: Layout,
     no_build: bool,
     out: Option<PathBuf>,
+    flasher: Flasher,
 }
 
 impl Options {
@@ -148,6 +171,7 @@ impl Options {
             layout: Layout::V3fOnly,
             no_build: false,
             out: None,
+            flasher: Flasher::Wlink,
         };
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -159,6 +183,14 @@ impl Options {
                 "--jump-v5f" => opts.layout = Layout::JumpV5f,
                 "--out" => opts.out = args.next().map(PathBuf::from),
                 "--no-build" => opts.no_build = true,
+                "--flasher" => {
+                    let tool = args.next().unwrap_or_else(|| fail("`--flasher` needs a tool"));
+                    opts.flasher = match tool.as_str() {
+                        "wlink" => Flasher::Wlink,
+                        "probe-rs" => Flasher::ProbeRs,
+                        other => fail(&format!("unknown flasher `{other}` (wlink | probe-rs)")),
+                    };
+                }
                 other => fail(&format!("unknown option `{other}`\n\n{USAGE}")),
             }
         }
@@ -480,7 +512,7 @@ fn flash(opts: &Options, watch: bool) {
             &[
                 "run",
                 "--chip",
-                "CH32H417QEU6",
+                PROBE_RS_CHIP,
                 "--scan-region",
                 "ram",
                 elf.to_str().expect("utf-8 path"),
@@ -489,15 +521,43 @@ fn flash(opts: &Options, watch: bool) {
         );
         return;
     }
-    for (i, job) in jobs.iter().enumerate() {
-        let core = job.core;
-        let elf = example_elf(core, &job.example);
-        println!("flashing {} ({}) ...", core.name, job.example);
-        if i + 1 == jobs.len() {
-            run("wlink", &["flash", elf.to_str().expect("utf-8 path")], &root());
-        } else {
-            let args = ["flash", "--no-run", elf.to_str().expect("utf-8 path")];
-            program_verified(core, &job.example, &elf, &args, true);
+    match opts.flasher {
+        Flasher::Wlink => {
+            // The last write resets and runs the chip, so it cannot be read
+            // back; every earlier one is. `--flasher probe-rs` verifies all of
+            // them and resets afterwards instead.
+            for (i, job) in jobs.iter().enumerate() {
+                let core = job.core;
+                let elf = example_elf(core, &job.example);
+                println!("flashing {} ({}) ...", core.name, job.example);
+                if i + 1 == jobs.len() {
+                    run("wlink", &["flash", elf.to_str().expect("utf-8 path")], &root());
+                } else {
+                    let args = ["flash", "--no-run", elf.to_str().expect("utf-8 path")];
+                    program_verified(core, &job.example, &elf, &args, true);
+                }
+            }
+        }
+        Flasher::ProbeRs => {
+            // `download` does not run the chip, so every image is written and
+            // verified first and the single reset at the end starts the boot
+            // core with both halves already in place.
+            for job in jobs.iter() {
+                let elf = example_elf(job.core, &job.example);
+                println!("flashing {} ({}) with probe-rs ...", job.core.name, job.example);
+                run(
+                    "probe-rs",
+                    &[
+                        "download",
+                        "--chip",
+                        PROBE_RS_CHIP,
+                        "--verify",
+                        elf.to_str().expect("utf-8 path"),
+                    ],
+                    &root(),
+                );
+            }
+            run("probe-rs", &["reset", "--chip", PROBE_RS_CHIP], &root());
         }
     }
     if watch {
@@ -509,7 +569,7 @@ fn flash(opts: &Options, watch: bool) {
             &[
                 "attach",
                 "--chip",
-                "CH32H417QEU6",
+                PROBE_RS_CHIP,
                 "--scan-region",
                 "ram",
                 elf.to_str().expect("utf-8 path"),

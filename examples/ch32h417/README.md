@@ -50,6 +50,7 @@ cargo xtask build  --example cpuid --jump-v5f      # jumper + cpuid's V5F half
 cargo xtask build                                  # everything
 
 cargo xtask flash  --example dualcore --dual-core  # build + write both, no console
+cargo xtask flash  --example eth_bench --flasher probe-rs  # verify with probe-rs instead
 cargo xtask run    --example dualcore --dual-core  # same, plus the V3F RTT console
 cargo xtask flash  --example cpuid --jump-v5f      # jump firmware + V5F payload
 cargo xtask flash  --jump-v5f                      # reflash the jumper alone
@@ -218,11 +219,15 @@ independently flashed halves can notice they disagree about it.
   lets the V3F read `misa`, `mhartid` and friends directly. The `u-mode` feature
   restores WCH's startup behaviour (User mode), where only the `URW` CSRs
   `gintenr`/`intsyscr` remain reachable.
-- **Flash writes are not always complete.** `wlink flash` can report success
-  while only part of the image landed, so `xtask` reads every `--no-run` image
-  back and repeats the write if it did not. The final write resets and runs the
-  chip, so it cannot be checked the same way — if a dual-core example only shows
-  V3F activity, flash it again before suspecting the firmware.
+- **Flash writes are not always complete with `wlink`.** `wlink flash` can
+  report success while only part of the image landed, so `xtask` reads every
+  `--no-run` image back and repeats the write if it did not. The final write
+  resets and runs the chip, so it cannot be checked the same way — if a
+  dual-core example only shows V3F activity, flash it again before suspecting
+  the firmware. `--flasher probe-rs` avoids this: it writes every image with
+  probe-rs, which verifies each one, and issues a single reset at the end. It
+  cannot choose between two attached probes, so set `PROBE_RS_PROBE` there; the
+  default stays `wlink`, which picks the first probe by itself.
 - **Merged images.** `out/NAME.bin` is the full flash image (`0xFF` padding
   between the two payloads); `out/NAME.hex` is the same image as records, which
   only cover the payloads. Use the merged image to publish and the two-ELF
