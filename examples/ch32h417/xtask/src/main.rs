@@ -371,12 +371,16 @@ fn build_core(job: &Job) {
     if !job.example.is_empty() {
         args.extend(["--bin", &job.example]);
     }
-    // This bin is the only V3F example that starts the SysTick time driver.
-    // The blocking examples keep that counter for `hal::delay`.
-    let embassy;
-    if job.example == "embassy_systick" || job.example == "can_async_check" {
-        embassy = String::from("embassy");
-        args.extend(["--features", &embassy]);
+    // `embassy_systick` and `can_async_check` are the V3F examples that start
+    // the SysTick time driver; the blocking examples keep that counter for
+    // `hal::delay`. The `eth_*` examples need Embassy plus the Ethernet stack.
+    let feature = match job.example.as_str() {
+        "embassy_systick" | "can_async_check" => Some("embassy"),
+        "eth_internal" | "eth_bench" => Some("eth"),
+        _ => None,
+    };
+    if let Some(feature) = feature {
+        args.extend(["--features", feature]);
     }
     println!("building {} ...", job.core.name);
     run("cargo", &args, &dir);

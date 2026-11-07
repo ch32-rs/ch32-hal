@@ -109,6 +109,15 @@ validated for continuous V5F execution; use the mailbox to verify hart 1.
 - **`dma_m2m`**, **`delay_systick`**, **`embassy_systick`** — bring-up checks
   for the DMA/DMAMUX path, the blocking SysTick delay and the Embassy time
   driver.
+- **`eth_internal`** — `embassy-net` over the integrated 10M/100M PHY with the
+  static address `192.168.47.10/24`; the J11 port goes to a host on
+  `192.168.47.0/24`. It answers ping.
+- **`eth_bench`** — the same stack plus the `examples/ch32v467` byte-count
+  protocol on TCP 5001, so `python3 ../ch32v467/eth_throughput_test.py
+  192.168.47.10` measures both directions. Measured 93 Mbit/s up and 92 Mbit/s
+  down over 8 MiB rounds — 98% of what a 100BASE-TX link carries. It runs the
+  120 MHz V3F recipe with 32-deep DMA rings; with the same driver while hart 0
+  still executed from flash it was 5 Mbit/s.
 - **`bme280`** — the same sensor read by hart 1 instead. The V5F half calls
   `ch32_hal::init_secondary` (which reads the clock tree back rather than
   touching it) and brings up I2C1 itself, then stores each sample in the

@@ -39,6 +39,16 @@ embassy-executor = { version = "0.10.0", optional = true, features = [
     "executor-thread",
 ] }
 embassy-time = { version = "0.5.1", optional = true }
+# `eth_internal` / `eth_bench`: the Ethernet stack. `auto-icmp-echo-reply`
+# is what makes the device answer ping; `tcp` is only needed by the bench.
+embassy-net = { version = "0.9.1", optional = true, default-features = false, features = [
+    "medium-ethernet",
+    "proto-ipv4",
+    "dhcpv4",
+    "tcp",
+    "auto-icmp-echo-reply",
+    "defmt",
+] }
 
 # I2C sensor used by `src/bin/bme280_blocking.rs`.
 edrv-bme280 = "0.1.1"
@@ -50,6 +60,13 @@ exfat-embedded = { version = "0.1.3", default-features = false }
 # owns the same counter, so this stays off unless the example asks for it.
 embassy = ["ch32-hal/embassy", "dep:embassy-executor", "dep:embassy-time"]
 
+# `eth_internal` / `eth_bench`: Embassy + the Ethernet stack. `ch32-hal/defmt`
+# gives `ch32_hal::eth::Error`/`Link` their `defmt::Format`, which both bins
+# log. Cargo features are per crate, not per bin, so this feature can only be
+# used with `--bin`: the other bins do not link a logger and would fail with
+# `undefined symbol: _defmt_write`.
+eth = ["embassy", "dep:embassy-net", "ch32-hal/defmt"]
+
 # `spi_check` with PA7 (MOSI) jumpered to PA6 (MISO) verifies the received
 # bytes instead of only transfer completion.
 spi-loopback = []
@@ -60,6 +77,16 @@ path = "src/bin/embassy_systick.rs"
 required-features = ["embassy"]
 
 [[bin]]
+name = "eth_internal"
+path = "src/bin/eth_internal.rs"
+required-features = ["eth"]
+
+[[bin]]
+name = "eth_bench"
+path = "src/bin/eth_bench.rs"
+required-features = ["eth"]
+
+[[bin]]
 name = "can_async_check"
 path = "src/bin/can_async_check.rs"
 required-features = ["embassy"]
@@ -67,5 +94,11 @@ required-features = ["embassy"]
 [profile.release]
 debug = 2
 strip = false
-lto = false
+# The V3F image owns only the 64 KiB boot flash slot (`memory.x`), and
+# `eth_bench` (smoltcp + defmt) is the largest bin in the crate: 63 KB of it.
+# Fat LTO keeps that down. `3` rather than `"s"` is worth it here — code runs
+# from the zero-wait shared SRAM, so size costs flash but not speed, and the
+# benchmark gains ~8% throughput over `"s"`. That bin hits the 64 KiB limit
+# first, so re-check the load image after adding to it.
+lto = true
 opt-level = 3
