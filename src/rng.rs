@@ -117,11 +117,6 @@ impl<'d, T: Instance> Rng<'d, T> {
         if !status.drdy() {
             return Ok(None);
         }
-        // CH32H4 gives DR a fieldset (`RNDATA`); the other families expose it
-        // as a plain word.
-        #[cfg(rng_h4)]
-        let value = T::regs().dr().read().rndata();
-        #[cfg(not(rng_h4))]
         let value = T::regs().dr().read();
         self.check_status(&T::regs().sr().read())?;
         if self.discard_first {
