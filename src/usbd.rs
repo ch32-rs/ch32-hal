@@ -84,6 +84,21 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             if epr.ctr_rx() {
                 if index == 0 && epr.setup() {
                     EP0_SETUP.store(true, Ordering::Relaxed);
+                    // CH32FV2x_V3xRM v2.5 Page 356:
+                    //    During the status phase of a control transfer, if an OUT transaction sent by the host to the device is being
+                    // performed, then the STATUS_OUT bit (EP_KIND in the USBD_EPRx register) should be set, only then if a
+                    // non-zero length of the transfer is received during the status phase data packets, will generate transmission
+                    // errors. After completing the status phase transfer, the application should clear the STATUS_OUT bit, and set
+                    // STAT_RX to ACK to indicate that it is ready to receive a new command request, and set STAT_TX to NAK
+                    // to not accept any data upload requests.
+
+                    // When handling a SETUP IN transaction, STATUS_OUT is set in data_in,
+                    // but it is not cleared after the STATUS transfer ends.
+                    // So if a SETUP OUT transaction immediately follows a SETUP IN transaction,
+                    // since STATUS_OUT remains set after the SETUP IN transaction completes,
+                    // the hardware will treat the subsequent OUT packet as a STATUS packet,
+                    // causing communication errors.
+                    epr.set_ep_kind(false);
                 }
                 EP_OUT_WAKERS[index].wake();
             }
