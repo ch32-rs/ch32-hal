@@ -188,6 +188,24 @@ The V5F executes from flash in place and has an instruction cache, so it does
 not need the copy; the CSDK's ITCM copy for hart 1 is not implemented here, so
 keep V5F halves small.
 
+Three things about that split are worth knowing before changing it:
+
+- **Most of `RAM` is slack.** The V3F's own `.text`/`.rodata` is 63 KB and its
+  `.bss` 169 KB, so roughly half of the 448 KB region is unused. It is reserved
+  for V3F growth; if a V5F payload ever needs a cross-core buffer, shrink `RAM`
+  and move `STACK` down instead — the three regions must still add up to
+  512 KB, and `SRAM_SHARED` has to stay at `0x20178000`, because both
+  `memory.x` files and `ipc::MAILBOX_ADDR` name that address.
+- **The 64 KB slot is only a load-image limit**, and `eth_bench` fills 63 KB of
+  it. A V3F image that outgrows it is a link error; the way out is to widen
+  `CODE`/`USR` to 128 KB and start the V5F image at `0x00020000`, which touches
+  `v3f/memory.x`, `v5f/memory.x`, `Core` in `xtask/src/main.rs` and this table.
+- **`v3f/link.x` is a local copy of `qingke-rt`'s script**, not an upstream
+  feature. Only the `highcode` copy itself comes from `qingke-rt`; folding
+  `.text`/`.rodata` into `.highcode` and starting that section with the vector
+  tables is this crate's addition, so keep it in sync by hand when `qingke-rt`
+  changes its layout.
+
 ### Mailbox
 
 One shared region, `SRAM_SHARED` (`0x20178000` + 32K), holding one shared
