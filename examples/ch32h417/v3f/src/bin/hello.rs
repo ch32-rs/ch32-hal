@@ -11,9 +11,15 @@
 #![no_std]
 #![no_main]
 
-use hal::println;
+use defmt_rtt as _;
+macro_rules! log {
+    () => { defmt::info!("") };
+    ($($args:tt)*) => { defmt::info!("{}", defmt::Display2Format(&format_args!($($args)*))) };
+}
+
+use ch32_hal as hal;
+use panic_halt as _;
 use qingke::pfic;
-use {ch32_hal as hal, panic_halt as _};
 
 /// Must match `v5f/memory.x` FLASH ORIGIN (1KB-aligned).
 const V5F_ENTRY: u32 = 0x0001_0000;
@@ -23,13 +29,10 @@ fn main() -> ! {
     // Only the boot core runs the bring-up: RCC, AFIO/GPIO and EXTI are shared
     // between both harts.
     let _p = hal::init(hal::Config::default());
-    hal::debug::SDIPrint::enable();
 
-    // Wake hart 1 before printing: `SDIPrint::write_str` spins until the debug
-    // module consumes `DATA0`, which only happens once wlink has armed SDI
-    // print, so a plain `flash` would block here and never start hart 1.
+    // Wake the second core.
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
-    println!("V3F: woke hart 1 at {:#010x} (V5F blinks LED1/PF0)", V5F_ENTRY);
+    log!("V3F: woke hart 1 at {:#010x} (V5F blinks LED1/PF0)", V5F_ENTRY);
 
     loop {
         hal::delay::Delay.delay_ms(1000);

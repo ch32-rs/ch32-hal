@@ -9,10 +9,10 @@
 //! half's `ping` advances at its own (compile-time-fitted) pace for
 //! comparison. No console needed.
 //!
-//! Hart 1's half deliberately does not use `hal::delay::Delay`: `Clocks`
-//! still lives in the boot core's private ITCM (see `docs/backlog.md`'s
-//! secondary-core entry), so on hart 1 the HAL would read the compile-time
-//! `HSI = 25 MHz`, not the post-PLL frequency.
+//! Hart 1's half deliberately keeps its own delay loop instead of
+//! `hal::delay::Delay`, so the two cores' paces can be compared. It could use
+//! the HAL: `init_secondary` calls `rcc::refresh` and reads the clock tree the
+//! boot core programmed rather than the compile-time `HSI` default.
 
 #![no_std]
 #![no_main]
@@ -22,7 +22,8 @@ use ch32h417_ipc::protocols::DelaySystick;
 use qingke::pfic;
 
 ipc::mailbox!(DelaySystick);
-use {ch32_hal as hal, panic_halt as _};
+use ch32_hal as hal;
+use panic_halt as _;
 
 /// Must match `v5f/memory.x` FLASH ORIGIN (1KB-aligned).
 const V5F_ENTRY: u32 = 0x0001_0000;
@@ -30,14 +31,11 @@ const V5F_ENTRY: u32 = 0x0001_0000;
 #[ch32_hal::entry]
 fn main() -> ! {
     let _p = hal::init(hal::Config::default());
-    hal::debug::SDIPrint::enable();
 
     let mailbox = mailbox();
     mailbox.clear();
 
-    // Hand over before printing anything: without `--enable-sdi-print` the
-    // SDI write would spin and hart 1 would never be scheduled. All output
-    // is through the mailbox; `report` picks it up.
+    // Wake the second core.
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
 
     let mut delay = hal::delay::Delay;

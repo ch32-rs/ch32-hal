@@ -3,6 +3,7 @@ fn main() {
     // fragment (which names SRAM_SHARED) has to come after it.
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
     println!("cargo:rustc-link-arg-bins=-Tshared.x");
+    println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
 
     // Ship this crate's linker scripts. qingke-rt's link.x wants `memory.x` (our
     // V5F FLASH/RAM/DTCM layout, overriding the one metapac generates) and

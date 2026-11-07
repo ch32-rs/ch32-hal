@@ -12,10 +12,16 @@
 #![no_std]
 #![no_main]
 
+use defmt_rtt as _;
+macro_rules! log {
+    () => { defmt::info!("") };
+    ($($args:tt)*) => { defmt::info!("{}", defmt::Display2Format(&format_args!($($args)*))) };
+}
+
+use ch32_hal as hal;
 use hal::i2c::I2c;
-use hal::println;
 use hal::time::Hertz;
-use {ch32_hal as hal, panic_halt as _};
+use panic_halt as _;
 
 /// First and last valid 7-bit address (0x00..=0x07 and 0x78..=0x7F are
 /// reserved by the I2C specification).
@@ -26,8 +32,7 @@ const ADDR_LAST: u8 = 0x77;
 fn main() -> ! {
     let p = hal::init(hal::Config::default());
 
-    hal::debug::SDIPrint::enable();
-    println!("I2C1 scan (SCL=PB6, SDA=PB7) @ 100kHz");
+    log!("I2C1 scan (SCL=PB6, SDA=PB7) @ 100kHz");
 
     let mut i2c = I2c::new_blocking(p.I2C1, p.PB6, p.PB7, Hertz::khz(100), Default::default());
 
@@ -40,14 +45,14 @@ fn main() -> ! {
         // `i2c-scan-blocking` example). A missing device comes back as `Err`.
         for addr in ADDR_FIRST..=ADDR_LAST {
             if i2c.blocking_write(addr, &[]).is_ok() {
-                println!("  found 0x{:02x}", addr);
+                log!("  found 0x{:02x}", addr);
                 found += 1;
             }
         }
 
         match found {
-            0 => println!("scan done: no devices"),
-            n => println!("scan done: {} device(s)", n),
+            0 => log!("scan done: no devices"),
+            n => log!("scan done: {} device(s)", n),
         }
 
         delay.delay_ms(2000);

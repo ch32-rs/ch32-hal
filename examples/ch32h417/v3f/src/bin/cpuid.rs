@@ -13,15 +13,8 @@
 //! cargo xtask run   --example cpuid     # same, with the V3F's own console
 //! ```
 //!
-//! The handover comes *before* the first `println!`: `SDIPrint::write_str` spins
-//! until the debug module consumes `DATA0`, which only happens once wlink has
-//! armed SDI print, so printing first would strand hart 1 unscheduled on a plain
-//! `flash`. Reading the mailbox with `report` needs no console at all.
-//!
-//! hart 1 only reads CSRs and stores them: no formatting and no SDI, because
-//! every wlink observation pauses the cores, and the WCH CSDK's model of running
-//! V5F code from ITCM (`Link_v5f.ld` uses `.itcm_copy >ITCM AT>FLASH`) is not in
-//! place here yet.
+//! The boot core reports through non-blocking RTT and the shared mailbox.
+//! The V5F half writes its CSR snapshot to the mailbox.
 //!
 //! # Privilege
 //!
@@ -48,21 +41,25 @@
 #![no_std]
 #![no_main]
 
+use defmt_rtt as _;
+macro_rules! log {
+    () => { defmt::info!("") };
+    ($($args:tt)*) => { defmt::info!("{}", defmt::Display2Format(&format_args!($($args)*))) };
+}
+
 use ch32h417_ipc as ipc;
-use ch32h417_ipc::protocols::{Cpuid, CPUID_CSR_NAMES, CPUID_CSRS, CPUID_DONE, CPUID_MISA_INDEX};
-use hal::{print, println};
+use ch32h417_ipc::protocols::{Cpuid, CPUID_CSRS, CPUID_CSR_NAMES, CPUID_DONE, CPUID_MISA_INDEX};
 
 ipc::mailbox!(Cpuid);
+use ch32_hal as hal;
+use panic_halt as _;
 use qingke::pfic::{self, HartId};
-use {ch32_hal as hal, panic_halt as _};
 
 /// Must match `v5f/memory.x` FLASH ORIGIN (1KB-aligned).
 const V5F_ENTRY: u32 = 0x0001_0000;
 
 /// Number of probed CSRs (see [`CSR_NAMES`]).
 const N_CSRS: u32 = 14;
-
-
 
 /// The probed CSRs must match the mailbox's value block.
 const _: () = assert!(N_CSRS as usize == CPUID_CSRS);
@@ -177,29 +174,31 @@ fn build_features() -> u32 {
 /// Decode a `misa` value: MXL plus the single-letter extensions.
 fn print_misa_decode(misa: u32) {
     let mxl = (misa >> 30) & 0x3;
-    print!(
-        "  misa decode:  MXL={} ({})  ext:",
-        mxl,
-        if mxl == 1 { "32-bit" } else { "?" }
-    );
-    let letters = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    for (i, c) in letters.iter().enumerate() {
+    let mut letters = [0u8; 26];
+    let mut len = 0;
+    for (i, c) in (b'A'..=b'Z').enumerate() {
         if misa & (1 << i) != 0 {
-            print!(" {}", *c as char);
+            letters[len] = c;
+            len += 1;
         }
     }
-    println!();
+    log!(
+        "  misa decode: MXL={} ({}) ext={}",
+        mxl,
+        if mxl == 1 { "32-bit" } else { "?" },
+        core::str::from_utf8(&letters[..len]).unwrap_or("")
+    );
 }
 
 /// Prints one CSR block: `values[i]` is shown when bit `i` of `present` is set,
 /// otherwise the read is reported as absent. Decodes `misa` after the table.
 fn print_csr_block(values: &[u32; N_CSRS as usize], present: u32) {
-    println!("--- CSRs (probed) ---");
+    log!("--- CSRs (probed) ---");
     for (i, name) in CSR_NAMES.iter().enumerate() {
         if present & (1 << i) != 0 {
-            println!("{:<18} = {:#010x}", name, values[i]);
+            log!("{:<18} = {:#010x}", name, values[i]);
         } else {
-            println!("{:<18}   absent (read faulted)", name);
+            log!("{:<18}   absent (read faulted)", name);
         }
     }
     if present & (1 << MISA_INDEX) != 0 {
@@ -207,19 +206,19 @@ fn print_csr_block(values: &[u32; N_CSRS as usize], present: u32) {
     }
 }
 
-/// Reads hart 1's mailbox block and prints it. Never returns: the SDI session
+/// Reads hart 1's mailbox block and prints it. Never returns: the reporting loop
 /// is kept alive whether or not hart 1 reported.
 fn report_v5f() -> ! {
-    println!("=== V5F (hart 1) ===");
+    log!("=== V5F (hart 1) ===");
     let cpuid = &mailbox().payload.cpuid;
     if cpuid.done.load(core::sync::atomic::Ordering::Relaxed) != CPUID_DONE {
-        println!(
+        log!(
             "no report from hart 1 (magic missing; its progress marker = {})",
             cpuid.progress.load(core::sync::atomic::Ordering::Relaxed)
         );
     } else {
         let values = cpuid.snapshot();
-        println!(
+        log!(
             "image build features = {:#04x}",
             cpuid.buildcfg.load(core::sync::atomic::Ordering::Relaxed)
         );
@@ -236,25 +235,20 @@ fn main() -> ! {
     // Only the boot core runs the full bring-up: RCC, AFIO/GPIO and EXTI are
     // shared between both harts.
     let _p = hal::init(hal::Config::default());
-    hal::debug::SDIPrint::enable();
 
-    // Hand over to hart 1 before printing anything. `SDIPrint::write_str` spins
-    // until the debug module consumes DATA0, which only happens when wlink arms
-    // SDI print, so printing first would leave hart 1 unscheduled on a plain
-    // `cargo xtask flash`. Waking first means the V5F probes itself either way;
-    // `cargo xtask report --example cpuid` then reads its block back out of the mailbox.
+    // Start the other core before reporting the two snapshots.
     mailbox().clear();
     unsafe { pfic::wake_other_core(V5F_ENTRY) };
 
-    println!("=== V3F (boot core) ===");
-    println!("hart = {:?}  (PFIC_SCTLR.SCTLR[16])", HartId::current());
-    println!("image build features = {:#04x}", build_features());
-    println!("privilege = Machine (qingke-rt default; u-mode not enabled)");
+    log!("=== V3F (boot core) ===");
+    log!("hart = {:?}  (PFIC_SCTLR.SCTLR[16])", HartId::current());
+    log!("image build features = {:#04x}", build_features());
+    log!("privilege = Machine (qingke-rt default; u-mode not enabled)");
 
     let (values, present) = probe_all();
     print_csr_block(&values, present);
 
-    println!("handed over to hart 1 at {:#010x}", V5F_ENTRY);
+    log!("handed over to hart 1 at {:#010x}", V5F_ENTRY);
 
     // Wait for hart 1 to fill its block (bounded, so a dead hart 1 cannot
     // wedge this one).

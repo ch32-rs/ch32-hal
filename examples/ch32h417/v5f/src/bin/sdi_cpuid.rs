@@ -1,43 +1,19 @@
-//! SDI + CPU-id demo — second core (V5F, QingKe hart 1).
+//! V5F CPU-ID report via its own non-blocking RTT buffer and shared mailbox.
 //!
-//! Woken by the boot core at 0x00010000. It prints its own hart ID once
-//! (`hart=C1`), hands the SDI console back to the boot core, and from then on
-//! reports liveness by bumping a counter in shared SRAM that the boot core
-//! prints. See `v3f/src/bin/sdi_cpuid.rs`.
-//!
-//! # Why this file calls nothing in `ch32-hal`
-//!
-//! On CH32H417 there is a single RCC block shared by both harts, and the boot
-//! core has already configured it — including this core's own `FPRE`
-//! prescaler. So hart 1 deliberately initialises nothing global:
-//!
-//! * `ch32_hal::init` re-programs the PLL and then *blocks* on
-//!   `CFGR0.SWS == PLL`, which would switch SYSCLK out from under the other
-//!   core while it is executing. `init_secondary` only reads the clock tree
-//!   back, but this half needs no clock and no driver, so it calls neither.
-//! * GPIO/AFIO, DMA and EXTI bring-up are global resources, already done.
-//!
-//! It prints through `ch32h417_v5f::sdi` and reaches registers through
-//! `ch32h417_v5f::pac`. What hart 1 does need is core-local: its own stack (set
-//! up by `qingke-rt`'s entry from `REGION_STACK`) and its own vector table.
-//! Nothing here touches RCC, which is exactly why the demo can run at all.
+//! The boot core configures shared clocks and wakes this core.
 
 #![no_std]
 #![no_main]
 
-use ch32h417_v5f::sdi::SdiPrint;
-use ch32h417_v5f::{cache, cpuid};
-use ch32h417_v5f::sdi_try_println;
-use ch32h417_ipc::protocols::{
-    SdiCpuid, CPUID_CSR_NAMES, CPUID_MISA_INDEX,
-};
-use ch32h417_v5f::mailbox;
-use qingke::pfic::HartId;
+use defmt_rtt as _;
+macro_rules! log {
+    ($($args:tt)*) => { defmt::info!("{}", defmt::Display2Format(&format_args!($($args)*))) };
+}
+
+use ch32h417_ipc::protocols::{SdiCpuid, CPUID_CSR_NAMES, CPUID_MISA_INDEX};
+use ch32h417_v5f::{cache, cpuid, mailbox};
 use panic_halt as _;
-
-
-/// Bounded spin so a missing boot core cannot wedge this one (~1s).
-const HANDOFF_SPINS: u32 = 5_000_000;
+use qingke::pfic::HartId;
 
 /// Strong override of qingke-rt's weak `ExceptionHandler`: record the fault and
 /// resume past the offending instruction, so probing a CSR the core does not
@@ -65,39 +41,28 @@ fn main() -> ! {
     // Hart 1 must enable its own instruction cache: it resets to disabled.
     cache::enable_icache();
 
-    // Wait for the console handoff. Nothing global is initialised here — see
-    // the module docs.
-    let mut spins = 0u32;
-    while mailbox.payload.token.load(Ordering::Relaxed) != 1 {
-        spins += 1;
-        if spins > HANDOFF_SPINS {
-            break;
-        }
-    }
-
-    SdiPrint::enable();
     let me = HartId::current();
-    sdi_try_println!("[V5F] hart={:?} (mhartid 1) is executing this code", me);
+    log!("[V5F] hart={:?} (mhartid 1) is executing this code", me);
 
-    // Probe our own CSRs and print the table *from this core* — the same block
-    // `cpuid` publishes for `xtask report`, but over SDI: this is the variant to
+    // Probe our own CSRs and print the table from this core over RTT.
+    // `cpuid` publishes the same block for `xtask report`: this is the variant to
     // use when you want to watch hart 1 rather than read shared memory later.
     //
-    // Bounded prints (`sdi_try_println!`) so a missing console cannot wedge this
+    // Non-blocking RTT so a missing console cannot wedge this
     // core: with the console open every line goes out, without it the lines are
     // dropped and the loop below keeps ticking.
     cpuid::report_self(&mailbox.payload.cpuid);
     let values = mailbox.payload.cpuid.snapshot();
     let present = mailbox.payload.cpuid.present.load(Ordering::Relaxed);
-    sdi_try_println!(
+    log!(
         "[V5F] image build features = {:#04x}",
         mailbox.payload.cpuid.buildcfg.load(Ordering::Relaxed)
     );
     for (i, name) in CPUID_CSR_NAMES.iter().enumerate() {
         if present & (1 << i) != 0 {
-            sdi_try_println!("  {:<18} = {:#010x}", name, values[i]);
+            log!("  {:<18} = {:#010x}", name, values[i]);
         } else {
-            sdi_try_println!("  {:<18}   absent (read faulted)", name);
+            log!("  {:<18}   absent (read faulted)", name);
         }
     }
     if present & (1 << CPUID_MISA_INDEX) != 0 {
@@ -110,16 +75,12 @@ fn main() -> ! {
                 len += 1;
             }
         }
-        sdi_try_println!(
+        log!(
             "  misa decode        MXL={} extensions={}",
             (misa >> 30) & 3,
             core::str::from_utf8(&letters[..len]).unwrap_or("")
         );
     }
-
-    // Hand the console back to the boot core; it is the only SDI writer from
-    // here on, so this core never has to arbitrate again.
-    mailbox.payload.token.store(0, Ordering::Relaxed);
 
     // Report liveness through shared SRAM. A single 32-bit aligned writer and
     // a single reader need no locking.

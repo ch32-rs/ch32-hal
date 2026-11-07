@@ -16,13 +16,21 @@
 #![no_std]
 #![no_main]
 
-use ch32h417_ipc as ipc;
-use ch32h417_ipc::protocols::{Atomics, CAS_DONE_V3F, CAS_DONE_V5F, CAS_INCREMENTS};
+use defmt_rtt as _;
+macro_rules! log {
+    () => { defmt::info!("") };
+    ($($args:tt)*) => { defmt::info!("{}", defmt::Display2Format(&format_args!($($args)*))) };
+}
+
 use core::sync::atomic::Ordering;
 
+use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::{Atomics, CAS_DONE_V3F, CAS_DONE_V5F, CAS_INCREMENTS};
+
 ipc::mailbox!(Atomics);
+use ch32_hal as hal;
+use panic_halt as _;
 use qingke::pfic;
-use {ch32_hal as hal, panic_halt as _};
 
 /// Must match `v5f/memory.x` FLASH ORIGIN (1KB-aligned).
 const V5F_ENTRY: u32 = 0x0001_0000;
@@ -37,7 +45,6 @@ fn main() -> ! {
     let mut config = hal::Config::default();
     config.rcc = hal::rcc::Config::with_sysclk_400m_v5f_400m_v3f_100m_hsi();
     let _p = hal::init(config);
-    hal::debug::SDIPrint::enable();
 
     let mailbox = mailbox();
     mailbox.clear();
@@ -48,7 +55,7 @@ fn main() -> ! {
     while mailbox.payload.total.load(Ordering::Relaxed) == 0 {
         spins += 1;
         if spins > SPINS {
-            hal::try_println!("hart 1 never started incrementing");
+            log!("hart 1 never started incrementing");
             break;
         }
     }
@@ -69,11 +76,11 @@ fn main() -> ! {
     let done = mailbox.payload.done.load(Ordering::Acquire);
     let total = mailbox.payload.total.load(Ordering::Relaxed);
     let expected = CAS_INCREMENTS * 2;
-    hal::try_println!("[V3F] done={done:#x} total={total} expected={expected}");
+    log!("[V3F] done={done:#x} total={total} expected={expected}");
     if total == expected {
-        hal::try_println!("[V3F] OK: the A extension did the increments, no updates lost");
+        log!("[V3F] OK: the A extension did the increments, no updates lost");
     } else {
-        hal::try_println!(
+        log!(
             "[V3F] LOST UPDATES: {} increments vanished (atomics are not usable across cores)",
             expected - total
         );

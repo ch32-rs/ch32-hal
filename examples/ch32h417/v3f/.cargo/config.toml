@@ -6,4 +6,7 @@ build-std = ["core"]
 json-target-spec = true
 
 [target.riscv32imafc-unknown-none-elf]
-runner = "wlink flash --enable-sdi-print --watch-serial"
+runner = "probe-rs run --chip CH32H417QEU6 --scan-region ram"
+
+[env]
+DEFMT_LOG = { value = "info", force = false }

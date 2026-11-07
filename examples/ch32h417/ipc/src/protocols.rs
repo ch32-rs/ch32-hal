@@ -222,9 +222,8 @@ impl Protocol for Pingpong {
     };
 }
 
-/// `sdi_cpuid`: the console token and hart 1's liveness counter, then its CSRs.
-///
-/// `token` is 1 while hart 1 owns the SDI console and 0 when the boot core does.
+/// `sdi_cpuid`: reserved legacy token, hart 1 liveness counter, then its CSRs.
+/// Each hart now owns a separate RTT buffer; `token` is retained for ABI stability.
 #[repr(C)]
 pub struct SdiCpuid {
     pub token: AtomicU32,
@@ -425,6 +424,24 @@ pub struct SdioCheck {
     pub clock: AtomicU32,
     pub first_word: AtomicU32,
     pub status: AtomicU32,
+    /// Raw registers from the manual CMD0/CMD8 probe, for a no-response case.
+    pub hclk: AtomicU32,
+    pub clkcr: AtomicU32,
+    pub cmd0_sta: AtomicU32,
+    pub cmd8_sta: AtomicU32,
+    pub resp1: AtomicU32,
+    /// Idle and post-CMD8 line levels: bit 4 = CMD, bits 0..3 = D0..D3.
+    pub levels_idle: AtomicU32,
+    pub levels_cmd8: AtomicU32,
+    /// CMD55 (APP_CMD) and ACMD41 (SD_SEND_OP_COND) from the same probe.
+    pub cmd55_sta: AtomicU32,
+    pub resp55: AtomicU32,
+    pub acmd41_sta: AtomicU32,
+    pub resp41: AtomicU32,
+    /// High samples of PB11 (SDIO_CK) out of 256 reads while the clock runs.
+    pub ck_high: AtomicU32,
+    /// Level changes seen on PB10 while CMD8 shifts out.
+    pub cmd_edges: AtomicU32,
 }
 
 impl Protocol for SdioCheck {
@@ -438,6 +455,19 @@ impl Protocol for SdioCheck {
         clock: AtomicU32::new(0),
         first_word: AtomicU32::new(0),
         status: AtomicU32::new(0),
+        hclk: AtomicU32::new(0),
+        clkcr: AtomicU32::new(0),
+        cmd0_sta: AtomicU32::new(0),
+        cmd8_sta: AtomicU32::new(0),
+        resp1: AtomicU32::new(0),
+        levels_idle: AtomicU32::new(0),
+        levels_cmd8: AtomicU32::new(0),
+        cmd55_sta: AtomicU32::new(0),
+        resp55: AtomicU32::new(0),
+        acmd41_sta: AtomicU32::new(0),
+        resp41: AtomicU32::new(0),
+        ck_high: AtomicU32::new(0),
+        cmd_edges: AtomicU32::new(0),
     };
 }
 
@@ -482,3 +512,173 @@ impl Protocol for CanCheck {
         pclk1: AtomicU32::new(0),
     };
 }
+
+/// `timer_check`: the four H4 timer classes (ADTM/GPTM/GPTM32/BCTM).
+///
+/// `stage` is 2 once every timer ran, `timers` the number exercised and
+/// `checks`/`failures` the assertion counts. `updates` is the last measured
+/// update-interrupt count, `frequency` the last readback, and `wide_arr` the
+/// TIM9 autoreload after a 1 Hz request, which only fits in 32 bits.
+#[repr(C)]
+pub struct TimerCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub timers: AtomicU32,
+    pub updates: AtomicU32,
+    pub frequency: AtomicU32,
+    pub wide_arr: AtomicU32,
+    pub pclk1: AtomicU32,
+}
+
+impl Protocol for TimerCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        timers: AtomicU32::new(0),
+        updates: AtomicU32::new(0),
+        frequency: AtomicU32::new(0),
+        wide_arr: AtomicU32::new(0),
+        pclk1: AtomicU32::new(0),
+    };
+}
+
+/// `dma2_check`: a 512-byte memory-to-memory copy through DMA2 channel 1.
+#[repr(C)]
+pub struct Dma2Check {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub matched: AtomicU32,
+    pub tcif: AtomicU32,
+    pub remaining: AtomicU32,
+    pub length: AtomicU32,
+}
+
+impl Protocol for Dma2Check {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        matched: AtomicU32::new(0),
+        tcif: AtomicU32::new(0),
+        remaining: AtomicU32::new(0),
+        length: AtomicU32::new(0),
+    };
+}
+
+/// `exti_check`: software-triggered EXTI lines on both merged vectors.
+///
+/// `lines` is the bitmask of lines exercised, `rounds` how many times each was
+/// triggered, and `intfr`/`intenr` are the registers afterwards.
+#[repr(C)]
+pub struct ExtiCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub lines: AtomicU32,
+    pub rounds: AtomicU32,
+    pub intfr: AtomicU32,
+    pub intenr: AtomicU32,
+}
+
+impl Protocol for ExtiCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        lines: AtomicU32::new(0),
+        rounds: AtomicU32::new(0),
+        intfr: AtomicU32::new(0),
+        intenr: AtomicU32::new(0),
+    };
+}
+
+/// `bus_check`: the USART/SPI/I2C instances that have no dedicated self-check.
+///
+/// One bit per instance, set only if its construction and first transfer
+/// behaved as expected. I2C2–4 are construction-only: the board has no
+/// pull-ups on those pins and a blocking write has no timeout without the
+/// `embassy` feature, so the check stops after `CTLR1.PE` comes up.
+#[repr(C)]
+pub struct BusCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub usart_mask: AtomicU32,
+    pub spi_mask: AtomicU32,
+    pub i2c_mask: AtomicU32,
+    pub pclk1: AtomicU32,
+}
+
+impl Protocol for BusCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        usart_mask: AtomicU32::new(0),
+        spi_mask: AtomicU32::new(0),
+        i2c_mask: AtomicU32::new(0),
+        pclk1: AtomicU32::new(0),
+    };
+}
+
+/// `esig_check`: the hard-coded ESIG addresses in `src/signature.rs`.
+///
+/// `flash_kb` comes from `FLACAP`, `uid` from the three UID words and
+/// `chip_id` from the chip-ID register; the probe reports the same values, so a
+/// wrong H4 address shows up as a mismatch or an erased pattern.
+#[repr(C)]
+pub struct EsigCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub flash_kb: AtomicU32,
+    pub uid0: AtomicU32,
+    pub uid1: AtomicU32,
+    pub uid2: AtomicU32,
+    pub chip_id: AtomicU32,
+}
+
+impl Protocol for EsigCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        flash_kb: AtomicU32::new(0),
+        uid0: AtomicU32::new(0),
+        uid1: AtomicU32::new(0),
+        uid2: AtomicU32::new(0),
+        chip_id: AtomicU32::new(0),
+    };
+}
+
+/// `can_async_check`: CAN1 in silent loopback through the async driver.
+///
+/// `frame` counts the echoed frames that matched, `tx_ok`/`rx_ok` the awaited
+/// calls, and `last_id` the last received identifier. Both FIFOs are used, so
+/// both receive interrupt handlers and the transmit handler run.
+#[repr(C)]
+pub struct CanAsyncCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub frames: AtomicU32,
+    pub tx_ok: AtomicU32,
+    pub rx_ok: AtomicU32,
+    pub last_id: AtomicU32,
+}
+
+impl Protocol for CanAsyncCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        frames: AtomicU32::new(0),
+        tx_ok: AtomicU32::new(0),
+        rx_ok: AtomicU32::new(0),
+        last_id: AtomicU32::new(0),
+    };
+}
+

@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+defmt = "1"
+defmt-rtt = { version = "1.3.1", features = ["disable-blocking-mode"] }
 # Default to the V3F hart (boot core). For V5F examples, switch the
 # feature to `ch32h417qeu6-v5f` and update the target JSON to use the
 # riscv32imafbc-style profile (V5F adds the B extension and ICache).
@@ -37,6 +39,8 @@ embassy-time = { version = "0.5.1", optional = true }
 
 # I2C sensor used by `src/bin/bme280_blocking.rs`.
 edrv-bme280 = "0.1.1"
+embedded-sdmmc = { version = "0.9.0", default-features = false }
+exfat-embedded = { version = "0.1.3", default-features = false }
 
 [features]
 # Pulls in the H4 SysTick time driver. Other bins keep the blocking delay, which
@@ -50,6 +54,11 @@ spi-loopback = []
 [[bin]]
 name = "embassy_systick"
 path = "src/bin/embassy_systick.rs"
+required-features = ["embassy"]
+
+[[bin]]
+name = "can_async_check"
+path = "src/bin/can_async_check.rs"
 required-features = ["embassy"]
 
 [profile.release]

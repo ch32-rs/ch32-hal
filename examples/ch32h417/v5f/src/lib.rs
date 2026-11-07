@@ -4,7 +4,7 @@
 //! one RCC block shared by both cores, so this image never calls
 //! `ch32_hal::init` — that re-programs the PLL and then waits for the switch.
 //! `ch32_hal::init_secondary` only reads the clock tree back. Examples drive
-//! registers through [`pac`] and, for printf, through [`sdi`].
+//! registers through [`pac`]. Logging examples use a separate defmt RTT buffer.
 //!
 //! # Where the shared mailbox lives
 //!

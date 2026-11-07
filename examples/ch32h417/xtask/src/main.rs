@@ -100,7 +100,7 @@ commands:
   flash --example NAME [--dual-core | --jump-v5f] [--no-build]
                                             build, then flash and reset
   run   --example NAME [--dual-core | --jump-v5f] [--no-build]
-                                            like flash, plus the SDI console
+                                            flash and view the V3F defmt RTT console
   merge --example NAME [--dual-core | --jump-v5f] [--out DIR]
                                             merge the images into .bin + .hex
   report --example NAME                    read that example's mailbox back
@@ -374,7 +374,7 @@ fn build_core(job: &Job) {
     // This bin is the only V3F example that starts the SysTick time driver.
     // The blocking examples keep that counter for `hal::delay`.
     let embassy;
-    if job.example == "embassy_systick" {
+    if job.example == "embassy_systick" || job.example == "can_async_check" {
         embassy = String::from("embassy");
         args.extend(["--features", &embassy]);
     }
@@ -443,13 +443,8 @@ fn mailbox_symbol(elf: &Path) -> Option<(u32, u32)> {
     None
 }
 
-/// `flash` (watch = false) and `run` (watch = true) share this.
-///
-/// The non-final cores are written with `--no-run` and read back, so nothing
-/// starts half-programmed. The final write resets and runs the chip and carries
-/// the SDI flags — and nothing may follow it, because *every* other wlink
-/// request (`dump`, `regs`, `status`) pauses the cores: a read-back check there
-/// would measure the paused state instead of the running one.
+/// Build and flash the selected images. `run` also opens the V3F RTT stream.
+/// Multi-core flashing verifies the non-final image before starting the chip.
 fn flash(opts: &Options, watch: bool) {
     let jobs = opts.jobs();
     if jobs.iter().any(|job| job.example.is_empty()) {
@@ -468,42 +463,55 @@ fn flash(opts: &Options, watch: bool) {
                     "note: --jump-v5f replaces `{example}`'s own V3F half with the jumper,\n\
                      \x20     so whatever that half printed or drove will not happen. Use\n\
                      \x20     --dual-core when the example's V3F half does real work\n\
-                     \x20     (e.g. `sdi_cpuid`'s print-token handshake)."
+                     \x20     (e.g. `sdi_cpuid`'s V3F reporting)."
                 );
             }
         }
     }
-    let writes_second_core = jobs.iter().any(|job| job.core.name != BOOT_CORE);
-
+    // PROBE_RS_PROBE selects a probe if more than one is connected.
+    if watch && jobs.len() == 1 {
+        let elf = example_elf(jobs[0].core, &jobs[0].example);
+        run(
+            "probe-rs",
+            &[
+                "run",
+                "--chip",
+                "CH32H417QEU6",
+                "--scan-region",
+                "ram",
+                elf.to_str().expect("utf-8 path"),
+            ],
+            &root(),
+        );
+        return;
+    }
     for (i, job) in jobs.iter().enumerate() {
         let core = job.core;
         let elf = example_elf(core, &job.example);
-        let last = i + 1 == jobs.len();
         println!("flashing {} ({}) ...", core.name, job.example);
-
-        if last {
-            // The final write resets and runs the chip. `run` adds the SDI pair
-            // (`--enable-sdi-print --watch-serial`: the console needs the target
-            // running, which is also what keeps hart 1 alive); `flash` stays
-            // plain, because enabling SDI print without watching leaves the
-            // debug module attached and the second core paused.
-            let mut args = vec!["flash"];
-            if watch {
-                if writes_second_core {
-                    println!(
-                        "note: watching keeps wlink attached, and any wlink request pauses the\n\
-                         \x20     cores — while the console is open the V5F half cannot run.\n\
-                         \x20     Use `cargo xtask flash` and read the mailbox afterwards."
-                    );
-                }
-                args.extend(["--enable-sdi-print", "--watch-serial"]);
-            }
-            args.push(elf.to_str().expect("utf-8 path"));
-            run("wlink", &args, &root());
+        if i + 1 == jobs.len() {
+            run("wlink", &["flash", elf.to_str().expect("utf-8 path")], &root());
         } else {
             let args = ["flash", "--no-run", elf.to_str().expect("utf-8 path")];
             program_verified(core, &job.example, &elf, &args, true);
         }
+    }
+    if watch {
+        let boot = jobs.iter().find(|job| job.core.name == BOOT_CORE).expect("boot image");
+        let elf = example_elf(boot.core, &boot.example);
+        println!("attaching to V3F RTT; V5F has a separate buffer");
+        run(
+            "probe-rs",
+            &[
+                "attach",
+                "--chip",
+                "CH32H417QEU6",
+                "--scan-region",
+                "ram",
+                elf.to_str().expect("utf-8 path"),
+            ],
+            &root(),
+        );
     }
 }
 
@@ -646,15 +654,8 @@ fn merge(opts: &Options) {
 
 /// Reads the mailbox back and decodes it.
 ///
-/// The V5F half cannot report over SDI while a console is attached — every wlink
-/// request pauses the cores, and the console keeps one attached — so the examples
-/// publish what they find in shared RAM instead, and this prints it afterwards.
-///
-/// The layout comes from the `ch32h417-ipc` crate: the very `#[repr(C)]` struct
-/// both cores place at `SRAM_SHARED`, linked into this tool so the field offsets
-/// decoded here cannot drift from the ones they write. Which payload that struct
-/// carries depends on the example, so the read length and the decoder both follow
-/// the `--example` asked for.
+/// Read an example's shared-memory report after flashing.
+
 fn report(opts: &Options) {
     let Some(example) = opts.example.as_deref() else {
         fail(&format!("`report` needs --example NAME\n\n{USAGE}"))
@@ -665,7 +666,15 @@ fn report(opts: &Options) {
         "rcc_delay_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RccDelayCheck>>(),
         "spi_check" => size_of::<ch32h417_ipc::Mailbox<ipc::SpiCheck>>(),
         "can_check" => size_of::<ch32h417_ipc::Mailbox<ipc::CanCheck>>(),
-        "sdio_check" => size_of::<ch32h417_ipc::Mailbox<ipc::SdioCheck>>(),
+        "timer_check" => size_of::<ch32h417_ipc::Mailbox<ipc::TimerCheck>>(),
+        "dma2_check" => size_of::<ch32h417_ipc::Mailbox<ipc::Dma2Check>>(),
+        "exti_check" => size_of::<ch32h417_ipc::Mailbox<ipc::ExtiCheck>>(),
+        "bus_check" => size_of::<ch32h417_ipc::Mailbox<ipc::BusCheck>>(),
+        "esig_check" => size_of::<ch32h417_ipc::Mailbox<ipc::EsigCheck>>(),
+        "can_async_check" => size_of::<ch32h417_ipc::Mailbox<ipc::CanAsyncCheck>>(),
+        "sdio_exfat" | "sdio_fat" | "sdio_check" | "sdio_raw" | "sdio_rawn" | "sdio_inherit" => {
+            size_of::<ch32h417_ipc::Mailbox<ipc::SdioCheck>>()
+        }
         "rng_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RngCheck>>(),
         "adc_check" => size_of::<ch32h417_ipc::Mailbox<ipc::AdcCheck>>(),
         "dac_check" => size_of::<ch32h417_ipc::Mailbox<ipc::DacCheck>>(),
@@ -775,7 +784,70 @@ fn report(opts: &Options) {
             field!(ipc::CanCheck, errsr, "ERRSR");
             field!(ipc::CanCheck, pclk1, "PCLK1 Hz");
         }
-        "sdio_check" => {
+        "timer_check" => {
+            field!(ipc::TimerCheck, stage, "stage");
+            field!(ipc::TimerCheck, failures, "failures");
+            field!(ipc::TimerCheck, checks, "checks");
+            field!(ipc::TimerCheck, timers, "timer classes");
+            field!(ipc::TimerCheck, updates, "last update count");
+            field!(ipc::TimerCheck, frequency, "last frequency Hz");
+            field!(ipc::TimerCheck, wide_arr, "TIM9 ARR");
+            field!(ipc::TimerCheck, pclk1, "PCLK1 Hz");
+        }
+        "dma2_check" => {
+            field!(ipc::Dma2Check, stage, "stage");
+            field!(ipc::Dma2Check, failures, "failures");
+            field!(ipc::Dma2Check, checks, "checks");
+            field!(ipc::Dma2Check, matched, "bytes matched");
+            field!(ipc::Dma2Check, tcif, "TCIF ch1");
+            field!(ipc::Dma2Check, remaining, "remaining");
+            field!(ipc::Dma2Check, length, "length");
+        }
+        "exti_check" => {
+            field!(ipc::ExtiCheck, stage, "stage");
+            field!(ipc::ExtiCheck, failures, "failures");
+            field!(ipc::ExtiCheck, checks, "checks");
+            field!(ipc::ExtiCheck, lines, "lines mask");
+            field!(ipc::ExtiCheck, rounds, "rounds");
+            field!(ipc::ExtiCheck, intfr, "INTFR");
+            field!(ipc::ExtiCheck, intenr, "INTENR");
+        }
+        "bus_check" => {
+            field!(ipc::BusCheck, stage, "stage");
+            field!(ipc::BusCheck, failures, "failures");
+            field!(ipc::BusCheck, checks, "checks");
+            field!(ipc::BusCheck, usart_mask, "USART mask");
+            field!(ipc::BusCheck, spi_mask, "SPI mask");
+            field!(ipc::BusCheck, i2c_mask, "I2C mask");
+            field!(ipc::BusCheck, pclk1, "PCLK1 Hz");
+        }
+        "esig_check" => {
+            field!(ipc::EsigCheck, stage, "stage");
+            field!(ipc::EsigCheck, failures, "failures");
+            field!(ipc::EsigCheck, checks, "checks");
+            field!(ipc::EsigCheck, flash_kb, "flash KB");
+            field!(ipc::EsigCheck, uid0, "UID word 0");
+            field!(ipc::EsigCheck, uid1, "UID word 1");
+            field!(ipc::EsigCheck, uid2, "UID word 2");
+            field!(ipc::EsigCheck, chip_id, "chip ID");
+        }
+        "can_async_check" => {
+            field!(ipc::CanAsyncCheck, stage, "stage");
+            field!(ipc::CanAsyncCheck, failures, "failures");
+            field!(ipc::CanAsyncCheck, checks, "checks");
+            field!(ipc::CanAsyncCheck, frames, "frames");
+            field!(ipc::CanAsyncCheck, tx_ok, "tx ok");
+            field!(ipc::CanAsyncCheck, rx_ok, "rx ok");
+            field!(ipc::CanAsyncCheck, last_id, "last id");
+        }
+        "sdio_exfat" | "sdio_fat" => {
+            field!(ipc::SdioCheck, stage, "stage (7 = verified)");
+            field!(ipc::SdioCheck, error, "error (0 = none)");
+            field!(ipc::SdioCheck, first_word, "test file number");
+            field!(ipc::SdioCheck, blocks, "bytes verified");
+            field!(ipc::SdioCheck, clock, "reported SDIO clock Hz");
+        }
+        "sdio_check" | "sdio_raw" | "sdio_rawn" | "sdio_inherit" => {
             field!(ipc::SdioCheck, stage, "stage");
             field!(ipc::SdioCheck, failures, "failures");
             field!(ipc::SdioCheck, checks, "checks");
@@ -785,6 +857,19 @@ fn report(opts: &Options) {
             field!(ipc::SdioCheck, clock, "clock");
             field!(ipc::SdioCheck, first_word, "first word");
             field!(ipc::SdioCheck, status, "STA");
+            field!(ipc::SdioCheck, hclk, "HCLK");
+            field!(ipc::SdioCheck, clkcr, "CLKCR");
+            field!(ipc::SdioCheck, cmd0_sta, "CMD0 STA");
+            field!(ipc::SdioCheck, cmd8_sta, "CMD8 STA");
+            field!(ipc::SdioCheck, resp1, "RESP1");
+            field!(ipc::SdioCheck, levels_idle, "levels idle");
+            field!(ipc::SdioCheck, levels_cmd8, "levels after CMD8");
+            field!(ipc::SdioCheck, cmd55_sta, "CMD55 STA");
+            field!(ipc::SdioCheck, resp55, "CMD55 RESP1");
+            field!(ipc::SdioCheck, acmd41_sta, "ACMD41 STA");
+            field!(ipc::SdioCheck, resp41, "ACMD41 RESP1");
+            field!(ipc::SdioCheck, ck_high, "CK high/256");
+            field!(ipc::SdioCheck, cmd_edges, "CMD edges");
         }
         "rng_check" => {
             field!(ipc::RngCheck, stage, "stage");
