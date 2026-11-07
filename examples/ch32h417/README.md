@@ -155,14 +155,28 @@ The same split as the WCH CSDK (`Ld/V3F/Link_v3f.ld`, `Ld/V5F/Link_v5f.ld`):
 
 | Region | Owner | Notes |
 |---|---|---|
-| `0x00000000` + 64K | V3F image | `v3f/memory.x` |
-| `0x00010000` + 960K−64K | V5F image | `v5f/memory.x` |
+| `0x00000000` + 64K | V3F load image (flash) | `v3f/memory.x`; copied to RAM at startup |
+| `0x20100000` + 448K | V3F code, data, bss | zero-wait shared SRAM |
+| `0x20170000` + 32K | V3F stack | zero-wait shared SRAM |
+| `0x00010000` + 960K−64K | V5F image (flash) | `v5f/memory.x` |
 | `0x20178000` + 32K | shared region (`ipc::Mailbox`) | declared by both `memory.x`; defined by the V3F image only |
 
 Either image declares its own range, so an oversized build fails to link
 instead of overwriting the other image; `xtask merge` checks the sizes again.
-The V5F currently executes from flash in place — the CSDK's copy of V5F `.text`
-to ITCM is not implemented here, so keep V5F halves small.
+
+The boot core runs entirely from the shared block. Hart 0 has no usable
+instruction cache, Code FLASH is non-zero-wait (RM §1.2.1), and hart 1's ITCM
+costs hart 0 two HCLK waits — while the 512 KB shared block is zero-wait for
+both cores. `v3f/link.x` folds all of `.text`/`.rodata` into `.highcode` (the
+`qingke-rt` `highcode` feature), so only `.init` and `.handle_reset` stay in
+flash and the startup copies the rest into RAM. Measured with `eth_bench`: a
+1M-iteration integer loop drops from 1.12 s to 87 ms, and TCP throughput from
+5.0 to 93 Mbit/s up, 92 Mbit/s down. The 64 KB flash slot is now a load-image
+limit, not an execution one.
+
+The V5F executes from flash in place and has an instruction cache, so it does
+not need the copy; the CSDK's ITCM copy for hart 1 is not implemented here, so
+keep V5F halves small.
 
 ### Mailbox
 
@@ -211,8 +225,8 @@ independently flashed halves can notice they disagree about it.
   stock targets and leaves it to the examples.
 - **Hart 1's instruction cache is off out of reset** (`cache_strtg_ctlr`, CSR
   `0xBC2`, `ic_disable = 1`), so every V5F half starts with
-  `ch32h417_v5f::cache::enable_icache()`. Hart 0 has no usable instruction cache;
-  its speed path is running code from RAM (see `docs/backlog.md`).
+  `ch32h417_v5f::cache::enable_icache()`. Hart 0 has no usable instruction cache,
+  so the V3F image runs from the shared SRAM (`v3f/link.x`, `highcode`).
 
 ## SD card file-system examples
 

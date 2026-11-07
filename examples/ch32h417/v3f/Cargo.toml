@@ -25,7 +25,10 @@ ch32-hal = { path = "../../../", default-features = false, features = [
 ch32h417-ipc = { path = "../ipc", features = ["define"] }
 
 qingke = { version = "0.8.4", features = ["unsafe-trust-wch-atomics", "dual-core"] }
-qingke-rt = { version = "0.8.4" }
+# `highcode`: the startup copies `.highcode` from flash to RAM and `mtvec` is
+# taken from there. `link.x` in this crate folds all of `.text`/`.rodata` into
+# that section, so the boot core executes from the zero-wait shared SRAM.
+qingke-rt = { version = "0.8.4", features = ["highcode"] }
 
 panic-halt = "1.0"
 embedded-hal = "1.0.0"
