@@ -24,11 +24,12 @@ async fn ethernet_task(runner: eth::Runner<'static, GenericSMI>) -> ! {
 
 #[embassy_executor::main(entry = "ch32_hal::entry")]
 async fn main(spawner: Spawner) -> ! {
-    // Configure core speed at 60MHz (16MHz HSE * 15 / 4 = 60MHz)
+    // Core at 120 MHz (32 MHz HSE * 15 / 4). The driver divides HCLK by 2
+    // for the 10M PHY, which needs exactly 60 MHz.
     let _p = ch32_hal::init(ch32_hal::Config {
         rcc: ch32_hal::rcc::Config {
             hse: Some(Hse {
-                freq: Hertz(16_000_000),
+                freq: Hertz(32_000_000),
                 mode: HseMode::Oscillator,
             }),
             sys: Sysclk::PLL,
@@ -47,7 +48,7 @@ async fn main(spawner: Spawner) -> ! {
         },
         dma_interrupt_priority: interrupt::Priority::P0,
     });
-    let core_freq: u32 = 60_000_000;
+    let core_freq: u32 = 120_000_000;
 
     ch32_hal::debug::SDIPrint::enable();
     Timer::after(Duration::from_millis(100)).await;
