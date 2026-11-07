@@ -16,7 +16,7 @@ license = "MIT OR Apache-2.0"
 # Generated from ch32-rs/ch32-data#83 (`feat/ch32h4-register-refresh`).
 ch32-metapac = { features = [
     "rt",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "73b3bebc863f63f05430ddfbba4f47d3c08de1a5" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "1f585a935ad2fe1564af03af6f76bc3bef7ee590" }
 
 # `unsafe-trust-wch-atomics`: qingke 0.8.2 refuses to build whenever the target
 # claims byte atomics unless this is set, and every A-extension target does.
@@ -61,7 +61,7 @@ embedded-storage = "0.3.1"
 # Same revision as the `[dependencies]` entry.
 ch32-metapac = { features = [
     "metadata",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "73b3bebc863f63f05430ddfbba4f47d3c08de1a5" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "1f585a935ad2fe1564af03af6f76bc3bef7ee590" }
 
 proc-macro2 = "1.0"
 quote = "1.0"
