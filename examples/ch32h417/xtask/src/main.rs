@@ -672,6 +672,8 @@ fn report(opts: &Options) {
         "bus_check" => size_of::<ch32h417_ipc::Mailbox<ipc::BusCheck>>(),
         "esig_check" => size_of::<ch32h417_ipc::Mailbox<ipc::EsigCheck>>(),
         "can_async_check" => size_of::<ch32h417_ipc::Mailbox<ipc::CanAsyncCheck>>(),
+        "rtc_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RtcCheck>>(),
+        "rtc_hse_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RtcHseCheck>>(),
         "sdio_exfat" | "sdio_fat" | "sdio_check" | "sdio_raw" | "sdio_rawn" | "sdio_inherit" => {
             size_of::<ch32h417_ipc::Mailbox<ipc::SdioCheck>>()
         }
@@ -839,6 +841,27 @@ fn report(opts: &Options) {
             field!(ipc::CanAsyncCheck, tx_ok, "tx ok");
             field!(ipc::CanAsyncCheck, rx_ok, "rx ok");
             field!(ipc::CanAsyncCheck, last_id, "last id");
+        }
+        "rtc_check" => {
+            field!(ipc::RtcCheck, stage, "stage");
+            field!(ipc::RtcCheck, failures, "failures");
+            field!(ipc::RtcCheck, checks, "checks");
+            field!(ipc::RtcCheck, time, "RTC seconds");
+            field!(ipc::RtcCheck, seconds, "second interrupts");
+            field!(ipc::RtcCheck, alarms, "alarm interrupts");
+            field!(ipc::RtcCheck, prescaler, "prescaler");
+            field!(ipc::RtcCheck, frequency, "input clock Hz");
+            field!(ipc::RtcCheck, lse, "LSE validated");
+            field!(ipc::RtcCheck, lse_wait_ms, "LSE wait ms");
+            field!(ipc::RtcCheck, rtcsel, "RTCSEL (1=LSE)");
+        }
+        "rtc_hse_check" => {
+            field!(ipc::RtcHseCheck, stage, "stage");
+            field!(ipc::RtcHseCheck, failures, "failures");
+            field!(ipc::RtcHseCheck, checks, "checks");
+            field!(ipc::RtcHseCheck, time, "RTC seconds");
+            field!(ipc::RtcHseCheck, prescaler, "prescaler");
+            field!(ipc::RtcHseCheck, frequency, "input clock Hz");
         }
         "sdio_exfat" | "sdio_fat" => {
             field!(ipc::SdioCheck, stage, "stage (7 = verified)");

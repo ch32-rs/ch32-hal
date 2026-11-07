@@ -682,3 +682,63 @@ impl Protocol for CanAsyncCheck {
     };
 }
 
+/// `rtc_check`: the RTC driver's LSI time base and interrupt paths.
+///
+/// `time` is the counter after the delay, `seconds` the second interrupts
+/// counted by the handler, `alarms` the alarm interrupts, and `prescaler` the
+/// last divider read. `frequency` is the input clock the driver divided down.
+#[repr(C)]
+pub struct RtcCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub time: AtomicU32,
+    pub seconds: AtomicU32,
+    pub alarms: AtomicU32,
+    pub prescaler: AtomicU32,
+    pub frequency: AtomicU32,
+    pub lse: AtomicU32,
+    pub lse_wait_ms: AtomicU32,
+    pub rtcsel: AtomicU32,
+}
+
+impl Protocol for RtcCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        time: AtomicU32::new(0),
+        seconds: AtomicU32::new(0),
+        alarms: AtomicU32::new(0),
+        prescaler: AtomicU32::new(0),
+        frequency: AtomicU32::new(0),
+        lse: AtomicU32::new(0),
+        lse_wait_ms: AtomicU32::new(0),
+        rtcsel: AtomicU32::new(0),
+    };
+}
+
+/// `rtc_hse_check`: the RTC on the HSE/512 time base.
+///
+/// `time` is the counter after a three-second delay, `prescaler` the divider
+/// read afterwards, and `frequency` the driver's `HSE / 512` value.
+#[repr(C)]
+pub struct RtcHseCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub time: AtomicU32,
+    pub prescaler: AtomicU32,
+    pub frequency: AtomicU32,
+}
+
+impl Protocol for RtcHseCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        time: AtomicU32::new(0),
+        prescaler: AtomicU32::new(0),
+        frequency: AtomicU32::new(0),
+    };
+}

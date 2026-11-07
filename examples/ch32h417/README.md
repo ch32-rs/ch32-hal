@@ -25,7 +25,7 @@ register (`PFIC_WAKEIP1`), so examples come in exactly two shapes, which
 
 | Kind | Files | Examples |
 |---|---|---|
-| **v3f-only** | `v3f/src/bin/NAME.rs` | `adc_check`, `blinky`, `bme280_blocking`, `bus_check`, `can_async_check`, `can_check`, `dac_check`, `delay_systick`, `dma2_check`, `dma_m2m`, `embassy_systick`, `esig_check`, `exti_check`, `flash_check`, `i2c_scan`, `launcher`, `rcc_delay_check`, `rng_check`, `sdi_print`, `sdio_check`, `sdio_exfat`, `sdio_fat`, `spi_check`, `timer_check` |
+| **v3f-only** | `v3f/src/bin/NAME.rs` | `adc_check`, `blinky`, `bme280_blocking`, `bus_check`, `can_async_check`, `can_check`, `dac_check`, `delay_systick`, `dma2_check`, `dma_m2m`, `embassy_systick`, `esig_check`, `exti_check`, `flash_check`, `i2c_scan`, `launcher`, `rcc_delay_check`, `rng_check`, `rtc_check`, `rtc_hse_check`, `sdi_print`, `sdio_check`, `sdio_exfat`, `sdio_fat`, `spi_check`, `timer_check` |
 | **dual-core** | both `src/bin/NAME.rs` | `atomics`, `bme280`, `cpuid`, `dualcore`, `hello`, `pingpong`, `sdi_cpuid` |
 
 In a dual-core example the V3F half brings the chip up (clocks, GPIO),
@@ -94,7 +94,7 @@ validated for continuous V5F execution; use the mailbox to verify hart 1.
   (AF4). The boot core reads the sensor itself.
 - **`adc_check`**, **`bus_check`**, **`can_async_check`**, **`can_check`**,
   **`dac_check`**, **`dma2_check`**, **`esig_check`**, **`exti_check`**,
-  **`flash_check`**, **`rng_check`**,
+  **`flash_check`**, **`rng_check`**, **`rtc_check`**, **`rtc_hse_check`**,
   **`spi_check`**, **`sdio_check`**, **`timer_check`** — v3f-only self-checks
   for the H4-only drivers. Each
   publishes a `stage` and a `failures` count into the mailbox (plus
@@ -103,7 +103,9 @@ validated for continuous V5F execution; use the mailbox to verify hart 1.
   CAN2 on PB12/PB13 in silent loopback, so no transceiver is needed;
   `can_async_check` repeats it through the async driver and needs the
   `embassy` feature (xtask builds it with that feature). `bus_check` covers
-  the USART/SPI/I2C instances that have no other check.
+  the USART/SPI/I2C instances that have no other check. `rtc_check` runs the
+  RTC from LSI and then LSE, exercising the second/alarm interrupts and the
+  retargeting guard; `rtc_hse_check` boots the HSE recipe and uses HSE/512.
 - **`dma_m2m`**, **`delay_systick`**, **`embassy_systick`** — bring-up checks
   for the DMA/DMAMUX path, the blocking SysTick delay and the Embassy time
   driver.
