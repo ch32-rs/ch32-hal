@@ -13,12 +13,10 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# Local ch32-data `feat/h4-eth` (PR #85) output, generated with `./d gen` into
-# `../ch32-data/build/ch32-metapac`. Point this at a `git` rev before pushing:
-# CI has no sibling checkout.
+# ch32-rs/ch32-data 51a2e8f (H4 gigabit Ethernet register block, PR #85).
 ch32-metapac = { features = [
     "rt",
-], path = "../ch32-data/build/ch32-metapac" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "bd3e4af7872866bc9e0dcc51a2acb08a509e2a0b" }
 
 # `unsafe-trust-wch-atomics`: qingke 0.8.2 refuses to build whenever the target
 # claims byte atomics unless this is set, and every A-extension target does.
@@ -60,10 +58,10 @@ sdio-host = "0.5.0"
 embedded-storage = "0.3.1"
 
 [build-dependencies]
-# Same source as the `[dependencies]` entry.
+# Same revision as the `[dependencies]` entry.
 ch32-metapac = { features = [
     "metadata",
-], path = "../ch32-data/build/ch32-metapac" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "bd3e4af7872866bc9e0dcc51a2acb08a509e2a0b" }
 
 proc-macro2 = "1.0"
 quote = "1.0"
