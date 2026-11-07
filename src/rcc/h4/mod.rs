@@ -90,6 +90,9 @@ pub struct Config {
     pub aux_plls: AuxPlls,
     pub ls: super::LsConfig,
     pub mco: Option<McoConfig>,
+    /// `CFGR0.RGMIION`: 1000M RGMII interface and clock enable. Off by
+    /// default; the internal 10/100M PHY must keep it clear.
+    pub rgmii_on: bool,
 }
 
 impl Default for Config {
@@ -155,6 +158,7 @@ impl Config {
             aux_plls: AuxPlls::default(),
             ls: super::LsConfig::default(),
             mco: None,
+            rgmii_on: false,
         }
     }
 }
@@ -173,6 +177,7 @@ pub unsafe fn init(config: Config) {
         w.set_ppre2(bus.ppre2);
         w.set_fpre(bus.fpre);
         w.set_adcpre(bus.adcpre);
+        w.set_rgmiion(config.rgmii_on);
     });
 
     if use_pll_sw {
