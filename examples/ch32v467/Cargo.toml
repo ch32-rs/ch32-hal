@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 ch32-hal = { path = "../..", optional = true, default-features = false, features = ["rt", "memory-x", "defmt"] }
 # Keep the PAC revision identical to the HAL dependency.
-ch32-metapac = { version = "0.2.0", features = ["rt", "memory-x"] }
+ch32-metapac = { git = "https://github.com/ch32-rs/ch32-metapac", rev = "9503b6f1fd6018bc51155cc1f95108d87fe0b01d", features = ["rt", "memory-x"] }
 qingke = { version = "0.8.4", features = ["v3v", "critical-section-impl"] }
 qingke-rt = { version = "0.8.4", features = ["v3v"] }
 panic-halt = "1.0"
