@@ -437,6 +437,8 @@ fn main() {
         (("sdio", "D8"), quote!(crate::sdio::D8Pin)),
         (("otg", "DP"), quote!(crate::otg_fs::DpPin)),
         (("otg", "DM"), quote!(crate::otg_fs::DmPin)),
+        (("usb", "DP"), quote!(crate::usbfs::DpPin)),
+        (("usb", "DM"), quote!(crate::usbfs::DmPin)),
         (("usbd", "DP"), quote!(crate::usbd::DpPin)),
         (("usbd", "DM"), quote!(crate::usbd::DmPin)),
         (("spi", "MISO"), quote!(crate::spi::MisoPin)),
@@ -477,6 +479,17 @@ fn main() {
     // stay. USBHS is still gated: its block is `usbhs_h4` while the module is
     // `#[cfg(usbhs_v3)]`/`usbhs_v4x7`. ADC and DAC are not in this table:
     // their pin macros live inside the gated modules and are emitted below.
+    //
+    // `kind: usb` is shared by v1fs / v2fs / x0fs / l1fs, but `crate::usbfs`
+    // only compiles for `usb_l1fs`. Drop the pin rows on every other USB FS.
+    let usb_l1fs = METADATA.peripherals.iter().any(|p| {
+        p.registers
+            .as_ref()
+            .is_some_and(|r| r.kind == "usb" && r.version == "l1fs")
+    });
+    if !usb_l1fs {
+        pin_signals.retain(|key, _| key.0 != "usb");
+    }
     if h4 {
         pin_signals.retain(|key, _| !matches!(key.0, "usbhs"));
     }

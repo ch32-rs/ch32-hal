@@ -150,6 +150,9 @@ pub mod usb;
 #[cfg(otg)]
 pub mod otg_fs;
 
+#[cfg(usb_l1fs)]
+pub mod usbfs;
+
 #[cfg(usbd)]
 pub mod usbd;
 
