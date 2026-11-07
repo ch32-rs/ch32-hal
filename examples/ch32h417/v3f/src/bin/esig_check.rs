@@ -1,7 +1,5 @@
 //! ESIG self-check: flash size, UID and chip ID through `hal::signature`.
 //!
-//! `cargo xtask flash --example esig_check && cargo xtask report --example esig_check`
-//!
 //! `src/signature.rs` hard-codes the ESIG addresses (0x1FFFF7E0 base, UID at
 //! +8, chip ID at 0x1FFFF704). The probe reads the same block, so the values
 //! in the mailbox can be compared with `wlink`/`probe-rs`: the flash size must

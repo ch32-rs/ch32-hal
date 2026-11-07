@@ -1,7 +1,5 @@
 //! RTC self-check: LSI time base, second and alarm interrupts (V3F only).
 //!
-//! `cargo xtask flash --example rtc_check && cargo xtask report --example rtc_check`
-//!
 //! Builds the RTC from LSI, sets the counter to zero and the alarm to four
 //! seconds, then waits six seconds on the SysTick delay. The `RTC` handler
 //! counts second events and the `RTCALARM` handler counts alarm matches, so a

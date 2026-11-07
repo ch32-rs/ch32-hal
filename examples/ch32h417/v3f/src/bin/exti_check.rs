@@ -1,7 +1,5 @@
 //! EXTI interrupt-path self-check through the software trigger (V3F only).
 //!
-//! `cargo xtask flash --example exti_check && cargo xtask report --example exti_check`
-//!
 //! H4 collapses the per-line EXTI vectors into `EXTI7_0` and `EXTI15_8`, and
 //! `src/exti.rs` gained a branch for that shape. This raises lines through
 //! `EXTI.SWIEVR` instead of a pin, so it needs no wiring: if the handler runs,

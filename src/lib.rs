@@ -119,11 +119,7 @@ pub mod dac;
 pub mod dac;
 pub mod exti;
 pub mod gpio;
-// H4 flags I2C as `version: v3` (same register layout as the V2/V3
-// families), so the existing V3 driver applies directly. SPI is `version:
-// h4`, but its block is the V3 one plus `HSCR.HSRXEN2`, so it shares the
-// same driver. CAN is `version: h4` and reuses the V4x7 bxCAN driver with the
-// 42-bank shared filter table handled behind `can_h4`.
+// H4 flags I2C as `version: v3`, so the existing V3 driver applies directly.
 #[cfg(i2c)]
 pub mod i2c;
 #[cfg(i3c_v4x7)]

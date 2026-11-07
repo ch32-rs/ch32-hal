@@ -1,7 +1,5 @@
 //! RTC self-check on the HSE/512 time base (V3F only).
 //!
-//! `cargo xtask flash --example rtc_hse_check && cargo xtask report --example rtc_hse_check`
-//!
 //! `rtc_check` covers LSI and LSE with the default HSI clock setup. This boots
 //! the HSE recipe and selects `RTCCLK = HSE / 512`, which is the last of the
 //! three sources and the only one that depends on the main oscillator tree

@@ -1,7 +1,5 @@
 //! DMA2 memory-to-memory self-check (V3F only).
 //!
-//! `cargo xtask flash --example dma2_check && cargo xtask report --example dma2_check`
-//!
 //! `dma_m2m` only reaches DMA1. This runs the same transfer through DMA2
 //! channel 1 — a 512-byte pattern with `PINC` and `MEM2MEM`, request 0 through
 //! the DMAMUX slot — and publishes the comparison, the transfer-complete flag

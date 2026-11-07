@@ -1,7 +1,5 @@
 //! USART2–8 and SPI2–4 self-check (V3F only).
 //!
-//! `cargo xtask flash --example bus_check && cargo xtask report --example bus_check`
-//!
 //! The generic USART/SPI drivers were only ever run on the first instance
 //! (USART1 in `hello`, SPI1 in `spi_check`). This constructs every other
 //! instance with its own pins, pushes a byte through the transmitter and

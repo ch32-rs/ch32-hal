@@ -1,7 +1,5 @@
 //! SPI1 blocking self-check (V3F only).
 //!
-//! `cargo xtask flash --example spi_check && cargo xtask report --example spi_check`
-//!
 //! Runs all four clock modes and both bit orders on **SCK=PA5, MOSI=PA7,
 //! MISO=PA6** (AF5) with 8- and 16-bit words. Mailbox (`SpiCheck`): stage 1 =
 //! init returned, 2 = every mode ran, 3 = no check failed; `failures` counts

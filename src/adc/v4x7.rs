@@ -24,14 +24,12 @@ pub const VREF_INT: u32 = 1200;
 /// Largest allowed ADC conversion clock.
 #[cfg(adc_h4)]
 const MAX_ADC_CLOCK: u64 = 80_000_000;
-/// Largest allowed ADC conversion clock.
 #[cfg(not(adc_h4))]
 const MAX_ADC_CLOCK: u64 = 30_000_000;
 
 /// Largest aggregate sample rate the timing checks accept.
 #[cfg(adc_h4)]
 const MAX_SAMPLE_RATE: u64 = 5_000_000;
-/// Largest aggregate sample rate the timing checks accept.
 #[cfg(not(adc_h4))]
 const MAX_SAMPLE_RATE: u64 = 2_000_000;
 

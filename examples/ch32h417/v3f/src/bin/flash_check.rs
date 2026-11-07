@@ -1,7 +1,5 @@
 //! FLASH self-check (V3F only).
 //!
-//! `cargo xtask flash --example flash_check && cargo xtask report --example flash_check`
-//!
 //! Destructive: erases and reprograms the **last 64 KB block** of the user
 //! region (`FLASH_SIZE - BLOCK_ERASE_SIZE`). Both images live far below it.
 //! Covers sector erase, fast 256-byte page programming, standard halfword

@@ -1,7 +1,5 @@
 //! SDIO self-check (V3F only).
 //!
-//! `cargo xtask flash --example sdio_check && cargo xtask report --example sdio_check`
-//!
 //! Brings up the SDIO host on the EVT wiring — CK=PB11, CMD=PB10 and
 //! D0..D3=PE8..PE11, all AF8 — with DMA1 channel 1, then initializes a card at
 //! 2.5 MHz. The data path needs an inserted microSD card; without one the check

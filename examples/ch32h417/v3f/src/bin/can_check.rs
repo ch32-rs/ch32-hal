@@ -1,7 +1,5 @@
 //! bxCAN blocking self-check (V3F only).
 //!
-//! `cargo xtask flash --example can_check && cargo xtask report --example can_check`
-//!
 //! Runs CAN1 (PA11 = RX, PA12 = TX) in silent loopback at 500 kbit/s, so no
 //! transceiver is needed. It checks the shared 42-bank filter table through
 //! CAN1 (banks 0, 13, 14 and 41 are inside the two `FMCFGR`/`FMCFGR1` halves;

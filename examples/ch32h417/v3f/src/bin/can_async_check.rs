@@ -1,7 +1,5 @@
 //! CAN1 async self-check in silent loopback (V3F only, `embassy` feature).
 //!
-//! `cargo xtask flash --example can_async_check && cargo xtask report --example can_async_check`
-//!
 //! `can_check` only exercises the blocking path. This builds the same node in
 //! async mode, so the four interrupt handlers (TX, RX0, RX1, SCE) and the
 //! waker plumbing are actually run: 16 frames alternate between a standard

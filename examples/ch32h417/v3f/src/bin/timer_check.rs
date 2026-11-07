@@ -1,7 +1,5 @@
 //! Timer self-check across the four H4 timer classes (V3F only).
 //!
-//! `cargo xtask flash --example timer_check && cargo xtask report --example timer_check`
-//!
 //! Runs one timer of each register layout — TIM1 (ADTM), TIM2 (16-bit GPTM),
 //! TIM9 (32-bit GPTM) and TIM6 (BCTM) — through the HAL driver: frequency
 //! readback at 50 Hz / 1 kHz / 10 kHz, the update interrupt counted for 100 ms

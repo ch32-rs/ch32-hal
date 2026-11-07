@@ -1,6 +1,5 @@
 //! Default-HSE RCC and SysTick rounding regression check (V3F only).
 //!
-//! `cargo xtask flash --example rcc_delay_check && cargo xtask report --example rcc_delay_check`
 //! Mailbox (`RccDelayCheck`): stage 1 = entered init, 2 = init returned, 3 =
 //! checks passed; failures = failed checks, v3f_hz/v5f_hz = the reported core
 //! frequencies, heartbeat = one-second ticks. No hart 1 or SDI console is

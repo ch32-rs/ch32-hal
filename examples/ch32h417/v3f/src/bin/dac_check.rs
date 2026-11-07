@@ -1,7 +1,5 @@
 //! DAC self-check (V3F only).
 //!
-//! `cargo xtask flash --example dac_check && cargo xtask report --example dac_check`
-//!
 //! Drives **PA4 = DAC OUT1** and **PA5 = DAC OUT2**, checks the dual 12-bit
 //! write path, then arms a software trigger on both channels and reads the
 //! output registers back. Mailbox (`DacCheck`): stage 1 = init returned,

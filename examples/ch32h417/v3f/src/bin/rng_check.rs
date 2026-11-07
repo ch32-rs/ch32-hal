@@ -1,7 +1,5 @@
 //! RNG blocking self-check (V3F only).
 //!
-//! `cargo xtask flash --example rng_check && cargo xtask report --example rng_check`
-//!
 //! Draws 32 words, discards the first as the driver requires, and checks that
 //! the rest are not all zero and do not repeat. Mailbox (`RngCheck`): stage 1
 //! = init returned, 2 = the sample passed; `failures` counts failed checks,

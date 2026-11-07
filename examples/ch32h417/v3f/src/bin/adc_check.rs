@@ -1,7 +1,5 @@
 //! ADC1 blocking self-check (V3F only).
 //!
-//! `cargo xtask flash --example adc_check && cargo xtask report --example adc_check`
-//!
 //! Calibrates ADC1 and reads **PA1 = IN1** with the longest sample time, then
 //! the internal VREFINT and temperature channels. Mailbox (`AdcCheck`): stage
 //! 1 = init returned, 2 = calibration and every read completed; `failures`

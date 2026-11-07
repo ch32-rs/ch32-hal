@@ -1,7 +1,5 @@
 //! Embassy SysTick time driver against a free-running TIM2, V3F only.
 //!
-//! `cargo xtask flash --example embassy_systick && cargo xtask report --example embassy_systick`
-//!
 //! `stage` reaches 2 once an Embassy 100 ms wait measures within 1 ms of
 //! 100 ms on TIM2, which runs from the timer kernel clock and not from
 //! SysTick. `error_us` is that measurement minus 100 ms, and `ticks` then

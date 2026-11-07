@@ -49,7 +49,6 @@ impl ClockSource {
         }
     }
 
-    /// Clock frequency fed to the prescaler.
     fn frequency(self) -> Hertz {
         match self {
             Self::Lsi => crate::rcc::LSI_FREQ,

@@ -268,7 +268,6 @@ impl SlaveNode for peripherals::CAN3 {}
 
 #[cfg(can_h4)]
 impl<'d> Can<'d, peripherals::CAN1, Blocking> {
-    /// CAN1 owns the shared filter table, so it needs no filter master.
     pub fn new_blocking(
         peri: Peri<'d, peripherals::CAN1>,
         rx: Peri<'d, impl RxPin<peripherals::CAN1>>,
@@ -320,7 +319,6 @@ impl<'d> Can<'d, peripherals::CAN1, Async> {
 
 #[cfg(can_h4)]
 impl<'d, T: SlaveNode> Can<'d, T, Blocking> {
-    /// CAN2/CAN3 borrow CAN1 for the shared filter table and its clock.
     pub fn new_blocking(
         filter_master: Peri<'d, peripherals::CAN1>,
         peri: Peri<'d, T>,
