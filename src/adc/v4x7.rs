@@ -2,8 +2,7 @@
 //! interrupt, and regular scan DMA reads.
 //!
 //! The three chips share the register map. H4 adds the touch-key and analog
-//! configuration fields (unused here) and splits the 16-bit regular-data
-//! register into two 8-bit fields, which [`regular_data`] recombines.
+//! configuration fields, which this driver does not use.
 #![macro_use]
 
 use core::future::poll_fn;
@@ -36,17 +35,7 @@ const MAX_SAMPLE_RATE: u64 = 2_000_000;
 /// The 12-bit regular conversion result, right-aligned.
 #[inline(always)]
 fn regular_data(regs: pac::adc::Adc) -> u16 {
-    let raw = regs.rdatar().read();
-    #[cfg(adc_h4)]
-    {
-        // H4 exposes the register as `DATA0_7` and `DATA8_15`, so bits 11:8
-        // sit in the low nibble of the second field.
-        u16::from(raw.data0_7()) | (u16::from(raw.data8_15()) << 8)
-    }
-    #[cfg(not(adc_h4))]
-    {
-        raw.data()
-    }
+    regs.rdatar().read().data()
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
