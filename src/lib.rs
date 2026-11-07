@@ -170,7 +170,10 @@ pub mod can;
 #[cfg(any(can_v4x7, can_h4))]
 #[path = "can/v4x7.rs"]
 pub mod can;
-#[cfg(all(any(eth, emac), not(ch32v4)))]
+// H4's ETH register block is modelled (`emac_h4`), but the V4x7 driver
+// targets the 10/100 register set and its `PHY_CR` fields; keep the module
+// out until there is an `eth/h4.rs` that drives RGMII and `PHY_CFGR`.
+#[cfg(all(any(eth, emac), not(any(ch32v4, emac_h4))))]
 pub mod eth;
 #[cfg(emac_v4x7)]
 #[path = "eth/v4x7.rs"]
