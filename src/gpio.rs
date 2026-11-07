@@ -14,9 +14,8 @@
 use core::convert::Infallible;
 
 use critical_section::CriticalSection;
-use pac::gpio::vals;
-
 use embassy_hal_internal::PeripheralType;
+use pac::gpio::vals;
 
 use crate::{exti, impl_peripheral, pac, peripherals, Peri};
 
@@ -37,7 +36,7 @@ impl Speed {
     /// Compile-time conversion to the `MODEy` field value, family-aware.
     /// gpio_x0 collapses every speed to OUTPUT_50MHZ — its GPIO doesn't
     /// expose the slower modes.
-    #[cfg(any(gpio_v3, gpio_v0))]
+    #[cfg(any(gpio_v3, gpio_v0, gpio_h4))]
     pub const fn to_mode(self) -> vals::Mode {
         match self {
             Speed::Medium => vals::Mode::OUTPUT_10MHZ,
@@ -491,7 +490,11 @@ impl AfType {
             // direction comes from ODR via `set_pull` below.
             _ => vals::Cnf::PULL_IN__AF_PUSH_PULL_OUT,
         };
-        Self { mode: vals::Mode::INPUT, cnf, pull }
+        Self {
+            mode: vals::Mode::INPUT,
+            cnf,
+            pull,
+        }
     }
 
     /// Output AF pin (e.g. UART TX, SPI MOSI/SCK, I2C SCL/SDA).
@@ -501,7 +504,11 @@ impl AfType {
             #[cfg(not(gpio_x0))]
             OutputType::OpenDrain => vals::Cnf::AF_OPEN_DRAIN_OUT,
         };
-        Self { mode: speed.to_mode(), cnf, pull: Pull::None }
+        Self {
+            mode: speed.to_mode(),
+            cnf,
+            pull: Pull::None,
+        }
     }
 }
 
@@ -560,6 +567,21 @@ pub(crate) trait SealedPin {
     fn set_mode_cnf(&self, mode: vals::Mode, cnf: vals::Cnf) {
         let pin = self._pin() as usize;
         let block = self.block();
+
+        // H4 keeps `MODEy` as a plain output flag (RM §9.3.1.1) and selects the
+        // slew rate through `GPIOx_SPEED`, two bits per pin (RM §9.3.1.8). Its
+        // reset value (00b, 10 MHz) leaves the SDIO pads too slow to drive
+        // CMD: `CMDSENT` was set while the card saw nothing, so every response
+        // timed out. WCH's `GPIO_Init` programs it for every output mode, and
+        // so does this, reusing the legacy `MODEy` speed encoding.
+        #[cfg(gpio_h4)]
+        if !matches!(mode, vals::Mode::INPUT) {
+            let speed = match mode {
+                vals::Mode::OUTPUT_50MHZ => vals::Speed::MEDIUM,
+                _ => vals::Speed::LOW,
+            };
+            block.speed().modify(|w| w.set_speed(pin, speed));
+        }
 
         match pin / 8 {
             0 => {
@@ -883,4 +905,3 @@ impl<'d> embedded_hal::digital::StatefulOutputPin for Flex<'d> {
         Ok((*self).is_set_low())
     }
 }
-

@@ -28,18 +28,17 @@
 //!
 //! A `v5f/src/bin/NAME.rs` without its V3F half is rejected.
 //!
-//! Every `cargo`/`wlink` invocation runs with the working directory set to the
-//! core's crate: that is what makes the crate's `.cargo/config.toml` (custom
-//! target JSON and `build-std`) apply. Running `cargo --manifest-path v3f/…`
+//! Every `cargo`/`wlink`/`probe-rs` invocation runs with the working directory
+//! set to the core's crate: that is what makes the crate's `.cargo/config.toml`
+//! (custom target JSON and `build-std`) apply. Running `cargo --manifest-path v3f/…`
 //! from here would silently fall back to the host target.
 
-use ch32h417_ipc::protocols as ipc;
-use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command};
-use std::thread;
 use std::time::{Duration, Instant};
+use std::{env, fs, thread};
+
+use ch32h417_ipc::protocols as ipc;
 
 /// Bytes an erased flash byte reads as, used to pad the merged image.
 const ERASED: u8 = 0xFF;
@@ -59,6 +58,22 @@ const RECOVER_SETTLE: Duration = Duration::from_secs(2);
 
 /// Deadline for a request that only moves registers or a few bytes.
 const QUICK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `probe-rs --chip` value for this board.
+const PROBE_RS_CHIP: &str = "CH32H417QEU6";
+
+/// Which tool programs the flash.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Flasher {
+    /// `wlink`, WCH's own tool. Picks the first attached probe by itself, but a
+    /// write can report success without reaching the flash, so images other
+    /// than the last are read back and retried.
+    Wlink,
+    /// `probe-rs`, which verifies every image after writing and resets the chip
+    /// only when asked. It cannot choose between two attached probes, so
+    /// `PROBE_RS_PROBE` has to name one in that case.
+    ProbeRs,
+}
 
 /// One core of the chip.
 ///
@@ -99,12 +114,18 @@ usage: cargo xtask <command> [options]
 commands:
   build [--example NAME] [--dual-core | --jump-v5f]     build one example (or all)
   flash --example NAME [--dual-core | --jump-v5f] [--no-build]
-                                            build, then flash and reset
+        [--flasher wlink | probe-rs]        build, then flash and reset
   run   --example NAME [--dual-core | --jump-v5f] [--no-build]
-                                            like flash, plus the SDI console
+                                            flash and view the V3F defmt RTT console
   merge --example NAME [--dual-core | --jump-v5f] [--out DIR]
                                             merge the images into .bin + .hex
   report --example NAME                    read that example's mailbox back
+
+flashing:
+  --flasher wlink        (default) WCH's tool; picks the first probe, but the
+                         final image cannot be read back, so it is unverified
+  --flasher probe-rs     verifies every image and resets once at the end; set
+                         PROBE_RS_PROBE=VID:PID:SERIAL when two probes are up
 
 what gets programmed:
   (default)      the boot core alone (same as --v3f-only); the V5F region keeps
@@ -140,6 +161,7 @@ struct Options {
     layout: Layout,
     no_build: bool,
     out: Option<PathBuf>,
+    flasher: Flasher,
 }
 
 impl Options {
@@ -149,6 +171,7 @@ impl Options {
             layout: Layout::V3fOnly,
             no_build: false,
             out: None,
+            flasher: Flasher::Wlink,
         };
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -160,6 +183,14 @@ impl Options {
                 "--jump-v5f" => opts.layout = Layout::JumpV5f,
                 "--out" => opts.out = args.next().map(PathBuf::from),
                 "--no-build" => opts.no_build = true,
+                "--flasher" => {
+                    let tool = args.next().unwrap_or_else(|| fail("`--flasher` needs a tool"));
+                    opts.flasher = match tool.as_str() {
+                        "wlink" => Flasher::Wlink,
+                        "probe-rs" => Flasher::ProbeRs,
+                        other => fail(&format!("unknown flasher `{other}` (wlink | probe-rs)")),
+                    };
+                }
                 other => fail(&format!("unknown option `{other}`\n\n{USAGE}")),
             }
         }
@@ -263,10 +294,7 @@ fn root() -> PathBuf {
 
 /// Source file of `example` on `core`, if that core carries it.
 fn example_source(core: &Core, example: &str) -> PathBuf {
-    root()
-        .join(core.name)
-        .join("src/bin")
-        .join(format!("{example}.rs"))
+    root().join(core.name).join("src/bin").join(format!("{example}.rs"))
 }
 
 /// Built (release) ELF of `example` on `core`.
@@ -299,11 +327,7 @@ fn run(program: &str, args: &[&str], dir: &Path) {
 /// for a ready bit that never arrives. Without a deadline the whole xtask hangs
 /// there, so the caller can reset the chip and retry instead.
 fn run_timed(program: &str, args: &[&str], dir: &Path, timeout: Duration) -> bool {
-    let mut child = match Command::new(program)
-        .args(args)
-        .current_dir(dir)
-        .spawn()
-    {
+    let mut child = match Command::new(program).args(args).current_dir(dir).spawn() {
         Ok(child) => child,
         Err(e) => {
             println!("  failed to run `{program}`: {e}");
@@ -379,6 +403,17 @@ fn build_core(job: &Job) {
     if !job.example.is_empty() {
         args.extend(["--bin", &job.example]);
     }
+    // `embassy_systick` and `can_async_check` are the V3F examples that start
+    // the SysTick time driver; the blocking examples keep that counter for
+    // `hal::delay`. The `eth_*` examples need Embassy plus the Ethernet stack.
+    let feature = match job.example.as_str() {
+        "embassy_systick" | "can_async_check" => Some("embassy"),
+        "eth_internal" | "eth_bench" => Some("eth"),
+        _ => None,
+    };
+    if let Some(feature) = feature {
+        args.extend(["--features", feature]);
+    }
     println!("building {} ...", job.core.name);
     run("cargo", &args, &dir);
 }
@@ -436,10 +471,7 @@ fn mailbox_symbol(elf: &Path) -> Option<(u32, u32)> {
     for i in 0..sym_size / 16 {
         let sym = sym_off + i * 16;
         let name_at = str_off + u32_at(sym) as usize;
-        let name = data[name_at..]
-            .split(|byte| *byte == 0)
-            .next()
-            .unwrap_or_default();
+        let name = data[name_at..].split(|byte| *byte == 0).next().unwrap_or_default();
         if name == b"MAILBOX" {
             return Some((u32_at(sym + 4), u32_at(sym + 8)));
         }
@@ -447,13 +479,8 @@ fn mailbox_symbol(elf: &Path) -> Option<(u32, u32)> {
     None
 }
 
-/// `flash` (watch = false) and `run` (watch = true) share this.
-///
-/// The non-final cores are written with `--no-run` and read back, so nothing
-/// starts half-programmed. The final write resets and runs the chip and carries
-/// the SDI flags — and nothing may follow it, because *every* other wlink
-/// request (`dump`, `regs`, `status`) pauses the cores: a read-back check there
-/// would measure the paused state instead of the running one.
+/// Build and flash the selected images. `run` also opens the V3F RTT stream.
+/// Multi-core flashing verifies the non-final image before starting the chip.
 fn flash(opts: &Options, watch: bool) {
     let jobs = opts.jobs();
     if jobs.iter().any(|job| job.example.is_empty()) {
@@ -472,46 +499,83 @@ fn flash(opts: &Options, watch: bool) {
                     "note: --jump-v5f replaces `{example}`'s own V3F half with the jumper,\n\
                      \x20     so whatever that half printed or drove will not happen. Use\n\
                      \x20     --dual-core when the example's V3F half does real work\n\
-                     \x20     (e.g. `sdi_cpuid`'s print-token handshake)."
+                     \x20     (e.g. `sdi_cpuid`'s V3F reporting)."
                 );
             }
         }
     }
-    let writes_second_core = jobs.iter().any(|job| job.core.name != BOOT_CORE);
-
-    for (i, job) in jobs.iter().enumerate() {
-        let core = job.core;
-        let elf = example_elf(core, &job.example);
-        let last = i + 1 == jobs.len();
-        println!("flashing {} ({}) ...", core.name, job.example);
-
-        if last {
-            // The final write resets and runs the chip. `run` adds the SDI pair
-            // (`--enable-sdi-print --watch-serial`: the console needs the target
-            // running, which is also what keeps hart 1 alive); `flash` stays
-            // plain, because enabling SDI print without watching leaves the
-            // debug module attached and the second core paused.
-            let mut args = vec!["flash"];
-            if watch {
-                if writes_second_core {
-                    println!(
-                        "note: watching keeps wlink attached, and any wlink request pauses the\n\
-                         \x20     cores — while the console is open the V5F half cannot run.\n\
-                         \x20     Use `cargo xtask flash` and read the mailbox afterwards."
-                    );
-                }
-                args.extend(["--enable-sdi-print", "--watch-serial"]);
-            }
-            args.push(elf.to_str().expect("utf-8 path"));
-            run("wlink", &args, &root());
-        } else {
-            let args = [
-                "flash",
-                "--no-run",
+    // PROBE_RS_PROBE selects a probe if more than one is connected.
+    if watch && jobs.len() == 1 {
+        let elf = example_elf(jobs[0].core, &jobs[0].example);
+        run(
+            "probe-rs",
+            &[
+                "run",
+                "--chip",
+                PROBE_RS_CHIP,
+                "--scan-region",
+                "ram",
                 elf.to_str().expect("utf-8 path"),
-            ];
-            program_verified(core, &job.example, &elf, &args, true);
+            ],
+            &root(),
+        );
+        return;
+    }
+    match opts.flasher {
+        Flasher::Wlink => {
+            // The last write resets and runs the chip, so it cannot be read
+            // back; every earlier one is. `--flasher probe-rs` verifies all of
+            // them and resets afterwards instead.
+            for (i, job) in jobs.iter().enumerate() {
+                let core = job.core;
+                let elf = example_elf(core, &job.example);
+                println!("flashing {} ({}) ...", core.name, job.example);
+                if i + 1 == jobs.len() {
+                    run("wlink", &["flash", elf.to_str().expect("utf-8 path")], &root());
+                } else {
+                    let args = ["flash", "--no-run", elf.to_str().expect("utf-8 path")];
+                    program_verified(core, &job.example, &elf, &args, true);
+                }
+            }
         }
+        Flasher::ProbeRs => {
+            // `download` does not run the chip, so every image is written and
+            // verified first and the single reset at the end starts the boot
+            // core with both halves already in place.
+            for job in jobs.iter() {
+                let elf = example_elf(job.core, &job.example);
+                println!("flashing {} ({}) with probe-rs ...", job.core.name, job.example);
+                run(
+                    "probe-rs",
+                    &[
+                        "download",
+                        "--chip",
+                        PROBE_RS_CHIP,
+                        "--verify",
+                        elf.to_str().expect("utf-8 path"),
+                    ],
+                    &root(),
+                );
+            }
+            run("probe-rs", &["reset", "--chip", PROBE_RS_CHIP], &root());
+        }
+    }
+    if watch {
+        let boot = jobs.iter().find(|job| job.core.name == BOOT_CORE).expect("boot image");
+        let elf = example_elf(boot.core, &boot.example);
+        println!("attaching to V3F RTT; V5F has a separate buffer");
+        run(
+            "probe-rs",
+            &[
+                "attach",
+                "--chip",
+                PROBE_RS_CHIP,
+                "--scan-region",
+                "ram",
+                elf.to_str().expect("utf-8 path"),
+            ],
+            &root(),
+        );
     }
 }
 
@@ -592,7 +656,9 @@ struct Segment {
 
 fn merge(opts: &Options) {
     let jobs = opts.jobs();
-    let boot = jobs.iter().find(|job| job.core.name == BOOT_CORE && !job.example.is_empty());
+    let boot = jobs
+        .iter()
+        .find(|job| job.core.name == BOOT_CORE && !job.example.is_empty());
     let second = jobs
         .iter()
         .find(|job| job.core.name == SECOND_CORE && !job.example.is_empty());
@@ -632,13 +698,11 @@ fn merge(opts: &Options) {
     }
 
     let out_dir = opts.out.clone().unwrap_or_else(|| root().join("out"));
-    fs::create_dir_all(&out_dir)
-        .unwrap_or_else(|e| fail(&format!("cannot create {}: {e}", out_dir.display())));
+    fs::create_dir_all(&out_dir).unwrap_or_else(|e| fail(&format!("cannot create {}: {e}", out_dir.display())));
     let bin = out_dir.join(format!("{name}.bin"));
     let hex = out_dir.join(format!("{name}.hex"));
     fs::write(&bin, &image).unwrap_or_else(|e| fail(&format!("cannot write {}: {e}", bin.display())));
-    fs::write(&hex, intel_hex(&segments))
-        .unwrap_or_else(|e| fail(&format!("cannot write {}: {e}", hex.display())));
+    fs::write(&hex, intel_hex(&segments)).unwrap_or_else(|e| fail(&format!("cannot write {}: {e}", hex.display())));
 
     for segment in &segments {
         println!(
@@ -654,15 +718,8 @@ fn merge(opts: &Options) {
 
 /// Reads the mailbox back and decodes it.
 ///
-/// The V5F half cannot report over SDI while a console is attached — every wlink
-/// request pauses the cores, and the console keeps one attached — so the examples
-/// publish what they find in shared RAM instead, and this prints it afterwards.
-///
-/// The layout comes from the `ch32h417-ipc` crate: the very `#[repr(C)]` struct
-/// both cores place at `SRAM_SHARED`, linked into this tool so the field offsets
-/// decoded here cannot drift from the ones they write. Which payload that struct
-/// carries depends on the example, so the read length and the decoder both follow
-/// the `--example` asked for.
+/// Read an example's shared-memory report after flashing.
+
 fn report(opts: &Options) {
     let Some(example) = opts.example.as_deref() else {
         fail(&format!("`report` needs --example NAME\n\n{USAGE}"))
@@ -671,13 +728,31 @@ fn report(opts: &Options) {
         "dualcore" => size_of::<ch32h417_ipc::Mailbox<ipc::Dualcore>>(),
         "delay_systick" => size_of::<ch32h417_ipc::Mailbox<ipc::DelaySystick>>(),
         "rcc_delay_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RccDelayCheck>>(),
+        "spi_check" => size_of::<ch32h417_ipc::Mailbox<ipc::SpiCheck>>(),
+        "can_check" => size_of::<ch32h417_ipc::Mailbox<ipc::CanCheck>>(),
+        "timer_check" => size_of::<ch32h417_ipc::Mailbox<ipc::TimerCheck>>(),
+        "dma2_check" => size_of::<ch32h417_ipc::Mailbox<ipc::Dma2Check>>(),
+        "exti_check" => size_of::<ch32h417_ipc::Mailbox<ipc::ExtiCheck>>(),
+        "bus_check" => size_of::<ch32h417_ipc::Mailbox<ipc::BusCheck>>(),
+        "esig_check" => size_of::<ch32h417_ipc::Mailbox<ipc::EsigCheck>>(),
+        "can_async_check" => size_of::<ch32h417_ipc::Mailbox<ipc::CanAsyncCheck>>(),
+        "rtc_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RtcCheck>>(),
+        "rtc_hse_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RtcHseCheck>>(),
+        "sdio_exfat" | "sdio_fat" | "sdio_check" | "sdio_raw" | "sdio_rawn" | "sdio_inherit" => {
+            size_of::<ch32h417_ipc::Mailbox<ipc::SdioCheck>>()
+        }
+        "rng_check" => size_of::<ch32h417_ipc::Mailbox<ipc::RngCheck>>(),
+        "adc_check" => size_of::<ch32h417_ipc::Mailbox<ipc::AdcCheck>>(),
+        "dac_check" => size_of::<ch32h417_ipc::Mailbox<ipc::DacCheck>>(),
+        "flash_check" => size_of::<ch32h417_ipc::Mailbox<ipc::FlashCheck>>(),
+        "embassy_systick" => size_of::<ch32h417_ipc::Mailbox<ipc::EmbassySystick>>(),
         "atomics" => size_of::<ch32h417_ipc::Mailbox<ipc::Atomics>>(),
         "cpuid" => size_of::<ch32h417_ipc::Mailbox<ipc::Cpuid>>(),
         "pingpong" => size_of::<ch32h417_ipc::Mailbox<ipc::Pingpong>>(),
         "sdi_cpuid" => size_of::<ch32h417_ipc::Mailbox<ipc::SdiCpuid>>(),
         "bme280" => size_of::<ch32h417_ipc::Mailbox<ipc::Bme280>>(),
         "launcher" => size_of::<ch32h417_ipc::Mailbox<ipc::Empty>>(),
-        other => fail(&format!( "{other} publishes nothing `report` knows how to read")),
+        other => fail(&format!("{other} publishes nothing `report` knows how to read")),
     };
 
     check_mailbox_address(example);
@@ -687,21 +762,14 @@ fn report(opts: &Options) {
     let length = len.to_string();
     let read = run_timed(
         "wlink",
-        &[
-            "dump",
-            &address,
-            &length,
-            "-o",
-            tmp.to_str().expect("utf-8 path"),
-        ],
+        &["dump", &address, &length, "-o", tmp.to_str().expect("utf-8 path")],
         &root(),
         QUICK_TIMEOUT,
     );
     if !read {
         fail("could not read the mailbox");
     }
-    let bytes =
-        fs::read(&tmp).unwrap_or_else(|e| fail(&format!("reading {}: {e}", tmp.display())));
+    let bytes = fs::read(&tmp).unwrap_or_else(|e| fail(&format!("reading {}: {e}", tmp.display())));
     let _ = fs::remove_file(&tmp);
 
     let word = |offset: usize| -> u32 {
@@ -724,18 +792,28 @@ fn report(opts: &Options) {
             println!(
                 "  {:<18}= {}",
                 $label,
-                word(core::mem::offset_of!(ch32h417_ipc::Mailbox<$payload>, payload.$field))
+                word(core::mem::offset_of!(
+                    ch32h417_ipc::Mailbox<$payload>,
+                    payload.$field
+                ))
             )
         };
     }
 
     match example {
         "dualcore" => {
-            let marker = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Dualcore>, payload.marker));
+            let marker = word(core::mem::offset_of!(
+                ch32h417_ipc::Mailbox<ipc::Dualcore>,
+                payload.marker
+            ));
             println!(
                 "  {:<18}= {marker:#010x}{}",
                 "marker",
-                if marker == ipc::DUALCORE_MARKER { "  (hart 1 ran)" } else { "" }
+                if marker == ipc::DUALCORE_MARKER {
+                    "  (hart 1 ran)"
+                } else {
+                    ""
+                }
             );
             field!(ipc::Dualcore, counter, "counter");
         }
@@ -750,18 +828,190 @@ fn report(opts: &Options) {
             field!(ipc::RccDelayCheck, v5f_hz, "v5f Hz");
             field!(ipc::RccDelayCheck, heartbeat, "heartbeat");
         }
+        "spi_check" => {
+            field!(ipc::SpiCheck, stage, "stage");
+            field!(ipc::SpiCheck, failures, "failures");
+            field!(ipc::SpiCheck, cases, "cases");
+            field!(ipc::SpiCheck, ctlr1, "CTLR1");
+            field!(ipc::SpiCheck, hscr, "HSCR");
+            field!(ipc::SpiCheck, loopback, "loopback");
+        }
+        "can_check" => {
+            field!(ipc::CanCheck, stage, "stage");
+            field!(ipc::CanCheck, failures, "failures");
+            field!(ipc::CanCheck, checks, "checks");
+            field!(ipc::CanCheck, frames, "CAN1 frames");
+            field!(ipc::CanCheck, can2_frames, "CAN2 frames");
+            field!(ipc::CanCheck, filter_banks, "filter banks");
+            field!(ipc::CanCheck, tx_ok, "tx ok");
+            field!(ipc::CanCheck, rx_ok, "rx ok");
+            field!(ipc::CanCheck, last_id, "last id");
+            field!(ipc::CanCheck, tstatr, "TSTATR");
+            field!(ipc::CanCheck, errsr, "ERRSR");
+            field!(ipc::CanCheck, pclk1, "PCLK1 Hz");
+        }
+        "timer_check" => {
+            field!(ipc::TimerCheck, stage, "stage");
+            field!(ipc::TimerCheck, failures, "failures");
+            field!(ipc::TimerCheck, checks, "checks");
+            field!(ipc::TimerCheck, timers, "timer classes");
+            field!(ipc::TimerCheck, updates, "last update count");
+            field!(ipc::TimerCheck, frequency, "last frequency Hz");
+            field!(ipc::TimerCheck, wide_arr, "TIM9 ARR");
+            field!(ipc::TimerCheck, pclk1, "PCLK1 Hz");
+        }
+        "dma2_check" => {
+            field!(ipc::Dma2Check, stage, "stage");
+            field!(ipc::Dma2Check, failures, "failures");
+            field!(ipc::Dma2Check, checks, "checks");
+            field!(ipc::Dma2Check, matched, "bytes matched");
+            field!(ipc::Dma2Check, tcif, "TCIF ch1");
+            field!(ipc::Dma2Check, remaining, "remaining");
+            field!(ipc::Dma2Check, length, "length");
+        }
+        "exti_check" => {
+            field!(ipc::ExtiCheck, stage, "stage");
+            field!(ipc::ExtiCheck, failures, "failures");
+            field!(ipc::ExtiCheck, checks, "checks");
+            field!(ipc::ExtiCheck, lines, "lines mask");
+            field!(ipc::ExtiCheck, rounds, "rounds");
+            field!(ipc::ExtiCheck, intfr, "INTFR");
+            field!(ipc::ExtiCheck, intenr, "INTENR");
+        }
+        "bus_check" => {
+            field!(ipc::BusCheck, stage, "stage");
+            field!(ipc::BusCheck, failures, "failures");
+            field!(ipc::BusCheck, checks, "checks");
+            field!(ipc::BusCheck, usart_mask, "USART mask");
+            field!(ipc::BusCheck, spi_mask, "SPI mask");
+            field!(ipc::BusCheck, i2c_mask, "I2C mask");
+            field!(ipc::BusCheck, pclk1, "PCLK1 Hz");
+        }
+        "esig_check" => {
+            field!(ipc::EsigCheck, stage, "stage");
+            field!(ipc::EsigCheck, failures, "failures");
+            field!(ipc::EsigCheck, checks, "checks");
+            field!(ipc::EsigCheck, flash_kb, "flash KB");
+            field!(ipc::EsigCheck, uid0, "UID word 0");
+            field!(ipc::EsigCheck, uid1, "UID word 1");
+            field!(ipc::EsigCheck, uid2, "UID word 2");
+            field!(ipc::EsigCheck, chip_id, "chip ID");
+        }
+        "can_async_check" => {
+            field!(ipc::CanAsyncCheck, stage, "stage");
+            field!(ipc::CanAsyncCheck, failures, "failures");
+            field!(ipc::CanAsyncCheck, checks, "checks");
+            field!(ipc::CanAsyncCheck, frames, "frames");
+            field!(ipc::CanAsyncCheck, tx_ok, "tx ok");
+            field!(ipc::CanAsyncCheck, rx_ok, "rx ok");
+            field!(ipc::CanAsyncCheck, last_id, "last id");
+        }
+        "rtc_check" => {
+            field!(ipc::RtcCheck, stage, "stage");
+            field!(ipc::RtcCheck, failures, "failures");
+            field!(ipc::RtcCheck, checks, "checks");
+            field!(ipc::RtcCheck, time, "RTC seconds");
+            field!(ipc::RtcCheck, seconds, "second interrupts");
+            field!(ipc::RtcCheck, alarms, "alarm interrupts");
+            field!(ipc::RtcCheck, prescaler, "prescaler");
+            field!(ipc::RtcCheck, frequency, "input clock Hz");
+            field!(ipc::RtcCheck, lse, "LSE validated");
+            field!(ipc::RtcCheck, lse_wait_ms, "LSE wait ms");
+            field!(ipc::RtcCheck, rtcsel, "RTCSEL (1=LSE)");
+        }
+        "rtc_hse_check" => {
+            field!(ipc::RtcHseCheck, stage, "stage");
+            field!(ipc::RtcHseCheck, failures, "failures");
+            field!(ipc::RtcHseCheck, checks, "checks");
+            field!(ipc::RtcHseCheck, time, "RTC seconds");
+            field!(ipc::RtcHseCheck, prescaler, "prescaler");
+            field!(ipc::RtcHseCheck, frequency, "input clock Hz");
+        }
+        "sdio_exfat" | "sdio_fat" => {
+            field!(ipc::SdioCheck, stage, "stage (7 = verified)");
+            field!(ipc::SdioCheck, error, "error (0 = none)");
+            field!(ipc::SdioCheck, first_word, "test file number");
+            field!(ipc::SdioCheck, blocks, "bytes verified");
+            field!(ipc::SdioCheck, clock, "reported SDIO clock Hz");
+        }
+        "sdio_check" | "sdio_raw" | "sdio_rawn" | "sdio_inherit" => {
+            field!(ipc::SdioCheck, stage, "stage");
+            field!(ipc::SdioCheck, failures, "failures");
+            field!(ipc::SdioCheck, checks, "checks");
+            field!(ipc::SdioCheck, card, "card");
+            field!(ipc::SdioCheck, error, "error");
+            field!(ipc::SdioCheck, blocks, "blocks");
+            field!(ipc::SdioCheck, clock, "clock");
+            field!(ipc::SdioCheck, first_word, "first word");
+            field!(ipc::SdioCheck, status, "STA");
+            field!(ipc::SdioCheck, hclk, "HCLK");
+            field!(ipc::SdioCheck, clkcr, "CLKCR");
+            field!(ipc::SdioCheck, cmd0_sta, "CMD0 STA");
+            field!(ipc::SdioCheck, cmd8_sta, "CMD8 STA");
+            field!(ipc::SdioCheck, resp1, "RESP1");
+            field!(ipc::SdioCheck, levels_idle, "levels idle");
+            field!(ipc::SdioCheck, levels_cmd8, "levels after CMD8");
+            field!(ipc::SdioCheck, cmd55_sta, "CMD55 STA");
+            field!(ipc::SdioCheck, resp55, "CMD55 RESP1");
+            field!(ipc::SdioCheck, acmd41_sta, "ACMD41 STA");
+            field!(ipc::SdioCheck, resp41, "ACMD41 RESP1");
+            field!(ipc::SdioCheck, ck_high, "CK high/256");
+            field!(ipc::SdioCheck, cmd_edges, "CMD edges");
+        }
+        "rng_check" => {
+            field!(ipc::RngCheck, stage, "stage");
+            field!(ipc::RngCheck, failures, "failures");
+            field!(ipc::RngCheck, words, "words");
+            field!(ipc::RngCheck, checksum, "checksum");
+        }
+        "adc_check" => {
+            field!(ipc::AdcCheck, stage, "stage");
+            field!(ipc::AdcCheck, failures, "failures");
+            field!(ipc::AdcCheck, pa1, "PA1");
+            field!(ipc::AdcCheck, vref, "VREFINT");
+            field!(ipc::AdcCheck, temperature, "temperature");
+        }
+        "dac_check" => {
+            field!(ipc::DacCheck, stage, "stage");
+            field!(ipc::DacCheck, failures, "failures");
+            field!(ipc::DacCheck, dor1, "DOR1");
+            field!(ipc::DacCheck, dor2, "DOR2");
+        }
+        "flash_check" => {
+            field!(ipc::FlashCheck, stage, "stage");
+            field!(ipc::FlashCheck, failures, "failures");
+            field!(ipc::FlashCheck, checks, "checks");
+            field!(ipc::FlashCheck, capacity, "capacity");
+            field!(ipc::FlashCheck, geometry, "geometry");
+            field!(ipc::FlashCheck, erased_word, "erased word");
+            field!(ipc::FlashCheck, readback, "readback");
+        }
+        "embassy_systick" => {
+            field!(ipc::EmbassySystick, stage, "stage");
+            field!(ipc::EmbassySystick, error_us, "error us");
+            field!(ipc::EmbassySystick, ticks, "ticks");
+        }
         "atomics" => report_atomics(&word),
         "bme280" => report_bme280(&word),
-        "cpuid" => report_cpuid(&word, core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Cpuid>, payload.cpuid)),
+        "cpuid" => report_cpuid(
+            &word,
+            core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Cpuid>, payload.cpuid),
+        ),
         "pingpong" => {
-            report_cpuid(&word, core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Pingpong>, payload.cpuid));
+            report_cpuid(
+                &word,
+                core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Pingpong>, payload.cpuid),
+            );
             field!(ipc::Pingpong, ping, "ping");
             field!(ipc::Pingpong, pong, "pong");
         }
         "sdi_cpuid" => {
             field!(ipc::SdiCpuid, token, "token");
             field!(ipc::SdiCpuid, ticks, "ticks");
-            report_cpuid(&word, core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::SdiCpuid>, payload.cpuid));
+            report_cpuid(
+                &word,
+                core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::SdiCpuid>, payload.cpuid),
+            );
         }
         "launcher" => {}
         _ => unreachable!(),
@@ -771,13 +1021,20 @@ fn report(opts: &Options) {
 /// `atomics`: both cores `fetch_add` the same word, so the total is the litmus
 /// test for the A extension actually performing the atomics.
 fn report_atomics(word: &impl Fn(usize) -> u32) {
-    let total = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Atomics>, payload.total));
+    let total = word(core::mem::offset_of!(
+        ch32h417_ipc::Mailbox<ipc::Atomics>,
+        payload.total
+    ));
     let done = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Atomics>, payload.done));
     let expected = ipc::CAS_INCREMENTS * 2;
     println!(
         "  total             = {total} (expected {expected}, done mask {done:#x}){}",
         if done & (ipc::CAS_DONE_V3F | ipc::CAS_DONE_V5F) == (ipc::CAS_DONE_V3F | ipc::CAS_DONE_V5F) {
-            if total == expected { "  OK" } else { "  LOST UPDATES" }
+            if total == expected {
+                "  OK"
+            } else {
+                "  LOST UPDATES"
+            }
         } else {
             "  (not finished)"
         }
@@ -787,7 +1044,10 @@ fn report_atomics(word: &impl Fn(usize) -> u32) {
 /// `bme280`: hart 1 reads the sensor, this prints the last sample it stored.
 /// Temperature is 1/100 °C, pressure 1/100 Pa, humidity 1/100 %RH.
 fn report_bme280(word: &impl Fn(usize) -> u32) {
-    let status = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.status));
+    let status = word(core::mem::offset_of!(
+        ch32h417_ipc::Mailbox<ipc::Bme280>,
+        payload.status
+    ));
     let seq = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.seq));
     let state = match status {
         ipc::BME280_IDLE => "idle",
@@ -799,9 +1059,18 @@ fn report_bme280(word: &impl Fn(usize) -> u32) {
     };
     println!("  status            = {status} ({state}), sample {seq}");
     if seq != ipc::BME280_NO_SAMPLE {
-        let temperature = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.temperature));
-        let pressure = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.pressure));
-        let humidity = word(core::mem::offset_of!(ch32h417_ipc::Mailbox<ipc::Bme280>, payload.humidity));
+        let temperature = word(core::mem::offset_of!(
+            ch32h417_ipc::Mailbox<ipc::Bme280>,
+            payload.temperature
+        ));
+        let pressure = word(core::mem::offset_of!(
+            ch32h417_ipc::Mailbox<ipc::Bme280>,
+            payload.pressure
+        ));
+        let humidity = word(core::mem::offset_of!(
+            ch32h417_ipc::Mailbox<ipc::Bme280>,
+            payload.humidity
+        ));
         println!(
             "  reading           = {:.2} C, {:.2} hPa, {:.2} %RH",
             temperature as i32 as f32 / 100.0,
@@ -847,10 +1116,7 @@ fn report_cpuid(word: &impl Fn(usize) -> u32, base: usize) {
             .filter(|(bit, _)| misa & (1 << bit) != 0)
             .map(|(_, letter)| letter)
             .collect();
-        println!(
-            "    misa decode        MXL={} extensions={letters}",
-            (misa >> 30) & 3
-        );
+        println!("    misa decode        MXL={} extensions={letters}", (misa >> 30) & 3);
     }
 }
 
@@ -882,8 +1148,7 @@ fn flatten(elf: &Path, core: &Core) -> Vec<u8> {
         ],
         &root(),
     );
-    let bytes =
-        fs::read(&tmp).unwrap_or_else(|e| fail(&format!("cannot read {}: {e}", tmp.display())));
+    let bytes = fs::read(&tmp).unwrap_or_else(|e| fail(&format!("cannot read {}: {e}", tmp.display())));
     let _ = fs::remove_file(&tmp);
 
     if bytes.len() as u64 > core.flash_limit {
@@ -954,12 +1219,7 @@ fn intel_hex(segments: &[Segment]) -> String {
 /// extended-address records ended up claiming zero bytes, which made `wlink`
 /// reject the whole file with "payload length does not match record header".
 fn record(record_type: u8, address: u16, data: &[u8]) -> String {
-    let mut bytes = vec![
-        data.len() as u8,
-        (address >> 8) as u8,
-        address as u8,
-        record_type,
-    ];
+    let mut bytes = vec![data.len() as u8, (address >> 8) as u8, address as u8, record_type];
     bytes.extend_from_slice(data);
     let sum = bytes.iter().fold(0u8, |acc, b| acc.wrapping_add(*b));
     let checksum = (!sum).wrapping_add(1);

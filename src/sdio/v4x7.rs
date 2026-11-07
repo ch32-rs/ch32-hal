@@ -1,11 +1,13 @@
-//! SD memory cards over the CH32V407/CH32V467 SDIO host.
+//! SD memory cards over the CH32V407/CH32V467/CH32H4 SDIO host.
 //!
 //! Supports 1/4-bit SDSC, SDHC and SDXC cards, SDR12/SDR25, single/multiple
 //! blocks and DMA. Blocking operations have bounded polling. Embassy operations
 //! additionally use a software timeout. An interrupted or failed data transfer
-//! invalidates the card: call `init_card` again before reuse. The controller has
-//! no RCC reset bit; cleanup explicitly stops both state machines and flushes
-//! the FIFO. eMMC, SDIO functions and 1.8 V signalling are not implemented.
+//! invalidates the card: call `init_card` again before reuse. The V4x7 RCC has
+//! no SDIO reset bit, so cleanup explicitly stops both state machines and
+//! flushes the FIFO; H4 has one and its metadata pulses it. The pin mux is a
+//! PCFR group remap on V4x7 and a per-pin AF number on H4. eMMC, SDIO functions
+//! and 1.8 V signalling are not implemented.
 
 #[cfg(feature = "embassy")]
 use core::future::{poll_fn, Future};
@@ -19,11 +21,13 @@ use embassy_sync::waitqueue::AtomicWaker;
 use sdio_host::{CardCapacity, CardStatus, SDStatus, SCR};
 
 use crate::dma::{Transfer, TransferOptions};
-use crate::gpio::{AFType, AnyPin, SealedPin, Speed};
+use crate::gpio::{AfType, AnyPin, OutputType, SealedPin, Speed};
 use crate::internal::drop::OnDrop;
 use crate::interrupt::typelevel::Interrupt;
 use crate::time::Hertz;
-use crate::{interrupt, pac, peripherals, Peri, RccPeripheral, RemapPeripheral};
+#[cfg(not(afio_h4))]
+use crate::RemapPeripheral;
+use crate::{interrupt, pac, peripherals, Peri, RccPeripheral};
 
 #[path = "v4x7_types.rs"]
 mod types;
@@ -110,7 +114,24 @@ fn retry_delay<T: Instance>() {
     }
 }
 
-fn configure_clock<T: Instance>(clock: Clock, wide: bool, config: Config) -> Result<(), Error> {
+/// Open or close the card clock.
+///
+/// After identification the clock has to stay **closed while the bus is idle**.
+/// With a continuously running `SDIO_CK` this board's card ignores every
+/// command above roughly 5 MHz (`CTIMEOUT`, `STA=0x4`) yet answers at every
+/// divider up to `CLKDIV=1` as soon as the clock starts only for the command.
+/// `PWRSAV` has the same effect for commands but cannot be used for data: the
+/// hardware closes the clock again between the data command's response and the
+/// data phase, and the card never starts sending. Gating `CLKEN` by hand keeps
+/// the clock running across both. See `local-docs/h4-sdio-diagnose.md`.
+fn set_clken<T: Instance>(on: bool) {
+    T::REGS.clkcr().modify(|register| register.set_clken(on));
+}
+
+/// Program `CLKCR`. `PWRSAV` stays clear: the manual `CLKEN` gate above is the
+/// clock control this driver relies on. `clken` and `power_save` are separate
+/// because identification needs the clock running while it waits for the card.
+fn configure_clock<T: Instance>(clock: Clock, wide: bool, clken: bool, config: Config) -> Result<(), Error> {
     wait_idle::<T>(config.poll_limit, true)?;
     for _ in 0..7 {
         core::hint::spin_loop();
@@ -119,13 +140,34 @@ fn configure_clock<T: Instance>(clock: Clock, wide: bool, config: Config) -> Res
         register.set_clkdiv(clock.divisor);
         register.set_bypass(clock.bypass);
         register.set_hwfc_en(clock.bypass);
+        register.set_pwrsav(false);
         register.set_widbus(if wide { 1 } else { 0 });
-        register.set_clken(true);
+        register.set_clken(clken);
     });
     Ok(())
 }
 
-fn command<T: Instance>(index: u8, argument: u32, response: Response, config: Config) -> Result<[u32; 4], Error> {
+/// Send one command. With `gate` the card clock is opened for the command and
+/// closed again afterwards; the data path passes `false` because it needs the
+/// clock to stay on from the command straight into the data phase.
+fn command<T: Instance>(
+    index: u8,
+    argument: u32,
+    response: Response,
+    config: Config,
+    gate: bool,
+) -> Result<[u32; 4], Error> {
+    if gate {
+        set_clken::<T>(true);
+    }
+    let result = command_inner::<T>(index, argument, response, config);
+    if gate {
+        set_clken::<T>(false);
+    }
+    result
+}
+
+fn command_inner<T: Instance>(index: u8, argument: u32, response: Response, config: Config) -> Result<[u32; 4], Error> {
     wait_idle::<T>(config.poll_limit, false)?;
     T::REGS.icr().write_value(pac::sdio::regs::Icr(CMD_FLAGS));
     T::REGS.arg().write_value(pac::sdio::regs::Arg(argument));
@@ -174,25 +216,25 @@ fn command<T: Instance>(index: u8, argument: u32, response: Response, config: Co
     Err(Error::SoftwareTimeout)
 }
 
-fn app_command<T: Instance>(rca: u16, config: Config) -> Result<(), Error> {
-    let response = command::<T>(55, u32::from(rca) << 16, Response::R1, config)?;
+fn app_command<T: Instance>(rca: u16, config: Config, gate: bool) -> Result<(), Error> {
+    let response = command::<T>(55, u32::from(rca) << 16, Response::R1, config, gate)?;
     if response[0] & 0x20 == 0 {
         return Err(Error::UnsupportedCardType);
     }
     Ok(())
 }
 
-fn read_status<T: Instance>(rca: u16, config: Config) -> Result<CardStatus, Error> {
-    Ok(command::<T>(13, u32::from(rca) << 16, Response::R1, config)?[0].into())
+fn read_status<T: Instance>(rca: u16, config: Config, gate: bool) -> Result<CardStatus, Error> {
+    Ok(command::<T>(13, u32::from(rca) << 16, Response::R1, config, gate)?[0].into())
 }
 
 fn ready(status: CardStatus) -> bool {
     status.ready_for_data() && status.state() == sdio_host::CurrentState::Transfer
 }
 
-fn blocking_wait_ready<T: Instance>(rca: u16, config: Config) -> Result<(), Error> {
+fn blocking_wait_ready<T: Instance>(rca: u16, config: Config, gate: bool) -> Result<(), Error> {
     for _ in 0..config.card_ready_attempts {
-        if ready(read_status::<T>(rca, config)?) {
+        if ready(read_status::<T>(rca, config, gate)?) {
             return Ok(());
         }
         retry_delay::<T>();
@@ -201,9 +243,9 @@ fn blocking_wait_ready<T: Instance>(rca: u16, config: Config) -> Result<(), Erro
 }
 
 #[cfg(feature = "embassy")]
-async fn wait_ready<T: Instance>(rca: u16, config: Config) -> Result<(), Error> {
+async fn wait_ready<T: Instance>(rca: u16, config: Config, gate: bool) -> Result<(), Error> {
     for _ in 0..config.card_ready_attempts {
-        if ready(read_status::<T>(rca, config)?) {
+        if ready(read_status::<T>(rca, config, gate)?) {
             return Ok(());
         }
         embassy_time::Timer::after_millis(1).await;
@@ -241,11 +283,27 @@ fn start_data<'a, T: Instance, D: SdioDma<T>>(
     let request = dma.request();
     let transfer = unsafe {
         match buffer {
+            // Only the V4x7 DMA controller reports transfer errors through the
+            // channel state; elsewhere a DMA error panics in the handler.
             Buffer::Read(words) => {
-                Transfer::new_read_checked(dma, request, T::REGS.fifo().as_ptr().cast(), words, DMA_OPTIONS)
+                #[cfg(dma_v4x7)]
+                {
+                    Transfer::new_read_checked(dma, request, T::REGS.fifo().as_ptr().cast(), words, DMA_OPTIONS)
+                }
+                #[cfg(not(dma_v4x7))]
+                {
+                    Transfer::new_read(dma, request, T::REGS.fifo().as_ptr().cast(), words, DMA_OPTIONS)
+                }
             }
             Buffer::Write(words) => {
-                Transfer::new_write_checked(dma, request, words, T::REGS.fifo().as_ptr().cast(), DMA_OPTIONS)
+                #[cfg(dma_v4x7)]
+                {
+                    Transfer::new_write_checked(dma, request, words, T::REGS.fifo().as_ptr().cast(), DMA_OPTIONS)
+                }
+                #[cfg(not(dma_v4x7))]
+                {
+                    Transfer::new_write(dma, request, words, T::REGS.fifo().as_ptr().cast(), DMA_OPTIONS)
+                }
             }
         }
     };
@@ -260,7 +318,11 @@ fn start_data<'a, T: Instance, D: SdioDma<T>>(
     if read {
         arm();
     }
-    command::<T>(index, argument, Response::R1, config)?;
+    // The clock has to be open from just before the command until the data
+    // phase ends; unlike `PWRSAV`, nothing closes it between the response and
+    // the first data block. `blocking_data` / `data` close it afterwards.
+    set_clken::<T>(true);
+    command_inner::<T>(index, argument, Response::R1, config)?;
     if !read {
         arm();
     }
@@ -270,6 +332,7 @@ fn start_data<'a, T: Instance, D: SdioDma<T>>(
 fn data_complete<T: Instance>(transfer: &mut Transfer<'_>) -> Result<bool, Error> {
     let status = T::REGS.sta().read().0;
     data_error(status)?;
+    #[cfg(dma_v4x7)]
     if transfer.has_error() {
         return Err(Error::Dma);
     }
@@ -278,6 +341,7 @@ fn data_complete<T: Instance>(transfer: &mut Transfer<'_>) -> Result<bool, Error
     }
     let status = T::REGS.sta().read().0;
     data_error(status)?;
+    #[cfg(dma_v4x7)]
     if transfer.has_error() {
         return Err(Error::Dma);
     }
@@ -320,51 +384,61 @@ pub struct Sdmmc<'d, T: Instance, D: SdioDma<T>> {
     clock: Hertz,
     signalling: Signalling,
     card: Option<Card>,
+    /// The card clock is opened around each operation instead of running
+    /// continuously. Set once the transfer clock is selected.
+    gated: bool,
 }
 
 impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
-    pub fn new_1bit<const REMAP: u8>(
+    pub fn new_1bit<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         dma: Peri<'d, D>,
         clk: Peri<'d, impl CkPin<T>>,
         cmd: Peri<'d, impl CmdPin<T>>,
-        d0: Peri<'d, impl D0Pin<T, REMAP>>,
+        d0: Peri<'d, if_remap!(impl D0Pin<T, REMAP>)>,
         config: Config,
     ) -> Result<Self, Error> {
-        Self::new_inner(
-            peri,
-            dma,
-            [Some(clk.into()), Some(cmd.into()), Some(d0.into()), None, None, None],
-            REMAP,
-            config,
-        )
-    }
-
-    pub fn new_4bit<const REMAP: u8>(
-        peri: Peri<'d, T>,
-        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        dma: Peri<'d, D>,
-        clk: Peri<'d, impl CkPin<T>>,
-        cmd: Peri<'d, impl CmdPin<T>>,
-        d0: Peri<'d, impl D0Pin<T, REMAP>>,
-        d1: Peri<'d, impl D1Pin<T, REMAP>>,
-        d2: Peri<'d, impl D2Pin<T, REMAP>>,
-        d3: Peri<'d, impl D3Pin<T, REMAP>>,
-        config: Config,
-    ) -> Result<Self, Error> {
+        apply_remap!();
         Self::new_inner(
             peri,
             dma,
             [
-                Some(clk.into()),
-                Some(cmd.into()),
-                Some(d0.into()),
-                Some(d1.into()),
-                Some(d2.into()),
-                Some(d3.into()),
+                new_pin!(clk, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(cmd, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(d0, AfType::output(OutputType::PushPull, Speed::High)),
+                None,
+                None,
+                None,
             ],
-            REMAP,
+            config,
+        )
+    }
+
+    pub fn new_4bit<#[cfg(not(afio_h4))] const REMAP: u8>(
+        peri: Peri<'d, T>,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+        dma: Peri<'d, D>,
+        clk: Peri<'d, impl CkPin<T>>,
+        cmd: Peri<'d, impl CmdPin<T>>,
+        d0: Peri<'d, if_remap!(impl D0Pin<T, REMAP>)>,
+        d1: Peri<'d, if_remap!(impl D1Pin<T, REMAP>)>,
+        d2: Peri<'d, if_remap!(impl D2Pin<T, REMAP>)>,
+        d3: Peri<'d, if_remap!(impl D3Pin<T, REMAP>)>,
+        config: Config,
+    ) -> Result<Self, Error> {
+        apply_remap!();
+        Self::new_inner(
+            peri,
+            dma,
+            [
+                new_pin!(clk, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(cmd, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(d0, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(d1, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(d2, AfType::output(OutputType::PushPull, Speed::High)),
+                new_pin!(d3, AfType::output(OutputType::PushPull, Speed::High)),
+            ],
             config,
         )
     }
@@ -373,7 +447,6 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
         peri: Peri<'d, T>,
         dma: Peri<'d, D>,
         pins: [Option<Peri<'d, AnyPin>>; 6],
-        remap: u8,
         config: Config,
     ) -> Result<Self, Error> {
         if config.poll_limit == 0
@@ -387,10 +460,6 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
         critical_section::with(|_| {
             T::enable_and_reset();
             reset_controller::<T>();
-            T::set_remap(remap);
-            for pin in pins.iter().flatten() {
-                pin.set_as_af_output(AFType::OutputPushPull, Speed::High);
-            }
             unsafe { T::Interrupt::enable() };
         });
         Ok(Self {
@@ -401,6 +470,7 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
             clock: initial.frequency,
             signalling: Signalling::SDR12,
             card: None,
+            gated: false,
         })
     }
 
@@ -413,14 +483,17 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
 
     fn begin_init(&mut self, initial: Clock) -> Result<bool, Error> {
         self.card = None;
+        self.gated = false;
         self.signalling = Signalling::SDR12;
         self.clock = initial.frequency;
         reset_controller::<T>();
-        configure_clock::<T>(initial, false, self.config)?;
+        // Power first, then start the clock (the order the WCH C SDK uses).
+        configure_clock::<T>(initial, false, false, self.config)?;
         T::REGS.power().write_value(pac::sdio::regs::Power(3));
+        set_clken::<T>(true);
         clock_delay::<T>(initial.frequency, 80);
-        command::<T>(0, 0, Response::None, self.config)?;
-        match command::<T>(8, 0x1aa, Response::R7, self.config) {
+        command::<T>(0, 0, Response::None, self.config, false)?;
+        match command::<T>(8, 0x1aa, Response::R7, self.config, false) {
             Ok(words) if words[0] == 0x1aa => Ok(true),
             Ok(words) if words[0] & R1_ERRORS == 0x0040_0000 => Ok(false),
             Err(Error::Timeout) => Ok(false),
@@ -430,12 +503,13 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
     }
 
     fn power_up(&self, version2: bool) -> Result<Option<u32>, Error> {
-        app_command::<T>(0, self.config)?;
+        app_command::<T>(0, self.config, false)?;
         let response = command::<T>(
             41,
             0x0030_0000 | if version2 { 1 << 30 } else { 0 },
             Response::R3,
             self.config,
+            false,
         )?[0];
         if response & 0x0030_0000 == 0 {
             return Err(Error::UnsupportedCardType);
@@ -444,18 +518,18 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
     }
 
     fn identify(&self, ocr: u32) -> Result<Card, Error> {
-        let cid = response_value(command::<T>(2, 0, Response::R2, self.config)?).into();
-        let rca = (command::<T>(3, 0, Response::R6, self.config)?[0] >> 16) as u16;
+        let cid = response_value(command::<T>(2, 0, Response::R2, self.config, false)?).into();
+        let rca = (command::<T>(3, 0, Response::R6, self.config, false)?[0] >> 16) as u16;
         if rca == 0 {
             return Err(Error::ResponseMismatch);
         }
-        let csd_raw = response_value(command::<T>(9, u32::from(rca) << 16, Response::R2, self.config)?);
+        let csd_raw = response_value(command::<T>(9, u32::from(rca) << 16, Response::R2, self.config, false)?);
         let high_capacity = ocr & (1 << 30) != 0;
         if high_capacity != (csd_raw >> 126 == 1) {
             return Err(Error::UnsupportedCardType);
         }
         let block_count = block_count(csd_raw)?;
-        command::<T>(7, u32::from(rca) << 16, Response::R1, self.config)?;
+        command::<T>(7, u32::from(rca) << 16, Response::R1, self.config, false)?;
         Ok(Card {
             card_type: if high_capacity {
                 CardCapacity::SDHC
@@ -477,15 +551,16 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
         if !card.scr.bus_width_one() || (wide && !card.scr.bus_width_four()) {
             return Err(Error::UnsupportedBusWidth);
         }
-        app_command::<T>(card.rca, self.config)?;
-        command::<T>(6, if wide { 2 } else { 0 }, Response::R1, self.config)?;
+        app_command::<T>(card.rca, self.config, false)?;
+        command::<T>(6, if wide { 2 } else { 0 }, Response::R1, self.config, false)?;
         Ok(wide)
     }
 
     fn set_clock(&mut self, requested: u32, wide: bool) -> Result<(), Error> {
         let clock = clock_setting(T::frequency(), requested, self.config.allow_clock_bypass)?;
-        configure_clock::<T>(clock, wide, self.config)?;
+        configure_clock::<T>(clock, wide, false, self.config)?;
         self.clock = clock.frequency;
+        self.gated = true;
         Ok(())
     }
 
@@ -516,11 +591,14 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
         }
         drop(transfer);
         stop_data::<T>();
+        if self.gated {
+            set_clken::<T>(false);
+        }
         if index == 18 || index == 25 {
-            command::<T>(12, 0, Response::R1, self.config)?;
+            command::<T>(12, 0, Response::R1, self.config, self.gated)?;
         }
         if let Some(rca) = rca {
-            blocking_wait_ready::<T>(rca, self.config)?;
+            blocking_wait_ready::<T>(rca, self.config, self.gated)?;
         }
         guard.defuse();
         Ok(())
@@ -549,11 +627,14 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
         .map_err(|_| Error::SoftwareTimeout)??;
         drop(transfer);
         stop_data::<T>();
+        if self.gated {
+            set_clken::<T>(false);
+        }
         if index == 18 || index == 25 {
-            command::<T>(12, 0, Response::R1, self.config)?;
+            command::<T>(12, 0, Response::R1, self.config, self.gated)?;
         }
         if let Some(rca) = rca {
-            wait_ready::<T>(rca, self.config).await?;
+            wait_ready::<T>(rca, self.config, self.gated).await?;
         }
         guard.defuse();
         Ok(())
@@ -572,11 +653,11 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
             retry_delay::<T>();
         }
         let mut card = self.identify(ocr.ok_or(Error::SoftwareTimeout)?)?;
-        blocking_wait_ready::<T>(card.rca, self.config)?;
+        blocking_wait_ready::<T>(card.rca, self.config, self.gated)?;
         if matches!(card.card_type, CardCapacity::SDSC) {
-            command::<T>(16, 512, Response::R1, self.config)?;
+            command::<T>(16, 512, Response::R1, self.config, self.gated)?;
         }
-        app_command::<T>(card.rca, self.config)?;
+        app_command::<T>(card.rca, self.config, self.gated)?;
         let mut scr = [0u32; 2];
         self.blocking_data(Buffer::Read(&mut scr), 51, 0, 3, Some(card.rca))?;
         card.scr = SCR((u64::from(u32::from_be(scr[0])) << 32) | u64::from(u32::from_be(scr[1])));
@@ -621,11 +702,11 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
             embassy_time::Timer::after_millis(1).await;
         }
         let mut card = self.identify(ocr.ok_or(Error::SoftwareTimeout)?)?;
-        wait_ready::<T>(card.rca, self.config).await?;
+        wait_ready::<T>(card.rca, self.config, self.gated).await?;
         if matches!(card.card_type, CardCapacity::SDSC) {
-            command::<T>(16, 512, Response::R1, self.config)?;
+            command::<T>(16, 512, Response::R1, self.config, self.gated)?;
         }
-        app_command::<T>(card.rca, self.config)?;
+        app_command::<T>(card.rca, self.config, self.gated)?;
         let mut scr = [0u32; 2];
         self.data(Buffer::Read(&mut scr), 51, 0, 3, Some(card.rca)).await?;
         card.scr = SCR((u64::from(u32::from_be(scr[0])) << 32) | u64::from(u32::from_be(scr[1])));
@@ -661,7 +742,7 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
     pub fn blocking_read_blocks(&mut self, block_index: u32, blocks: &mut [DataBlock]) -> Result<(), Error> {
         let card = *self.card()?;
         let address = block_address(&card, block_index, blocks.len())?;
-        blocking_wait_ready::<T>(card.rca, self.config)?;
+        blocking_wait_ready::<T>(card.rca, self.config, self.gated)?;
         let index = if blocks.len() == 1 { 17 } else { 18 };
         let words = unsafe { core::slice::from_raw_parts_mut(blocks.as_mut_ptr().cast(), blocks.len() * 128) };
         self.blocking_data(Buffer::Read(words), index, address, 9, Some(card.rca))
@@ -670,7 +751,7 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
     pub fn blocking_write_blocks(&mut self, block_index: u32, blocks: &[DataBlock]) -> Result<(), Error> {
         let card = *self.card()?;
         let address = block_address(&card, block_index, blocks.len())?;
-        blocking_wait_ready::<T>(card.rca, self.config)?;
+        blocking_wait_ready::<T>(card.rca, self.config, self.gated)?;
         let index = if blocks.len() == 1 { 24 } else { 25 };
         let words = unsafe { core::slice::from_raw_parts(blocks.as_ptr().cast(), blocks.len() * 128) };
         self.blocking_data(Buffer::Write(words), index, address, 9, Some(card.rca))
@@ -688,7 +769,7 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
     pub async fn read_blocks(&mut self, block_index: u32, blocks: &mut [DataBlock]) -> Result<(), Error> {
         let card = *self.card()?;
         let address = block_address(&card, block_index, blocks.len())?;
-        wait_ready::<T>(card.rca, self.config).await?;
+        wait_ready::<T>(card.rca, self.config, self.gated).await?;
         let index = if blocks.len() == 1 { 17 } else { 18 };
         let words = unsafe { core::slice::from_raw_parts_mut(blocks.as_mut_ptr().cast(), blocks.len() * 128) };
         self.data(Buffer::Read(words), index, address, 9, Some(card.rca)).await
@@ -698,7 +779,7 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
     pub async fn write_blocks(&mut self, block_index: u32, blocks: &[DataBlock]) -> Result<(), Error> {
         let card = *self.card()?;
         let address = block_address(&card, block_index, blocks.len())?;
-        wait_ready::<T>(card.rca, self.config).await?;
+        wait_ready::<T>(card.rca, self.config, self.gated).await?;
         let index = if blocks.len() == 1 { 24 } else { 25 };
         let words = unsafe { core::slice::from_raw_parts(blocks.as_ptr().cast(), blocks.len() * 128) };
         self.data(Buffer::Write(words), index, address, 9, Some(card.rca)).await
@@ -716,7 +797,7 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
 
     pub fn blocking_read_sd_status(&mut self) -> Result<SDStatus, Error> {
         let rca = self.card()?.rca;
-        app_command::<T>(rca, self.config)?;
+        app_command::<T>(rca, self.config, self.gated)?;
         let mut words = [0; 16];
         self.blocking_data(Buffer::Read(&mut words), 13, 0, 6, Some(rca))?;
         let status = sd_status(&words);
@@ -727,7 +808,7 @@ impl<'d, T: Instance, D: SdioDma<T>> Sdmmc<'d, T, D> {
     #[cfg(feature = "embassy")]
     pub async fn read_sd_status(&mut self) -> Result<SDStatus, Error> {
         let rca = self.card()?.rca;
-        app_command::<T>(rca, self.config)?;
+        app_command::<T>(rca, self.config, self.gated)?;
         let mut words = [0; 16];
         self.data(Buffer::Read(&mut words), 13, 0, 6, Some(rca)).await?;
         let status = sd_status(&words);
@@ -764,8 +845,15 @@ trait SealedInstance {
     fn waker() -> &'static AtomicWaker;
 }
 
+#[cfg(not(afio_h4))]
 #[allow(private_bounds)]
 pub trait Instance: SealedInstance + RccPeripheral + RemapPeripheral + embassy_hal_internal::PeripheralType {
+    type Interrupt: Interrupt;
+}
+
+#[cfg(afio_h4)]
+#[allow(private_bounds)]
+pub trait Instance: SealedInstance + RccPeripheral + embassy_hal_internal::PeripheralType {
     type Interrupt: Interrupt;
 }
 
@@ -791,4 +879,3 @@ pin_trait!(D5Pin, Instance);
 pin_trait!(D6Pin, Instance);
 pin_trait!(D7Pin, Instance);
 dma_trait!(SdioDma, Instance);
-

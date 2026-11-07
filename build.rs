@@ -45,6 +45,15 @@ fn main() {
     };
     println!("cargo:rustc-cfg={}", qingke_ver);
 
+    // A CH32H4 feature names one hart (`…-v3f` or `…-v5f`). The V5F image
+    // cannot own the SysTick time driver: its counter interrupts through
+    // vector 13, which `qingke-rt` does not expose. The V5F feature is
+    // `ch32h417qeu6-v5f`, so the env key carries the chip name, not `V5F`.
+    println!("cargo:rustc-check-cfg=cfg(qingke_v5f)");
+    if chip_name.ends_with("-v5f") {
+        println!("cargo:rustc-cfg=qingke_v5f");
+    }
+
     // Add CH32 specific cfg flags: D6, D8, D8C, D8W
     // D(Density), 6(2^6), 8(2^8)
     // C(Connectivity / Interconnectivity)
@@ -413,9 +422,8 @@ fn main() {
         (("i2c", "SCL"), quote!(crate::i2c::SclPin)),
         (("i3c", "SDA"), quote!(crate::i3c::SdaPin)),
         (("i3c", "SCL"), quote!(crate::i3c::SclPin)),
-        // No H4 peripheral has these kinds, so the rows match nothing there and
-        // the modules they name are never pulled in. The day one grows an
-        // `sdio` block, the module gate in lib.rs has to grow with it.
+        // H4's SDIO block is `version: v4x7`, so the V4x7 driver applies; the
+        // driver only swaps the PCFR group remap for per-pin AF numbers.
         (("sdio", "CK"), quote!(crate::sdio::CkPin)),
         (("sdio", "CMD"), quote!(crate::sdio::CmdPin)),
         (("sdio", "D0"), quote!(crate::sdio::D0Pin)),
@@ -441,6 +449,22 @@ fn main() {
         // is `#[cfg(usbhs_v3)]`, so the rows are removed below on that family.
         (("usbhs", "DP"), quote!(crate::usbhs::DpPin)),
         (("usbhs", "DM"), quote!(crate::usbhs::DmPin)),
+        // H4 gigabit Ethernet. FV3x also uses the `emac` kind, so these rows
+        // are removed below unless the chip is H4.
+        (("emac", "RGMII_GTXC"), quote!(crate::eth::GtxcPin)),
+        (("emac", "RGMII_TXEN"), quote!(crate::eth::TxEnPin)),
+        (("emac", "RGMII_TXD0"), quote!(crate::eth::Txd0Pin)),
+        (("emac", "RGMII_TXD1"), quote!(crate::eth::Txd1Pin)),
+        (("emac", "RGMII_TXD2"), quote!(crate::eth::Txd2Pin)),
+        (("emac", "RGMII_TXD3"), quote!(crate::eth::Txd3Pin)),
+        (("emac", "RGMII_RXC"), quote!(crate::eth::RxcPin)),
+        (("emac", "RGMII_RXDV"), quote!(crate::eth::RxdvPin)),
+        (("emac", "RGMII_RD0"), quote!(crate::eth::Rd0Pin)),
+        (("emac", "RGMII_RD1"), quote!(crate::eth::Rd1Pin)),
+        (("emac", "RGMII_RD2"), quote!(crate::eth::Rd2Pin)),
+        (("emac", "RGMII_RD3"), quote!(crate::eth::Rd3Pin)),
+        (("emac", "MDC"), quote!(crate::eth::MdcPin)),
+        (("emac", "MDIO"), quote!(crate::eth::MdioPin)),
         // MCO belongs to the RCC singleton, so it uses its own impl macro
         // below instead of the instance-parameterised pin trait.
         (("rcc", "MCO"), quote!(crate::rcc::McoPin)),
@@ -448,13 +472,19 @@ fn main() {
     .into();
 
     // Modules `lib.rs` compiles out on CH32H4 while the chip still has pins of
-    // that kind, so a row naming one would not resolve. SPI and CAN are
-    // `version: h4` and those drivers reach into V3 register fields; USBHS is
-    // `usbhs_h4` while the module is `#[cfg(usbhs_v3)]`. ADC and DAC are not in
-    // this table: their pin macros live inside the gated modules and are
-    // emitted below.
+    // that kind, so a row naming one would not resolve. SPI is `version: h4`
+    // but keeps the V3 layout, and CAN now reuses the V4x7 driver, so both
+    // stay. USBHS is still gated: its block is `usbhs_h4` while the module is
+    // `#[cfg(usbhs_v3)]`/`usbhs_v4x7`. ADC and DAC are not in this table:
+    // their pin macros live inside the gated modules and are emitted below.
     if h4 {
-        pin_signals.retain(|key, _| !matches!(key.0, "spi" | "can" | "usbhs"));
+        pin_signals.retain(|key, _| !matches!(key.0, "usbhs"));
+    }
+    // The `emac` rows belong to the H4 gigabit driver. FV3x and V4x7 also use
+    // the `emac` kind, but their `crate::eth` is the v1/v4x7 module, which has
+    // no RGMII/MDC traits.
+    if !h4 {
+        pin_signals.retain(|key, _| key.0 != "emac");
     }
     if v4 {
         pin_signals.retain(|key, _| {
@@ -505,11 +535,11 @@ fn main() {
                 }
 
                 // ADC / DAC pin impls reference the `impl_adc_pin!` /
-                // `impl_dac_pin!` macros defined inside src/adc.rs and
-                // src/dac.rs. Those modules are `not(ch32h4)` (their V3-style
-                // register layout doesn't match H4) so the macros aren't in
-                // scope — skip the emission too.
-                if regs.kind == "adc" && !h4 {
+                // `impl_dac_pin!` macros defined inside whichever driver
+                // module `lib.rs` selected for this chip: `adc.rs`/`dac.rs`
+                // on V3, `adc/v4x7.rs` on V4x7 and H4, and `dac/h4.rs` on H4.
+                // All of them export the macro to the crate root.
+                if regs.kind == "adc" {
                     if p.rcc.is_none() {
                         continue;
                     }
@@ -529,7 +559,7 @@ fn main() {
                     }
                 }
 
-                if regs.kind == "dac" && !h4 {
+                if regs.kind == "dac" {
                     let peri = format_ident!("{}", p.name);
                     let pin_name = format_ident!("{}", pin.pin);
                     let ch: u8 = pin.signal.strip_prefix("OUT").unwrap().parse().unwrap();
@@ -567,10 +597,12 @@ fn main() {
     .into();
 
     // Same rule as the pin table: drop the rows whose driver module `lib.rs`
-    // compiles out on CH32H4. `sdio` stays — no H4 peripheral has that kind, so
-    // the row matches nothing and the module is never named.
+    // compiles out on CH32H4. SDIO stays — its block is `version: v4x7`.
     if h4 {
-        dma_signals.retain(|key, _| !matches!(key.0, "spi" | "dac"));
+        dma_signals.insert(("adc", "ADC1"), quote!(crate::adc::RxDma));
+        dma_signals.insert(("adc", "ADC2"), quote!(crate::adc::RxDma));
+        dma_signals.insert(("dac", "CH1"), quote!(crate::dac::DacDma1));
+        dma_signals.insert(("dac", "CH2"), quote!(crate::dac::DacDma2));
     }
     if v4 {
         dma_signals.retain(|key, _| matches!(key.0, "usart" | "timer" | "i2c" | "i3c" | "spi" | "dac" | "sdio"));
@@ -603,7 +635,10 @@ fn main() {
                         let request = ch.request.expect("DMAMUX signal without a request number") as u8;
                         (quote!({dmamux: DMAMUX}), quote!(#request))
                     } else {
-                        panic!("DMA channel for {} {} has neither a channel nor a DMAMUX", p.name, ch.signal);
+                        panic!(
+                            "DMA channel for {} {} has neither a channel nor a DMAMUX",
+                            p.name, ch.signal
+                        );
                     };
 
                     g.extend(quote! {
@@ -848,4 +883,3 @@ macro_rules! {} {{
     )
     .unwrap();
 }
-

@@ -1,6 +1,5 @@
 //! Default-HSE RCC and SysTick rounding regression check (V3F only).
 //!
-//! `cargo xtask flash --example rcc_delay_check && cargo xtask report --example rcc_delay_check`
 //! Mailbox (`RccDelayCheck`): stage 1 = entered init, 2 = init returned, 3 =
 //! checks passed; failures = failed checks, v3f_hz/v5f_hz = the reported core
 //! frequencies, heartbeat = one-second ticks. No hart 1 or SDI console is
@@ -37,13 +36,13 @@ fn main() -> ! {
     let mut failures = u32::from(clocks.v3f.0 != 100_000_000) + u32::from(clocks.v5f.0 != 400_000_000);
     let mut delay = hal::delay::Delay;
     delay.delay_ns(11);
-    failures += u32::from(hal::pac::SYSTICK.cmp_0().read().cmp() != 2);
+    failures += u32::from(hal::pac::SYSTICK.cmp(0).read() != 2);
     delay.delay_ns(0);
-    failures += u32::from(hal::pac::SYSTICK.cmp_0().read().cmp() != 2);
+    failures += u32::from(hal::pac::SYSTICK.cmp(0).read() != 2);
     delay.delay_us(1);
-    failures += u32::from(hal::pac::SYSTICK.cmp_0().read().cmp() != 100);
+    failures += u32::from(hal::pac::SYSTICK.cmp(0).read() != 100);
     delay.delay_ms(1);
-    failures += u32::from(hal::pac::SYSTICK.cmp_0().read().cmp() != 100_000);
+    failures += u32::from(hal::pac::SYSTICK.cmp(0).read() != 100_000);
 
     // Refresh reads RCC without changing the PLL or the effective frequencies.
     unsafe { hal::rcc::refresh(Some(hal::time::Hertz(25_000_000))) };

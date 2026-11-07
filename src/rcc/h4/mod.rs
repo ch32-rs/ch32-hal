@@ -17,16 +17,14 @@ mod prescale;
 
 pub use mux::KernelMux;
 pub use pll::{AuxPlls, UsbhsPll, UsbssPll};
+use prescale::{ahb_from_sysclk, hclk_from_ahb};
 pub use prescale::{ahb_hz, hclk_hz, pclk_hz, pll_mul_x2};
 
 use crate::pac::rcc::vals::{
-    Adcpre, Fpre, Hpre, Mco, Pllmul, Pllsrc, Ppre, Sw as SysclkSw, SyspllSel, UsbhspllRefsel,
-    Usbhspllsrc,
+    Adcpre, Adcsrc, Fpre, Hpre, Mco, Pllmul, Pllsrc, Ppre, Sw as SysclkSw, SyspllSel, UsbhspllRefsel, Usbhspllsrc,
 };
 use crate::pac::{FLASH, RCC};
 use crate::time::Hertz;
-
-use prescale::{ahb_from_sysclk, hclk_from_ahb};
 
 /// HSI frequency (25 MHz on CH32H4).
 pub const HSI_FREQUENCY: Hertz = Hertz(25_000_000);
@@ -92,6 +90,9 @@ pub struct Config {
     pub aux_plls: AuxPlls,
     pub ls: super::LsConfig,
     pub mco: Option<McoConfig>,
+    /// `CFGR0.RGMIION`: 1000M RGMII interface and clock enable. Off by
+    /// default; the internal 10/100M PHY must keep it clear.
+    pub rgmii_on: bool,
 }
 
 impl Default for Config {
@@ -157,6 +158,7 @@ impl Config {
             aux_plls: AuxPlls::default(),
             ls: super::LsConfig::default(),
             mco: None,
+            rgmii_on: false,
         }
     }
 }
@@ -175,6 +177,7 @@ pub unsafe fn init(config: Config) {
         w.set_ppre2(bus.ppre2);
         w.set_fpre(bus.fpre);
         w.set_adcpre(bus.adcpre);
+        w.set_rgmiion(config.rgmii_on);
     });
 
     if use_pll_sw {
@@ -213,7 +216,7 @@ pub unsafe fn init(config: Config) {
     if !use_pll_sw {
         let ahb = ahb_from_sysclk(sysclk_hz, bus.hpre);
         if hclk_from_ahb(ahb, bus.fpre).0 > 100_000_000 {
-            set_flash_latency_2();
+            set_flash_access_clock();
         }
     }
 
@@ -226,6 +229,30 @@ pub unsafe fn init(config: Config) {
         _ => None,
     });
     refresh_clocks(hse_hz);
+}
+
+/// Selected ADC clock as `(source, divisor)`, or `None` when the USBHS PLL is
+/// selected before it is ready.
+///
+/// RM §3.4.4: with `ADCSRC=0` the clock is `HCLK / PPRE2 / ADCPRE`; with
+/// `ADCSRC=1` the 480 MHz USBHS PLL is divided by
+/// `{ADCPRE[1:0], PPRE2[2:0]} + 5`.
+pub(crate) fn adc_clock_ratio() -> Option<(u32, u32)> {
+    let cfgr0 = RCC.cfgr0().read();
+    let adcpre = u32::from(cfgr0.adcpre().to_bits());
+    let ppre2 = u32::from(cfgr0.ppre2().to_bits());
+    match cfgr0.adcsrc() {
+        Adcsrc::HCLK => {
+            let ppre_div = if ppre2 >= 0b100 { 1 << (ppre2 - 0b011) } else { 1 };
+            Some((super::clocks().hclk.0, ppre_div * (adcpre + 1) * 2))
+        }
+        Adcsrc::USBHS_PLL => {
+            if !RCC.ctlr().read().usbhs_pllrdy() {
+                return None;
+            }
+            Some((480_000_000, ((adcpre << 3) | ppre2) + 5))
+        }
+    }
 }
 
 /// Re-read RCC and update [`super::clocks`].
@@ -302,7 +329,7 @@ unsafe fn init_400m(pll_src: Pllsrc, hse: Option<super::Hse>) {
         w.set_syspll_sel(SyspllSel::PLL_CLK);
     });
 
-    set_flash_latency_2();
+    set_flash_access_clock();
     switch_sysclk_to_pll();
 }
 
@@ -330,12 +357,17 @@ unsafe fn init_480m(usbhs_src: Usbhspllsrc, hse: Option<super::Hse>) {
         w.set_syspll_sel(SyspllSel::USBHS_PLL);
     });
 
-    set_flash_latency_2();
+    set_flash_access_clock();
     switch_sysclk_to_pll();
 }
 
-unsafe fn set_flash_latency_2() {
-    FLASH.actlr().modify(|w| w.set_sck_cfg(2));
+unsafe fn set_flash_access_clock() {
+    // `ACTLR.SCK_CFG`: the flash access clock is HCLK/2 in every one of the
+    // EVT's `SetSYSCLK_*` configurations (`FLASH_ACTLR_LATENCY_HCLK_DIV2`).
+    // HCLK/4 doubles every fetch latency, and hart 0 has no instruction cache,
+    // so it is the difference between ~2.5 MIPS and ~5 MIPS of code executed
+    // from flash.
+    FLASH.actlr().modify(|w| w.set_sck_cfg(1));
 }
 
 unsafe fn switch_sysclk_to_pll() {

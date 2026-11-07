@@ -362,9 +362,15 @@ impl AnyChannel {
         // Fixed-wiring chips pass `()` and never reach this.
         #[cfg(ch32h4)]
         {
+            // RM table 10-2 numbers the request inputs from 1, the `CHANNELn_MUX`
+            // field from 0 (RM §10.2.3). Writing the table number directly picks
+            // the next peripheral: SDIO (111) became SAI_A_TX (112), whose request
+            // never fires, so an SDIO DMA read stalled with the data waiting in
+            // the FIFO. WCH's `DMA_MuxChannelConfig` subtracts one as well.
             let slot = mux_slot(info);
+            debug_assert!(request != 0, "DMAMUX request numbers are 1-based");
             pac::DMAMUX.cfgr(slot / 4).modify(|w| {
-                w.set_channel_mux(slot % 4, request);
+                w.set_channel_mux(slot % 4, request - 1);
             });
         }
         #[cfg(not(ch32h4))]

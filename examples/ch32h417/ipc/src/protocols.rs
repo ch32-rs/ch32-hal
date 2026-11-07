@@ -83,6 +83,26 @@ impl Protocol for RccDelayCheck {
     };
 }
 
+/// `embassy_systick`: the boot core's Embassy timer against a free-running TIM2.
+///
+/// `stage` is 1 once the executor starts, 2 once the measured wait passes.
+/// `error_us` is the TIM2-measured length of an Embassy 100 ms wait, minus
+/// 100 ms. `ticks` advances once a second from `embassy_time`.
+#[repr(C)]
+pub struct EmbassySystick {
+    pub stage: AtomicU32,
+    pub error_us: AtomicU32,
+    pub ticks: AtomicU32,
+}
+
+impl Protocol for EmbassySystick {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        error_us: AtomicU32::new(0),
+        ticks: AtomicU32::new(0),
+    };
+}
+
 /// Increments each core performs in the `atomics` example, on the *same* word.
 pub const CAS_INCREMENTS: u32 = 1_000_000;
 
@@ -202,9 +222,8 @@ impl Protocol for Pingpong {
     };
 }
 
-/// `sdi_cpuid`: the console token and hart 1's liveness counter, then its CSRs.
-///
-/// `token` is 1 while hart 1 owns the SDI console and 0 when the boot core does.
+/// `sdi_cpuid`: reserved legacy token, hart 1 liveness counter, then its CSRs.
+/// Each hart now owns a separate RTT buffer; `token` is retained for ABI stability.
 #[repr(C)]
 pub struct SdiCpuid {
     pub token: AtomicU32,
@@ -257,5 +276,469 @@ impl Protocol for Bme280 {
         temperature: AtomicU32::new(0),
         pressure: AtomicU32::new(0),
         humidity: AtomicU32::new(0),
+    };
+}
+
+/// `spi_check`: the boot core's SPI1 blocking self-check.
+///
+/// `stage` is 1 once init returns, 2 once every mode and bit order ran, and 3
+/// once none of them failed. `failures` counts failed checks and `cases` the
+/// completed transfers. `ctlr1` and `hscr` are the registers read back after
+/// the last configuration. `loopback` is 1 only when the `spi-loopback`
+/// feature ran with PA7 jumpered to PA6 and the received bytes matched.
+#[repr(C)]
+pub struct SpiCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub cases: AtomicU32,
+    pub ctlr1: AtomicU32,
+    pub hscr: AtomicU32,
+    pub loopback: AtomicU32,
+}
+
+impl Protocol for SpiCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        cases: AtomicU32::new(0),
+        ctlr1: AtomicU32::new(0),
+        hscr: AtomicU32::new(0),
+        loopback: AtomicU32::new(0),
+    };
+}
+
+/// `rng_check`: the boot core's RNG blocking self-check.
+///
+/// `stage` is 1 once init returns and 2 once the sample passed. `failures`
+/// counts failed checks, `words` the accepted 32-bit samples, and `checksum`
+/// their XOR, which is nonzero for a live generator.
+#[repr(C)]
+pub struct RngCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub words: AtomicU32,
+    pub checksum: AtomicU32,
+}
+
+impl Protocol for RngCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        words: AtomicU32::new(0),
+        checksum: AtomicU32::new(0),
+    };
+}
+
+/// `adc_check`: the boot core's ADC1 blocking self-check.
+///
+/// `stage` is 1 once init returned and 2 once calibration and the three reads
+/// completed. `failures` counts failed checks; `pa1`, `vref` and `temperature`
+/// are the raw 12-bit results. The analog accuracy of the first two is not
+/// judged, only that the conversion path produced an in-range value.
+#[repr(C)]
+pub struct AdcCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub pa1: AtomicU32,
+    pub vref: AtomicU32,
+    pub temperature: AtomicU32,
+}
+
+impl Protocol for AdcCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        pa1: AtomicU32::new(0),
+        vref: AtomicU32::new(0),
+        temperature: AtomicU32::new(0),
+    };
+}
+
+/// `dac_check`: the boot core's DAC self-check.
+///
+/// `stage` is 1 once init returned and 2 once every write was read back.
+/// `failures` counts failed checks; `dor1` and `dor2` are the two output
+/// registers after the last software-triggered write.
+#[repr(C)]
+pub struct DacCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub dor1: AtomicU32,
+    pub dor2: AtomicU32,
+}
+
+impl Protocol for DacCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        dor1: AtomicU32::new(0),
+        dor2: AtomicU32::new(0),
+    };
+}
+
+/// `flash_check`: the boot core's FPEC self-check.
+///
+/// `stage` is 1 once init returned and 2 once every erase/program case ran.
+/// `failures` counts failed checks and `checks` the cases attempted.
+/// `erased_word` is the word read back after a sector erase, `readback` the
+/// first word after a fast page write. `geometry` packs the sector and block
+/// sizes as `(block << 16) | sector` in 256-byte units.
+#[repr(C)]
+pub struct FlashCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub capacity: AtomicU32,
+    pub geometry: AtomicU32,
+    pub erased_word: AtomicU32,
+    pub readback: AtomicU32,
+}
+
+impl Protocol for FlashCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        capacity: AtomicU32::new(0),
+        geometry: AtomicU32::new(0),
+        erased_word: AtomicU32::new(0),
+        readback: AtomicU32::new(0),
+    };
+}
+
+/// `sdio_check`: the boot core's SDIO self-check.
+///
+/// `stage` is 1 once the controller was constructed and 2 once card init was
+/// attempted. `card` is 0 for no card, 1 for SDSC and 2 for SDHC/SDXC.
+/// `error` carries the init error code (`0` = none, `1` = timeout, `2` =
+/// other). `blocks`, `clock` and `first_word` describe a successfully
+/// initialized card; `status` is the raw `STA` register at the end.
+#[repr(C)]
+pub struct SdioCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub card: AtomicU32,
+    pub error: AtomicU32,
+    pub blocks: AtomicU32,
+    pub clock: AtomicU32,
+    pub first_word: AtomicU32,
+    pub status: AtomicU32,
+    /// Raw registers from the manual CMD0/CMD8 probe, for a no-response case.
+    pub hclk: AtomicU32,
+    pub clkcr: AtomicU32,
+    pub cmd0_sta: AtomicU32,
+    pub cmd8_sta: AtomicU32,
+    pub resp1: AtomicU32,
+    /// Idle and post-CMD8 line levels: bit 4 = CMD, bits 0..3 = D0..D3.
+    pub levels_idle: AtomicU32,
+    pub levels_cmd8: AtomicU32,
+    /// CMD55 (APP_CMD) and ACMD41 (SD_SEND_OP_COND) from the same probe.
+    pub cmd55_sta: AtomicU32,
+    pub resp55: AtomicU32,
+    pub acmd41_sta: AtomicU32,
+    pub resp41: AtomicU32,
+    /// High samples of PB11 (SDIO_CK) out of 256 reads while the clock runs.
+    pub ck_high: AtomicU32,
+    /// Level changes seen on PB10 while CMD8 shifts out.
+    pub cmd_edges: AtomicU32,
+}
+
+impl Protocol for SdioCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        card: AtomicU32::new(0),
+        error: AtomicU32::new(0),
+        blocks: AtomicU32::new(0),
+        clock: AtomicU32::new(0),
+        first_word: AtomicU32::new(0),
+        status: AtomicU32::new(0),
+        hclk: AtomicU32::new(0),
+        clkcr: AtomicU32::new(0),
+        cmd0_sta: AtomicU32::new(0),
+        cmd8_sta: AtomicU32::new(0),
+        resp1: AtomicU32::new(0),
+        levels_idle: AtomicU32::new(0),
+        levels_cmd8: AtomicU32::new(0),
+        cmd55_sta: AtomicU32::new(0),
+        resp55: AtomicU32::new(0),
+        acmd41_sta: AtomicU32::new(0),
+        resp41: AtomicU32::new(0),
+        ck_high: AtomicU32::new(0),
+        cmd_edges: AtomicU32::new(0),
+    };
+}
+
+/// `can_check`: the boot core's bxCAN self-check.
+///
+/// `stage` is 1 once CAN1 is up, 2 once its loopback and filter cases ran, and
+/// 3 once the CAN2-through-CAN1-filter-master path also ran. `failures` counts
+/// failed checks, `checks` the assertions attempted and `frames` the loopback
+/// frames verified on CAN1; `can2_frames` is the same count on CAN2.
+/// `filter_banks` is the H4 shared-bank count (42), `tx_ok`/`rx_ok` the
+/// successful transmit/receive calls, `last_id` the identifier of the last
+/// frame received. `tstatr`, `errsr` and `pclk1` are read back at the end.
+#[repr(C)]
+pub struct CanCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub frames: AtomicU32,
+    pub can2_frames: AtomicU32,
+    pub filter_banks: AtomicU32,
+    pub tx_ok: AtomicU32,
+    pub rx_ok: AtomicU32,
+    pub last_id: AtomicU32,
+    pub tstatr: AtomicU32,
+    pub errsr: AtomicU32,
+    pub pclk1: AtomicU32,
+}
+
+impl Protocol for CanCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        frames: AtomicU32::new(0),
+        can2_frames: AtomicU32::new(0),
+        filter_banks: AtomicU32::new(0),
+        tx_ok: AtomicU32::new(0),
+        rx_ok: AtomicU32::new(0),
+        last_id: AtomicU32::new(0),
+        tstatr: AtomicU32::new(0),
+        errsr: AtomicU32::new(0),
+        pclk1: AtomicU32::new(0),
+    };
+}
+
+/// `timer_check`: the four H4 timer classes (ADTM/GPTM/GPTM32/BCTM).
+///
+/// `stage` is 2 once every timer ran, `timers` the number exercised and
+/// `checks`/`failures` the assertion counts. `updates` is the last measured
+/// update-interrupt count, `frequency` the last readback, and `wide_arr` the
+/// TIM9 autoreload after a 1 Hz request, which only fits in 32 bits.
+#[repr(C)]
+pub struct TimerCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub timers: AtomicU32,
+    pub updates: AtomicU32,
+    pub frequency: AtomicU32,
+    pub wide_arr: AtomicU32,
+    pub pclk1: AtomicU32,
+}
+
+impl Protocol for TimerCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        timers: AtomicU32::new(0),
+        updates: AtomicU32::new(0),
+        frequency: AtomicU32::new(0),
+        wide_arr: AtomicU32::new(0),
+        pclk1: AtomicU32::new(0),
+    };
+}
+
+/// `dma2_check`: a 512-byte memory-to-memory copy through DMA2 channel 1.
+#[repr(C)]
+pub struct Dma2Check {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub matched: AtomicU32,
+    pub tcif: AtomicU32,
+    pub remaining: AtomicU32,
+    pub length: AtomicU32,
+}
+
+impl Protocol for Dma2Check {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        matched: AtomicU32::new(0),
+        tcif: AtomicU32::new(0),
+        remaining: AtomicU32::new(0),
+        length: AtomicU32::new(0),
+    };
+}
+
+/// `exti_check`: software-triggered EXTI lines on both merged vectors.
+///
+/// `lines` is the bitmask of lines exercised, `rounds` how many times each was
+/// triggered, and `intfr`/`intenr` are the registers afterwards.
+#[repr(C)]
+pub struct ExtiCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub lines: AtomicU32,
+    pub rounds: AtomicU32,
+    pub intfr: AtomicU32,
+    pub intenr: AtomicU32,
+}
+
+impl Protocol for ExtiCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        lines: AtomicU32::new(0),
+        rounds: AtomicU32::new(0),
+        intfr: AtomicU32::new(0),
+        intenr: AtomicU32::new(0),
+    };
+}
+
+/// `bus_check`: the USART/SPI/I2C instances that have no dedicated self-check.
+///
+/// One bit per instance, set only if its construction and first transfer
+/// behaved as expected. I2C2–4 are construction-only: the board has no
+/// pull-ups on those pins and a blocking write has no timeout without the
+/// `embassy` feature, so the check stops after `CTLR1.PE` comes up.
+#[repr(C)]
+pub struct BusCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub usart_mask: AtomicU32,
+    pub spi_mask: AtomicU32,
+    pub i2c_mask: AtomicU32,
+    pub pclk1: AtomicU32,
+}
+
+impl Protocol for BusCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        usart_mask: AtomicU32::new(0),
+        spi_mask: AtomicU32::new(0),
+        i2c_mask: AtomicU32::new(0),
+        pclk1: AtomicU32::new(0),
+    };
+}
+
+/// `esig_check`: the hard-coded ESIG addresses in `src/signature.rs`.
+///
+/// `flash_kb` comes from `FLACAP`, `uid` from the three UID words and
+/// `chip_id` from the chip-ID register; the probe reports the same values, so a
+/// wrong H4 address shows up as a mismatch or an erased pattern.
+#[repr(C)]
+pub struct EsigCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub flash_kb: AtomicU32,
+    pub uid0: AtomicU32,
+    pub uid1: AtomicU32,
+    pub uid2: AtomicU32,
+    pub chip_id: AtomicU32,
+}
+
+impl Protocol for EsigCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        flash_kb: AtomicU32::new(0),
+        uid0: AtomicU32::new(0),
+        uid1: AtomicU32::new(0),
+        uid2: AtomicU32::new(0),
+        chip_id: AtomicU32::new(0),
+    };
+}
+
+/// `can_async_check`: CAN1 in silent loopback through the async driver.
+///
+/// `frame` counts the echoed frames that matched, `tx_ok`/`rx_ok` the awaited
+/// calls, and `last_id` the last received identifier. Both FIFOs are used, so
+/// both receive interrupt handlers and the transmit handler run.
+#[repr(C)]
+pub struct CanAsyncCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub frames: AtomicU32,
+    pub tx_ok: AtomicU32,
+    pub rx_ok: AtomicU32,
+    pub last_id: AtomicU32,
+}
+
+impl Protocol for CanAsyncCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        frames: AtomicU32::new(0),
+        tx_ok: AtomicU32::new(0),
+        rx_ok: AtomicU32::new(0),
+        last_id: AtomicU32::new(0),
+    };
+}
+
+/// `rtc_check`: the RTC driver's LSI time base and interrupt paths.
+///
+/// `time` is the counter after the delay, `seconds` the second interrupts
+/// counted by the handler, `alarms` the alarm interrupts, and `prescaler` the
+/// last divider read. `frequency` is the input clock the driver divided down.
+#[repr(C)]
+pub struct RtcCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub time: AtomicU32,
+    pub seconds: AtomicU32,
+    pub alarms: AtomicU32,
+    pub prescaler: AtomicU32,
+    pub frequency: AtomicU32,
+    pub lse: AtomicU32,
+    pub lse_wait_ms: AtomicU32,
+    pub rtcsel: AtomicU32,
+}
+
+impl Protocol for RtcCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        time: AtomicU32::new(0),
+        seconds: AtomicU32::new(0),
+        alarms: AtomicU32::new(0),
+        prescaler: AtomicU32::new(0),
+        frequency: AtomicU32::new(0),
+        lse: AtomicU32::new(0),
+        lse_wait_ms: AtomicU32::new(0),
+        rtcsel: AtomicU32::new(0),
+    };
+}
+
+/// `rtc_hse_check`: the RTC on the HSE/512 time base.
+///
+/// `time` is the counter after a three-second delay, `prescaler` the divider
+/// read afterwards, and `frequency` the driver's `HSE / 512` value.
+#[repr(C)]
+pub struct RtcHseCheck {
+    pub stage: AtomicU32,
+    pub failures: AtomicU32,
+    pub checks: AtomicU32,
+    pub time: AtomicU32,
+    pub prescaler: AtomicU32,
+    pub frequency: AtomicU32,
+}
+
+impl Protocol for RtcHseCheck {
+    const ZERO: Self = Self {
+        stage: AtomicU32::new(0),
+        failures: AtomicU32::new(0),
+        checks: AtomicU32::new(0),
+        time: AtomicU32::new(0),
+        prescaler: AtomicU32::new(0),
+        frequency: AtomicU32::new(0),
     };
 }

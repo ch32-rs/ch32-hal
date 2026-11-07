@@ -13,10 +13,10 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# ch32-data rev = c6d67848e2e801e0671b8af276c9866e9128a392
+# ch32-rs/ch32-data 51a2e8f (H4 gigabit Ethernet register block, PR #85).
 ch32-metapac = { features = [
     "rt",
-], version = "0.2.0" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "bd3e4af7872866bc9e0dcc51a2acb08a509e2a0b" }
 
 # `unsafe-trust-wch-atomics`: qingke 0.8.2 refuses to build whenever the target
 # claims byte atomics unless this is set, and every A-extension target does.
@@ -58,10 +58,10 @@ sdio-host = "0.5.0"
 embedded-storage = "0.3.1"
 
 [build-dependencies]
-# ch32-data rev = c6d67848e2e801e0671b8af276c9866e9128a392
+# Same revision as the `[dependencies]` entry.
 ch32-metapac = { features = [
     "metadata",
-], version = "0.2.0" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "bd3e4af7872866bc9e0dcc51a2acb08a509e2a0b" }
 
 proc-macro2 = "1.0"
 quote = "1.0"
@@ -188,9 +188,10 @@ ch643 = ["ch32-metapac/ch643", "qingke-rt/v4c", "qingke/v4c"]
 
 # H4 chip features — paired with ch32-data's CH32H4 family definitions.
 # Cores: V3F (qingke-v3f, hart 0, control core) and V5F (qingke-v5f, hart
-# 1, compute core with FP + ICache). Only the AFIO + GPIO + USART
-# scaffolding is wired up via this PR; ADC/DAC/DMA/USBPD/RCC drivers still
-# need H4-specific porting (separate follow-up PRs).
+# 1, compute core with FP + ICache). RCC, GPIO/AFIO, USART, I2C, timer,
+# DMA/DMAMUX, SPI, SDIO, RNG, ADC, DAC and flash are wired up; CAN,
+# USBHS/USBFS/USBSS and USBPD still need H4-specific drivers (separate
+# follow-up PRs).
 ch32h417qeu6-v3f = [
     "ch32-metapac/ch32h417qeu6-qingke-v3f",
     "qingke-rt/v3f",

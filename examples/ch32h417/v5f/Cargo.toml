@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+defmt = "1"
+defmt-rtt = { version = "1.3.1", features = ["disable-blocking-mode"] }
 # Hart 1 never calls `ch32_hal::init`: that re-programs the PLL, and there is
 # one RCC block shared by both cores. It calls `init_secondary`, which only
 # reads the clock tree the boot core already programmed. `memory-x` comes

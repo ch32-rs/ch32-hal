@@ -25,17 +25,17 @@ register (`PFIC_WAKEIP1`), so examples come in exactly two shapes, which
 
 | Kind | Files | Examples |
 |---|---|---|
-| **v3f-only** | `v3f/src/bin/NAME.rs` | `blinky`, `i2c_scan`, `bme280_blocking`, `sdi_print`, `launcher`, `rcc_delay_check` |
+| **v3f-only** | `v3f/src/bin/NAME.rs` | `adc_check`, `blinky`, `bme280_blocking`, `bus_check`, `can_async_check`, `can_check`, `dac_check`, `delay_systick`, `dma2_check`, `dma_m2m`, `embassy_systick`, `esig_check`, `exti_check`, `flash_check`, `i2c_scan`, `launcher`, `rcc_delay_check`, `rng_check`, `rtc_check`, `rtc_hse_check`, `sdi_print`, `sdio_check`, `sdio_exfat`, `sdio_fat`, `spi_check`, `timer_check` |
 | **dual-core** | both `src/bin/NAME.rs` | `atomics`, `bme280`, `cpuid`, `dualcore`, `hello`, `pingpong`, `sdi_cpuid` |
 
-In a dual-core example the V3F half brings the chip up (clocks, GPIO, SDI),
+In a dual-core example the V3F half brings the chip up (clocks, GPIO),
 hands over to hart 1, and reports. The V5F half depends on `ch32-hal` but never
 calls `ch32_hal::init`: that re-programs the PLL and then blocks on
 `CFGR0.SWS == PLL`, which would switch SYSCLK out from under the core that is
 running. It calls `ch32_hal::init_secondary` instead, which only reads the clock
 tree the boot core already programmed back into `rcc::clocks()`.
-`ch32h417_v5f::pac` re-exports the HAL's metapac, and the half prints through
-`v5f/src/sdi.rs`. The two cores still must not both use one peripheral: each
+`ch32h417_v5f::pac` re-exports the HAL's metapac. Each image has its own
+non-blocking defmt RTT buffer. The two cores still must not both use one peripheral: each
 image has its own `Peripherals` singleton, so neither can tell that the other
 already took it.
 
@@ -50,7 +50,8 @@ cargo xtask build  --example cpuid --jump-v5f      # jumper + cpuid's V5F half
 cargo xtask build                                  # everything
 
 cargo xtask flash  --example dualcore --dual-core  # build + write both, no console
-cargo xtask run    --example dualcore --dual-core  # same, plus the SDI console
+cargo xtask flash  --example eth_bench --flasher probe-rs  # verify with probe-rs instead
+cargo xtask run    --example dualcore --dual-core  # same, plus the V3F RTT console
 cargo xtask flash  --example cpuid --jump-v5f      # jump firmware + V5F payload
 cargo xtask flash  --jump-v5f                      # reflash the jumper alone
 
@@ -73,10 +74,8 @@ and runs the chip.
 
 ## Reading results back
 
-**Do not watch a dual-core example through the console.** Any `wlink` request
-that inspects the chip halts both cores, and `run` (`--watch-serial`) stays
-attached for as long as the console runs, so hart 1 makes no progress meanwhile.
-The examples publish into the shared mailbox instead:
+Any `wlink` inspection halts both cores. For dual-core execution results the
+examples publish into the shared mailbox:
 
 ```sh
 cargo xtask flash --example cpuid --dual-core
@@ -84,15 +83,42 @@ cargo xtask report --example cpuid
 ```
 
 Leave a gap between reads: a burst of `wlink` requests keeps both harts halted,
-so counters look frozen. `run` is fine for a v3f-only example, or for seeing the
-boot core's own lines.
+so counters look frozen. `run` uses probe-rs and shows V3F RTT output. For multiple
+probes, set `PROBE_RS_PROBE=VID:PID:SERIAL`. Dual-core RTT attach has not been
+validated for continuous V5F execution; use the mailbox to verify hart 1.
 
 ## The examples
 
-- **`blinky`**, **`sdi_print`** — v3f-only. `sdi_print` is the SDI console demo:
+- **`blinky`**, **`sdi_print`** — v3f-only. `sdi_print` is the RTT console demo (legacy name):
   `cargo xtask run --example sdi_print`.
 - **`i2c_scan`**, **`bme280_blocking`** — v3f-only, I2C1 on PB6 = SCL, PB7 = SDA
   (AF4). The boot core reads the sensor itself.
+- **`adc_check`**, **`bus_check`**, **`can_async_check`**, **`can_check`**,
+  **`dac_check`**, **`dma2_check`**, **`esig_check`**, **`exti_check`**,
+  **`flash_check`**, **`rng_check`**, **`rtc_check`**, **`rtc_hse_check`**,
+  **`spi_check`**, **`sdio_check`**, **`timer_check`** — v3f-only self-checks
+  for the H4-only drivers. Each
+  publishes a `stage` and a `failures` count into the mailbox (plus
+  driver-specific fields); read them with
+  `cargo xtask report --example NAME`. `can_check` runs CAN1 on PA11/PA12 and
+  CAN2 on PB12/PB13 in silent loopback, so no transceiver is needed;
+  `can_async_check` repeats it through the async driver and needs the
+  `embassy` feature (xtask builds it with that feature). `bus_check` covers
+  the USART/SPI/I2C instances that have no other check. `rtc_check` runs the
+  RTC from LSI and then LSE, exercising the second/alarm interrupts and the
+  retargeting guard; `rtc_hse_check` boots the HSE recipe and uses HSE/512.
+- **`dma_m2m`**, **`delay_systick`**, **`embassy_systick`** — bring-up checks
+  for the DMA/DMAMUX path, the blocking SysTick delay and the Embassy time
+  driver.
+- **`eth_internal`** — `embassy-net` over the integrated 10M/100M PHY with the
+  static address `192.168.47.10/24`; the J11 port goes to a host on
+  `192.168.47.0/24`. It answers ping.
+- **`eth_bench`** — the same stack plus the `examples/ch32v467` byte-count
+  protocol on TCP 5001, so `python3 ../ch32v467/eth_throughput_test.py
+  192.168.47.10` measures both directions. Measured 93 Mbit/s up and 92 Mbit/s
+  down over 8 MiB rounds — 98% of what a 100BASE-TX link carries. It runs the
+  120 MHz V3F recipe with 32-deep DMA rings; with the same driver while hart 0
+  still executed from flash it was 5 Mbit/s.
 - **`bme280`** — the same sensor read by hart 1 instead. The V5F half calls
   `ch32_hal::init_secondary` (which reads the clock tree back rather than
   touching it) and brings up I2C1 itself, then stores each sample in the
@@ -102,7 +128,7 @@ boot core's own lines.
 - **`rcc_delay_check`** — v3f-only regression check for the default 25 MHz HSE at
   the 400 MHz preset: cached V3F/V5F frequencies, RCC refresh, and SysTick
   compare values for rounded-up nanosecond delays, zero delay, and exact
-  microsecond/millisecond delays. It does not wake hart 1 or print over SDI.
+  microsecond/millisecond delays. It does not wake hart 1 or print.
   `report` reads its own payload: `stage` (1 = init entered, 2 = init returned,
   3 = checks passed), `failures` (**0** means success), `v3f_hz` / `v5f_hz`
   (**100000000 / 400000000**) and `heartbeat` (one-second counter). Read once per
@@ -115,11 +141,10 @@ boot core's own lines.
   brings the shared blocks up, wakes hart 1 at the address `v5f/memory.x` links
   it to, and parks the V3F. Not an embassy application — no executor, and
   `hal::init()` only touches the blocks the V5F halves depend on.
-- **`sdi_cpuid`** — `cpuid`, but the boot core prints hart 1's CSR block over SDI.
-  Flash with no console first (`cargo xtask flash --example sdi_cpuid
-  --dual-core`), then attach without reset (`wlink sdi-print enable`) and read
-  the link's virtual serial port (`/dev/cu.usbmodem*`). `run` attaches at boot
-  and shows only the boot core.
+- **`sdi_cpuid`** — the legacy-named CPU-ID example. Each core logs to its own
+  RTT control block, and V3F also logs the V5F values published in the mailbox.
+  `cargo xtask run` attaches to the V3F ELF; use the V5F ELF for its separate
+  RTT stream. Both loggers use non-blocking mode.
 - **`atomics`** — both cores `fetch_add` the same shared word `CAS_INCREMENTS`
   (1,000,000) times each, so the total must be exactly 2,000,000. Anything less
   means updates were lost. `report` prints the total, the done mask and the
@@ -140,14 +165,46 @@ The same split as the WCH CSDK (`Ld/V3F/Link_v3f.ld`, `Ld/V5F/Link_v5f.ld`):
 
 | Region | Owner | Notes |
 |---|---|---|
-| `0x00000000` + 64K | V3F image | `v3f/memory.x` |
-| `0x00010000` + 960K−64K | V5F image | `v5f/memory.x` |
+| `0x00000000` + 64K | V3F load image (flash) | `v3f/memory.x`; copied to RAM at startup |
+| `0x20100000` + 448K | V3F code, data, bss | zero-wait shared SRAM |
+| `0x20170000` + 32K | V3F stack | zero-wait shared SRAM |
+| `0x00010000` + 960K−64K | V5F image (flash) | `v5f/memory.x` |
 | `0x20178000` + 32K | shared region (`ipc::Mailbox`) | declared by both `memory.x`; defined by the V3F image only |
 
 Either image declares its own range, so an oversized build fails to link
 instead of overwriting the other image; `xtask merge` checks the sizes again.
-The V5F currently executes from flash in place — the CSDK's copy of V5F `.text`
-to ITCM is not implemented here, so keep V5F halves small.
+
+The boot core runs entirely from the shared block. Hart 0 has no usable
+instruction cache, Code FLASH is non-zero-wait (RM §1.2.1), and hart 1's ITCM
+costs hart 0 two HCLK waits — while the 512 KB shared block is zero-wait for
+both cores. `v3f/link.x` folds all of `.text`/`.rodata` into `.highcode` (the
+`qingke-rt` `highcode` feature), so only `.init` and `.handle_reset` stay in
+flash and the startup copies the rest into RAM. Measured with `eth_bench`: a
+1M-iteration integer loop drops from 1.12 s to 87 ms, and TCP throughput from
+5.0 to 93 Mbit/s up, 92 Mbit/s down. The 64 KB flash slot is now a load-image
+limit, not an execution one.
+
+The V5F executes from flash in place and has an instruction cache, so it does
+not need the copy; the CSDK's ITCM copy for hart 1 is not implemented here, so
+keep V5F halves small.
+
+Three things about that split are worth knowing before changing it:
+
+- **Most of `RAM` is slack.** The V3F's own `.text`/`.rodata` is 63 KB and its
+  `.bss` 169 KB, so roughly half of the 448 KB region is unused. It is reserved
+  for V3F growth; if a V5F payload ever needs a cross-core buffer, shrink `RAM`
+  and move `STACK` down instead — the three regions must still add up to
+  512 KB, and `SRAM_SHARED` has to stay at `0x20178000`, because both
+  `memory.x` files and `ipc::MAILBOX_ADDR` name that address.
+- **The 64 KB slot is only a load-image limit**, and `eth_bench` fills 63 KB of
+  it. A V3F image that outgrows it is a link error; the way out is to widen
+  `CODE`/`USR` to 128 KB and start the V5F image at `0x00020000`, which touches
+  `v3f/memory.x`, `v5f/memory.x`, `Core` in `xtask/src/main.rs` and this table.
+- **`v3f/link.x` is a local copy of `qingke-rt`'s script**, not an upstream
+  feature. Only the `highcode` copy itself comes from `qingke-rt`; folding
+  `.text`/`.rodata` into `.highcode` and starting that section with the vector
+  tables is this crate's addition, so keep it in sync by hand when `qingke-rt`
+  changes its layout.
 
 ### Mailbox
 
@@ -180,11 +237,15 @@ independently flashed halves can notice they disagree about it.
   lets the V3F read `misa`, `mhartid` and friends directly. The `u-mode` feature
   restores WCH's startup behaviour (User mode), where only the `URW` CSRs
   `gintenr`/`intsyscr` remain reachable.
-- **Flash writes are not always complete.** `wlink flash` can report success
-  while only part of the image landed, so `xtask` reads every `--no-run` image
-  back and repeats the write if it did not. The final write resets and runs the
-  chip, so it cannot be checked the same way — if a dual-core example only shows
-  V3F activity, flash it again before suspecting the firmware.
+- **Flash writes are not always complete with `wlink`.** `wlink flash` can
+  report success while only part of the image landed, so `xtask` reads every
+  `--no-run` image back and repeats the write if it did not. The final write
+  resets and runs the chip, so it cannot be checked the same way — if a
+  dual-core example only shows V3F activity, flash it again before suspecting
+  the firmware. `--flasher probe-rs` avoids this: it writes every image with
+  probe-rs, which verifies each one, and issues a single reset at the end. It
+  cannot choose between two attached probes, so set `PROBE_RS_PROBE` there; the
+  default stays `wlink`, which picks the first probe by itself.
 - **Merged images.** `out/NAME.bin` is the full flash image (`0xFF` padding
   between the two payloads); `out/NAME.hex` is the same image as records, which
   only cover the payloads. Use the merged image to publish and the two-ELF
@@ -196,5 +257,28 @@ independently flashed halves can notice they disagree about it.
   stock targets and leaves it to the examples.
 - **Hart 1's instruction cache is off out of reset** (`cache_strtg_ctlr`, CSR
   `0xBC2`, `ic_disable = 1`), so every V5F half starts with
-  `ch32h417_v5f::cache::enable_icache()`. Hart 0 has no usable instruction cache;
-  its speed path is running code from RAM (see `docs/backlog.md`).
+  `ch32h417_v5f::cache::enable_icache()`. Hart 0 has no usable instruction cache,
+  so the V3F image runs from the shared SRAM (`v3f/link.x`, `highcode`).
+
+## SD card file-system examples
+
+`sdio_fat` uses the first MBR partition when it is FAT16/FAT32; `sdio_exfat`
+uses the first MBR partition when it is exFAT. Both use PB11/PB10 and PE8–PE11
+with DMA1 channel 1. They request 2.5 MHz: higher SDIO clock settings on the
+current H417 board and card are not yet reliable. These are blocking examples.
+
+Each run creates a new file named `H4TST00.TXT` through `H4TST99.TXT`, writes
+1300 bytes, remounts, and verifies the contents. Existing filenames are skipped;
+the test file is left on the card. Do not run these examples against a mounted
+card shared with another host.
+
+```text
+cargo xtask flash --example sdio_exfat
+cargo xtask report --example sdio_exfat
+```
+
+For either example, `stage = 7`, `error = 0`, and `bytes verified = 1300`
+indicate success; `test file number = 1` means `H4TST01.TXT`. A nonzero error
+or an earlier stage means the file-system operation did not complete. The
+FAT16/FAT32 example requires a FAT16/FAT32 partition; the exFAT example does
+not format the card.

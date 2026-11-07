@@ -1,8 +1,6 @@
 //! RCC_CFGR2 peripheral kernel-clock muxes (RM §3.4.13).
 
-use crate::pac::rcc::vals::{
-    ClkSrcPll, Eth1gsrc, Hsadcsrc, Ltdcsrc, Uhsifsrc, Usbfsdiv, Usbfssrc,
-};
+use crate::pac::rcc::vals::{ClkSrcPll, Eth1gsrc, Hsadcsrc, Ltdcsrc, Uhsifsrc, Usbfsdiv, Usbfssrc};
 use crate::pac::RCC;
 
 /// CFGR2 mux defaults aligned with WCH EVT `system_ch32h417.c` power-on values.
@@ -30,10 +28,15 @@ impl Default for KernelMux {
             ltdcsrc: Ltdcsrc::PLL_CLK,
             usbfsdiv: Usbfsdiv::DIV10,
             usbfssrc: Usbfssrc::PLL,
-            rngsrc: ClkSrcPll::PLL_CLK,
-            i2s2src: ClkSrcPll::PLL_CLK,
-            i2s3src: ClkSrcPll::PLL_CLK,
-            hsadcsrc: Hsadcsrc::PLL_CLK,
+            // These four muxes reset to SYSCLK, and the EVT system init
+            // (`RCC->CFGR2 &= 0x0C600000`) leaves them there even when it
+            // switches to a PLL. Selecting PLL_CLK by default instead makes
+            // RNG/HSADC fail whenever no PLL is running, which is the whole
+            // `with_hsi` configuration.
+            rngsrc: ClkSrcPll::SYSCLK,
+            i2s2src: ClkSrcPll::SYSCLK,
+            i2s3src: ClkSrcPll::SYSCLK,
+            hsadcsrc: Hsadcsrc::SYSCLK,
             eth1gsrc: Eth1gsrc::PLL_CLK,
         }
     }

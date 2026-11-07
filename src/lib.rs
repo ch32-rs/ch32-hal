@@ -97,37 +97,48 @@ pub mod delay;
 pub mod dma;
 
 // ADC / DAC drivers are written against the V3-family register layout
-// (`pac::adc::vals::SampleTime`, `pac::dac::vals::TrigSel`, ...). On H4
-// these `vals` submodules don't exist because chiptool only emits them
-// for fields that carry enum types — H4's HSADC + ADC2 + DAC use a
-// different register convention. Gate the V3 driver out until a dedicated
-// H4 driver is ported.
+// (`pac::adc::vals::SampleTime`, `pac::dac::vals::TrigSel`, ...). On H4 and
+// V4x7 these `vals` submodules don't exist because chiptool only emits them
+// for fields that carry enum types, so those families use the V4x7 driver,
+// which defines its own sample-time enum. H4's block keeps the V4x7 layout
+// apart from the regular-data split; the driver covers both.
 #[cfg(all(adc, not(any(ch32h4, ch32v4))))]
 pub mod adc;
 #[cfg(adc_v4x7)]
 #[path = "adc/v4x7.rs"]
 pub mod adc;
+#[cfg(adc_h4)]
+#[path = "adc/v4x7.rs"]
+pub mod adc;
 #[cfg(all(dac, not(ch32h4)))]
+pub mod dac;
+// H4's DAC uses per-channel registers (`R12BDHR1`, `EN1`, ...) instead of the
+// V3 arrays, so it needs its own module.
+#[cfg(dac_h4)]
+#[path = "dac/h4.rs"]
 pub mod dac;
 pub mod exti;
 pub mod gpio;
-// spi/can/flash drivers reach into V3-specific register fields that
-// don't exist on `*_h4`-versioned peripherals. I2C is the exception:
-// H4 chip metadata flags I2C as `version: v3` (same register layout
-// as the V2/V3 families), so the existing V3 driver applies directly.
+// H4 flags I2C as `version: v3`, so the existing V3 driver applies directly.
 #[cfg(i2c)]
 pub mod i2c;
 #[cfg(i3c_v4x7)]
 pub mod i3c;
-#[cfg(all(rng, not(ch32h4)))]
+#[cfg(rng)]
 pub mod rng;
+// The RTC block is the shared F1-style layout, but only CH32H4 currently has
+// a PWR peripheral in the PAC for the `DBP` backup-domain write enable. V4x7
+// has `PWR.CTLR.DBP` too, but a raw `RTCSEL` byte instead of the `Rtcsel`
+// enum, so it needs its own branch before this gate can widen.
+#[cfg(all(rtc, rcc_h4))]
+pub mod rtc;
 #[cfg(sdio_v3)]
 pub mod sdio;
 #[cfg(sdio_v4x7)]
 #[path = "sdio/v4x7.rs"]
 pub mod sdio;
 pub mod signature;
-#[cfg(all(spi, not(ch32h4)))]
+#[cfg(spi)]
 pub mod spi;
 #[cfg(any(timer_x0, timer_v3, timer_h4, timer_v4x7))]
 pub mod timer;
@@ -154,16 +165,23 @@ pub mod usbpd;
 
 #[cfg(all(can, not(any(ch32h4, ch32v4))))]
 pub mod can;
-#[cfg(can_v4x7)]
+// H4's CAN block is the same bxCAN layout as V4x7 plus the shared 42-bank
+// filter table, so the V4x7 driver covers both (see `can/v4x7.rs`).
+#[cfg(any(can_v4x7, can_h4))]
 #[path = "can/v4x7.rs"]
 pub mod can;
-#[cfg(all(any(eth, emac), not(ch32v4)))]
+// The V4x7 driver targets its own 10/100 `emac` register set; H4 has a
+// separate gigabit block (`emac_h4`) with `PHY_CFGR` and RGMII.
+#[cfg(all(any(eth, emac), not(any(ch32v4, emac_h4))))]
 pub mod eth;
 #[cfg(emac_v4x7)]
 #[path = "eth/v4x7.rs"]
 pub mod eth;
+#[cfg(emac_h4)]
+#[path = "eth/h4.rs"]
+pub mod eth;
 
-#[cfg(all(flash, not(ch32h4)))]
+#[cfg(flash)]
 pub mod flash;
 
 mod patches;

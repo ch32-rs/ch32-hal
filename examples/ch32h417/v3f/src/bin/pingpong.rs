@@ -39,16 +39,22 @@
 #![no_std]
 #![no_main]
 
-use ch32h417_ipc as ipc;
-use ch32h417_ipc::protocols::{
-    Pingpong, CPUID_CSR_NAMES, CPUID_DONE, CPUID_MISA_INDEX,
-};
+use defmt_rtt as _;
+macro_rules! log {
+    () => { defmt::info!("") };
+    ($($args:tt)*) => { defmt::info!("{}", defmt::Display2Format(&format_args!($($args)*))) };
+}
+
 use core::sync::atomic::Ordering;
 
+use ch32h417_ipc as ipc;
+use ch32h417_ipc::protocols::{Pingpong, CPUID_CSR_NAMES, CPUID_DONE, CPUID_MISA_INDEX};
+
 ipc::mailbox!(Pingpong);
+use ch32_hal as hal;
 use hal::delay::Delay;
+use panic_halt as _;
 use qingke::pfic;
-use {ch32_hal as hal, panic_halt as _};
 
 /// Must match `v5f/memory.x` FLASH ORIGIN (1KB-aligned).
 const V5F_ENTRY: u32 = 0x0001_0000;
@@ -60,7 +66,6 @@ const HANDOFF_SPINS: u32 = 20_000_000;
 fn main() -> ! {
     // The boot core owns bring-up; hart 1 runs with no HAL initialisation.
     let _p = hal::init(hal::Config::default());
-    hal::debug::SDIPrint::enable();
 
     // Clear the mailbox (shared RAM survives a reset) and hand over — before
     // printing anything, because a blocking print would strand hart 1.
@@ -78,31 +83,31 @@ fn main() -> ! {
     }
 
     if cpuid.done.load(Ordering::Relaxed) == CPUID_DONE {
-        hal::try_println!("=== hart 1, reported through shared memory ===");
+        log!("=== hart 1, reported through shared memory ===");
         let values = cpuid.snapshot();
         let present = cpuid.present.load(Ordering::Relaxed);
         for (i, name) in CPUID_CSR_NAMES.iter().enumerate() {
             if present & (1 << i) != 0 {
-                hal::try_println!("  {:<18} = {:#010x}", name, values[i]);
+                log!("  {:<18} = {:#010x}", name, values[i]);
             } else {
-                hal::try_println!("  {:<18}   absent (read faulted)", name);
+                log!("  {:<18}   absent (read faulted)", name);
             }
         }
-        hal::try_println!(
+        log!(
             "  image build features = {:#04x}",
             cpuid.buildcfg.load(Ordering::Relaxed)
         );
         if present & (1 << CPUID_MISA_INDEX) != 0 {
             let misa = values[CPUID_MISA_INDEX];
             let mut letters = [0u8; 26];
-            hal::try_println!(
+            log!(
                 "  misa: MXL={} extensions={}",
                 (misa >> 30) & 3,
                 misa_letters(&mut letters, misa)
             );
         }
     } else {
-        hal::try_println!(
+        log!(
             "no report from hart 1 (progress = {})",
             cpuid.progress.load(Ordering::Relaxed)
         );
@@ -115,7 +120,7 @@ fn main() -> ! {
     loop {
         let ping = mailbox.payload.ping.load(Ordering::Relaxed);
         if ping != echoed {
-            hal::try_println!("[V3F] round {} (pong was {})", ping, echoed);
+            log!("[V3F] round {} (pong was {})", ping, echoed);
             echoed = ping;
             mailbox.payload.pong.store(ping, Ordering::Relaxed);
         }

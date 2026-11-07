@@ -1,5 +1,8 @@
-//! CH32V407/CH32V467 independent-mode ADC1/ADC2 with blocking, interrupt, and
-//! regular scan DMA reads.
+//! CH32V407/CH32V467 and CH32H4 independent-mode ADC1/ADC2 with blocking,
+//! interrupt, and regular scan DMA reads.
+//!
+//! The three chips share the register map. H4 adds the touch-key and analog
+//! configuration fields, which this driver does not use.
 #![macro_use]
 
 use core::future::poll_fn;
@@ -16,6 +19,24 @@ use crate::{interrupt, pac, peripherals, Peri};
 pub const ADC_MAX: u32 = 4095;
 /// Nominal internal reference in mV; this is not a factory calibration value.
 pub const VREF_INT: u32 = 1200;
+
+/// Largest allowed ADC conversion clock.
+#[cfg(adc_h4)]
+const MAX_ADC_CLOCK: u64 = 80_000_000;
+#[cfg(not(adc_h4))]
+const MAX_ADC_CLOCK: u64 = 30_000_000;
+
+/// Largest aggregate sample rate the timing checks accept.
+#[cfg(adc_h4)]
+const MAX_SAMPLE_RATE: u64 = 5_000_000;
+#[cfg(not(adc_h4))]
+const MAX_SAMPLE_RATE: u64 = 2_000_000;
+
+/// The 12-bit regular conversion result, right-aligned.
+#[inline(always)]
+fn regular_data(regs: pac::adc::Adc) -> u16 {
+    regs.rdatar().read().data()
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(u8)]
@@ -133,7 +154,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         if source == 0 || divisor == 0 || source / divisor == 0 {
             return Err(Error::ClockUnavailable);
         }
-        if u64::from(source) > 30_000_000 * u64::from(divisor) {
+        if u64::from(source) > MAX_ADC_CLOCK * u64::from(divisor) {
             return Err(Error::ClockTooFast);
         }
         T::enable_and_reset();
@@ -241,7 +262,7 @@ impl<'d, T: Instance> Adc<'d, T> {
         if !self.wait_for(|| T::regs().statr().read().eoc()) {
             return Err(Error::ConversionTimeout);
         }
-        Ok(T::regs().rdatar().read().data())
+        Ok(regular_data(T::regs()))
     }
 
     /// Read one channel using the shared IRQ. Dropping the future aborts conversion.
@@ -259,7 +280,7 @@ impl<'d, T: Instance> Adc<'d, T> {
             T::state().waker.register(context.waker());
             T::regs().ctlr1().modify(|reg| reg.set_eocie(true));
             if T::regs().statr().read().eoc() {
-                Poll::Ready(Ok(T::regs().rdatar().read().data()))
+                Poll::Ready(Ok(regular_data(T::regs())))
             } else {
                 Poll::Pending
             }
@@ -332,7 +353,9 @@ fn validate_sequence<T: Instance>(sequence: &[Channel<'_, T>], source: u32, divi
         {
             return Err(Error::InvalidSequence);
         }
-        if 2 * u64::from(source) > 2_000_000 * u64::from(divisor) * (u64::from(channel.sample_time.cycles_x2()) + 25) {
+        if 2 * u64::from(source)
+            > MAX_SAMPLE_RATE * u64::from(divisor) * (u64::from(channel.sample_time.cycles_x2()) + 25)
+        {
             return Err(Error::SampleTimeTooShort);
         }
         if channel.number == 16
@@ -446,4 +469,3 @@ macro_rules! impl_adc_pin {
 }
 
 dma_trait!(RxDma, Instance);
-

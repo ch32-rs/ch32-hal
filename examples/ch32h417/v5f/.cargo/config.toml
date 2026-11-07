@@ -7,3 +7,6 @@ json-target-spec = true
 
 [target.riscv32imafbc-unknown-none-elf]
 runner = "wlink flash"
+
+[env]
+DEFMT_LOG = { value = "info", force = false }

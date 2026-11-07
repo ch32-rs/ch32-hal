@@ -21,12 +21,12 @@ fn main() -> ! {
     // only be verified on a scope, but Mco::new has already switched it to
     // AF push-pull by the time we get here.
     let mco = ch32_hal::pac::RCC.cfgr0().read().mco();
-    if mco == 0b0101 {
+    if mco == McoSource::HSI {
         report_set!(MCO_RESULT, 2);
-        defmt::info!("MCO_RESULT=PASS: HSI selected on PA8 (CFGR0.MCO={=u8})", mco);
+        defmt::info!("MCO_RESULT=PASS: HSI selected on PA8 (CFGR0.MCO={=u8})", mco.to_bits());
     } else {
         report_set!(MCO_RESULT, 3);
-        defmt::panic!("MCO selection mismatch: CFGR0.MCO={=u8}", mco);
+        defmt::panic!("MCO selection mismatch: CFGR0.MCO={=u8}", mco.to_bits());
     }
 
     loop {}
