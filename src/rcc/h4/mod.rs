@@ -211,7 +211,7 @@ pub unsafe fn init(config: Config) {
     if !use_pll_sw {
         let ahb = ahb_from_sysclk(sysclk_hz, bus.hpre);
         if hclk_from_ahb(ahb, bus.fpre).0 > 100_000_000 {
-            set_flash_latency_2();
+            set_flash_access_clock();
         }
     }
 
@@ -324,7 +324,7 @@ unsafe fn init_400m(pll_src: Pllsrc, hse: Option<super::Hse>) {
         w.set_syspll_sel(SyspllSel::PLL_CLK);
     });
 
-    set_flash_latency_2();
+    set_flash_access_clock();
     switch_sysclk_to_pll();
 }
 
@@ -352,12 +352,17 @@ unsafe fn init_480m(usbhs_src: Usbhspllsrc, hse: Option<super::Hse>) {
         w.set_syspll_sel(SyspllSel::USBHS_PLL);
     });
 
-    set_flash_latency_2();
+    set_flash_access_clock();
     switch_sysclk_to_pll();
 }
 
-unsafe fn set_flash_latency_2() {
-    FLASH.actlr().modify(|w| w.set_sck_cfg(2));
+unsafe fn set_flash_access_clock() {
+    // `ACTLR.SCK_CFG`: the flash access clock is HCLK/2 in every one of the
+    // EVT's `SetSYSCLK_*` configurations (`FLASH_ACTLR_LATENCY_HCLK_DIV2`).
+    // HCLK/4 doubles every fetch latency, and hart 0 has no instruction cache,
+    // so it is the difference between ~2.5 MIPS and ~5 MIPS of code executed
+    // from flash.
+    FLASH.actlr().modify(|w| w.set_sck_cfg(1));
 }
 
 unsafe fn switch_sysclk_to_pll() {
