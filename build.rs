@@ -449,6 +449,22 @@ fn main() {
         // is `#[cfg(usbhs_v3)]`, so the rows are removed below on that family.
         (("usbhs", "DP"), quote!(crate::usbhs::DpPin)),
         (("usbhs", "DM"), quote!(crate::usbhs::DmPin)),
+        // H4 gigabit Ethernet. FV3x also uses the `emac` kind, so these rows
+        // are removed below unless the chip is H4.
+        (("emac", "RGMII_GTXC"), quote!(crate::eth::GtxcPin)),
+        (("emac", "RGMII_TXEN"), quote!(crate::eth::TxEnPin)),
+        (("emac", "RGMII_TXD0"), quote!(crate::eth::Txd0Pin)),
+        (("emac", "RGMII_TXD1"), quote!(crate::eth::Txd1Pin)),
+        (("emac", "RGMII_TXD2"), quote!(crate::eth::Txd2Pin)),
+        (("emac", "RGMII_TXD3"), quote!(crate::eth::Txd3Pin)),
+        (("emac", "RGMII_RXC"), quote!(crate::eth::RxcPin)),
+        (("emac", "RGMII_RXDV"), quote!(crate::eth::RxdvPin)),
+        (("emac", "RGMII_RD0"), quote!(crate::eth::Rd0Pin)),
+        (("emac", "RGMII_RD1"), quote!(crate::eth::Rd1Pin)),
+        (("emac", "RGMII_RD2"), quote!(crate::eth::Rd2Pin)),
+        (("emac", "RGMII_RD3"), quote!(crate::eth::Rd3Pin)),
+        (("emac", "MDC"), quote!(crate::eth::MdcPin)),
+        (("emac", "MDIO"), quote!(crate::eth::MdioPin)),
         // MCO belongs to the RCC singleton, so it uses its own impl macro
         // below instead of the instance-parameterised pin trait.
         (("rcc", "MCO"), quote!(crate::rcc::McoPin)),
@@ -463,6 +479,12 @@ fn main() {
     // their pin macros live inside the gated modules and are emitted below.
     if h4 {
         pin_signals.retain(|key, _| !matches!(key.0, "usbhs"));
+    }
+    // The `emac` rows belong to the H4 gigabit driver. FV3x and V4x7 also use
+    // the `emac` kind, but their `crate::eth` is the v1/v4x7 module, which has
+    // no RGMII/MDC traits.
+    if !h4 {
+        pin_signals.retain(|key, _| key.0 != "emac");
     }
     if v4 {
         pin_signals.retain(|key, _| {
