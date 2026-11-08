@@ -4,6 +4,7 @@
 
 
 use ch32_hal as hal;
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::Timer;
 use hal::gpio::{Level, Output};

@@ -3,6 +3,7 @@
 
 use ch32_hal::can::{Can, CanFifo, CanFilter, CanFrame, CanMode, ExtendedId, StandardId};
 use ch32_hal::{self as hal, peripherals};
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, WithTimeout};
 use hal::{bind_interrupts, println};

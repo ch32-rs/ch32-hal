@@ -5,6 +5,7 @@ use ch32_hal as hal;
 use ch32_hal::println;
 use ch32_hal::usbpd::{Error as UsbpdError, InterruptHandler, Sop, UsbPdPhy};
 use ch32_hal::{bind_interrupts, peripherals};
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::Timer;
 use panic_halt as _;
