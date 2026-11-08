@@ -10,20 +10,28 @@ ch32-hal = { path = "../../", features = [
     "embassy",
     "rt",
     "time-driver-tim2",
+    "defmt",
 ], default-features = false }
 embassy-executor = { version = "0.10.0", features = [
     "platform-spin",
     "executor-thread",
 ] }
-embassy-time = "0.5.1"
+embassy-time = { version = "0.5.1", features = ["defmt-timestamp-uptime"] }
 
 # This is okay because we should automatically use whatever ch32-hal uses
 qingke = "0.8"
 qingke-rt = "0.8"
 
+defmt = "1"
+defmt-rtt = { version = "1.3.1", features = ["disable-blocking-mode"] }
 panic-halt = "1.0"
 embedded-hal = "1.0.0"
 embedded-can = "0.4.1"
+embedded-graphics = "0.8.1"
+ssd1306 = "0.9"
+embassy-usb = "0.6.0"
+embassy-usb-driver = "=0.2.2"
+embassy-futures = "0.1.2"
 usbpd = "3.0.0"
 usbpd-traits = "2.0.0"
 

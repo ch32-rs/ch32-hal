@@ -3,6 +3,7 @@
 
 
 
+use defmt_rtt as _;
 use hal::gpio::{Level, Output};
 use qingke::riscv;
 use {ch32_hal as hal, panic_halt as _};

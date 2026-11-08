@@ -3,6 +3,7 @@
 
 use ch32_hal::can::{Can, CanFifo, CanFilter, CanFrame, CanMode, ExtendedId, StandardId};
 use ch32_hal::{self as hal};
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use hal::println;
 

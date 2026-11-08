@@ -144,15 +144,26 @@ pub mod spi;
 pub mod timer;
 pub mod usart;
 
-/// Common structures for USB drivers
+/// Shared USB endpoint-buffer helpers (not a controller driver).
+///
+/// FS/HS controller drivers live in the modules below. Taxonomy (USBD vs
+/// WCH-USBFS layouts vs USBHS) is documented in `ch32-data` `docs/usb_ip.md`.
 pub mod usb;
 
+/// WCH USBFS + OTG (`kind: otg` / `otg_v2`) — v2fs device layout + OTG regs.
 #[cfg(otg)]
 pub mod otg_fs;
 
+/// WCH USBFS `l1fs` layout only (`kind: usb`, CH32L103). Sibling layouts
+/// (`v1fs`/`v2fs`/`x0fs`) are not this module; see `ch32-data` `docs/usb_ip.md`.
+#[cfg(usb_l1fs)]
+pub mod usbfs;
+
+/// Classic USB device-only (`kind: usbd` / EPR+BTABLE). Manual name: USBD.
 #[cfg(usbd)]
 pub mod usbd;
 
+/// USB high-speed (`kind: usbhs`). `v3` / `v4x7` share one IP family; H4 is another.
 #[cfg(usbhs_v3)]
 pub mod usbhs;
 #[cfg(usbhs_v4x7)]

@@ -2,5 +2,9 @@
 target = "riscv32imc-unknown-none-elf"
 
 [target."riscv32imc-unknown-none-elf"]
-runner = "wlink -v flash --enable-sdi-print --watch-serial"
+runner = "probe-rs run --chip CH32L103C8T6"
+# runner = "wlink -v flash --enable-sdi-print --watch-serial"
 # runner = "wlink -v flash"
+
+[env]
+DEFMT_LOG = "info"
