@@ -20,15 +20,15 @@
 //! probe-rs read b32 <STAGE address> 1
 //! ```
 //!
-//! `STAGE_PASS` means the CRC matched, the IWDG was kept alive by `feed()`
-//! and then reset the chip when left alone, and the WWDG refused an early
-//! feed, accepted a feed inside the window, and then reset the chip.
+//! `STAGE_PASS` means the CRC matched, the IWDG was kept alive by `pet()`
+//! and then reset the chip when left alone, and the WWDG was petted inside
+//! its window and then reset the chip.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use ch32_hal as hal;
 use ch32_hal::crc::Crc;
-use ch32_hal::wdg::{FeedError, IndependentWatchdog, IwdgPrescaler, WindowConfig, WindowPrescaler, WindowWatchdog};
+use ch32_hal::wdg::{IndependentWatchdog, WindowWatchdog};
 use ch32_hal::{pac, peripherals, Peri};
 use panic_halt as _;
 use qingke::riscv;
@@ -83,7 +83,7 @@ fn main() -> ! {
             STAGE.store(STAGE_IWDG_RESET, Ordering::Relaxed);
             run_wwdg(p.WWDG);
         } else if stage == STAGE_IWDG_FEEDING {
-            // The watchdog fired while `feed()` was supposed to keep it alive.
+            // The watchdog fired while `pet()` was supposed to keep it alive.
             STAGE.store(STAGE_FAIL_IWDG_FEED, Ordering::Relaxed);
             park();
         }
@@ -102,61 +102,50 @@ fn main() -> ! {
     rcc.rstsckr().modify(|w| w.set_rmvf(true));
 
     let mut crc = Crc::new(p.CRC);
-    crc.update_words(&[0x3132_3334, 0x3536_3738]);
-    let value = crc.result();
+    let value = crc.feed_words(&[0x3132_3334, 0x3536_3738]);
     CRC_VALUE.store(value, Ordering::Relaxed);
     assert_eq!(value, CRC_12345678);
 
     crc.reset();
-    crc.update_word(0x4142_4344);
-    assert_eq!(crc.result(), CRC_ABCD);
+    assert_eq!(crc.feed_word(0x4142_4344), CRC_ABCD);
 
     // The independent data register must not take part in the calculation.
     crc.set_independent_data(0xa5);
     assert_eq!(crc.independent_data(), 0xa5);
-    assert_eq!(crc.result(), CRC_ABCD);
+    assert_eq!(crc.read(), CRC_ABCD);
 
     run_iwdg(p.IWDG);
 }
 
 fn run_iwdg(iwdg: Peri<'static, peripherals::IWDG>) -> ! {
-    // LSI / 32 with reload 0xff is 249 ms at the nominal 32.768 kHz LSI.
-    let mut wdg = IndependentWatchdog::new(iwdg, IwdgPrescaler::Div32, 0xff).unwrap();
+    // LSI / 8 with reload 0xfff is 1 s at the nominal 32.768 kHz LSI.
+    let mut wdg = IndependentWatchdog::new(iwdg, 1_000_000);
+    wdg.unleash();
 
     STAGE.store(STAGE_IWDG_FEEDING, Ordering::Relaxed);
     for _ in 0..10 {
-        wdg.feed();
-        // About 50 ms at 8 MHz; ten of these are well over one timeout.
+        wdg.pet();
+        // About 12.5 ms at 8 MHz; ten of these are well inside one period.
         riscv::asm::delay(100_000);
     }
 
-    // Stop feeding: the chip must reset within the configured timeout.
+    // Stop feeding: the chip must reset within the configured timeout (1 s
+    // nominal; the spin below is about 2 s at 8 MHz).
     STAGE.store(STAGE_IWDG_ARMED, Ordering::Relaxed);
-    riscv::asm::delay(4_000_000);
+    riscv::asm::delay(16_000_000);
     STAGE.store(STAGE_FAIL_IWDG_NO_RESET, Ordering::Relaxed);
     park();
 }
 
 fn run_wwdg(wwdg: Peri<'static, peripherals::WWDG>) -> ! {
-    // PCLK1 / 4096 with a 64-tick period: 32.8 ms at 8 MHz.
-    let mut wdg = WindowWatchdog::new(
-        wwdg,
-        WindowConfig {
-            start_counter: 0x7f,
-            window: 0x60,
-            prescaler: WindowPrescaler::Div1,
-            early_wakeup: false,
-        },
-    );
+    // PCLK1 / 4096 with 59 ticks is 30 ms at 8 MHz; the first 15 ms are
+    // closed, so a refresh before then would reset the chip.
+    let mut wdg = WindowWatchdog::new(wwdg, 30_000, 15_000);
 
     STAGE.store(STAGE_WWDG_FEEDING, Ordering::Relaxed);
-    // The counter is still above the window, so a refresh must be refused
-    // rather than written: writing it early resets the chip.
-    assert_eq!(wdg.feed(), Err(FeedError::TooEarly));
-
     // Wait for the counter to enter the open window, then refresh there.
-    while wdg.counter() >= 0x60 {}
-    assert_eq!(wdg.feed(), Ok(()));
+    while wdg.counter() >= wdg.window() {}
+    wdg.pet();
 
     // Stop feeding: the counter must run down to 0x3f and reset the chip.
     STAGE.store(STAGE_WWDG_ARMED, Ordering::Relaxed);

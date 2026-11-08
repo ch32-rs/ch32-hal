@@ -2,6 +2,10 @@
 //!
 //! Polynomial `0x04C11DB7`, initial value `0xFFFF_FFFF`, MSB-first words.
 //! No reflection or final XOR.
+//!
+//! The API follows embassy-stm32's `crc` module: [`Crc::feed_word`] and
+//! [`Crc::feed_words`] return the new remainder, [`Crc::read`] returns it
+//! without feeding.
 
 use crate::peripheral::RccPeripheral;
 use crate::{pac, peripherals, Peri, PeripheralType};
@@ -27,20 +31,23 @@ impl<'d, T: Instance> Crc<'d, T> {
         while T::regs().datar().read().dr() != 0xffff_ffff {}
     }
 
-    /// Feed a 32-bit word, most-significant bit first.
-    pub fn update_word(&mut self, word: u32) {
+    /// Feed a 32-bit word, most-significant bit first, and return the new CRC.
+    pub fn feed_word(&mut self, word: u32) -> u32 {
         T::regs().datar().write(|w| w.set_dr(word));
+        self.read()
     }
 
-    /// Feed the words in slice order without resetting the accumulator.
-    pub fn update_words(&mut self, words: &[u32]) {
+    /// Feed the words in slice order without resetting the accumulator and
+    /// return the new CRC.
+    pub fn feed_words(&mut self, words: &[u32]) -> u32 {
         for &word in words {
-            self.update_word(word);
+            T::regs().datar().write(|w| w.set_dr(word));
         }
+        self.read()
     }
 
     /// Read the raw CRC remainder without resetting the accumulator.
-    pub fn result(&self) -> u32 {
+    pub fn read(&self) -> u32 {
         T::regs().datar().read().dr()
     }
 
