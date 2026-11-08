@@ -62,12 +62,14 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 w.set_dmar(false);
             });
         } else if cr1.idleie() && sr.idle() {
-            // IDLE detected: no more data will come
+            // IDLE detected: no more data will come. Keep DMAR set: a
+            // one-shot read stops the DMA itself once it sees this flag, and
+            // the ring-buffered receiver must keep receiving across idle
+            // gaps, because an idle bus is not the end of the stream.
             r.ctlr1().modify(|w| {
                 // disable idle line detection
                 w.set_idleie(false);
             });
-            r.ctlr3().modify(|register| register.set_dmar(false));
         } else if cr1.tcie() && sr.tc() {
             // Transmission complete detected
             r.ctlr1().modify(|w| {
