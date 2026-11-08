@@ -46,10 +46,13 @@ impl<T: Instance> interrupt::typelevel::Handler<T::TransmitInterrupt> for Transm
 }
 
 /// Can config
+///
+/// Without the `embassy` feature, waits have no timeout and may block
+/// indefinitely if the peripheral does not make progress.
 #[non_exhaustive]
 #[derive(Copy, Clone)]
 pub struct Config {
-    /// Timeout.
+    /// Timeout. Without the `embassy` feature, waits have no deadline.
     #[cfg(feature = "embassy")]
     pub timeout: embassy_time::Duration,
 }

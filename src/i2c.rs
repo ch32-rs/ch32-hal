@@ -86,7 +86,7 @@ pub enum Duty {
 #[non_exhaustive]
 #[derive(Copy, Clone)]
 pub struct Config {
-    /// Timeout.
+    /// Timeout. Without the `embassy` feature, waits have no deadline.
     #[cfg(feature = "embassy")]
     pub timeout: embassy_time::Duration,
     pub duty: Duty,
@@ -149,6 +149,9 @@ fn timing(input: Hertz, frequency: Hertz, duty: Duty) -> Timing {
 }
 
 /// I2C driver.
+///
+/// Without the `embassy` feature, operations have no timeout and may wait
+/// indefinitely if the bus or peripheral does not make progress.
 pub struct I2c<'d, T: Instance, M: Mode> {
     scl: Peri<'d, AnyPin>,
     sda: Peri<'d, AnyPin>,

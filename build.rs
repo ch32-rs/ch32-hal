@@ -490,12 +490,6 @@ fn main() {
     if !usb_l1fs {
         pin_signals.retain(|key, _| key.0 != "usb");
     }
-    // `crate::usbfs` on H4 is the OTG-v2 driver, which only exists with the
-    // `embassy` feature (see `src/lib.rs`), so its pin rows follow it.
-    let embassy = env::var_os("CARGO_FEATURE_EMBASSY").is_some();
-    if !embassy {
-        pin_signals.retain(|key, _| key.0 != "usbfs");
-    }
     // No pin row is dropped on CH32H4 today: SPI is `version: h4` but keeps
     // the V3 layout, and CAN and USBHS reuse the V4x7 drivers. ADC and DAC are
     // not in this table: their pin macros live inside the gated modules and

@@ -44,6 +44,8 @@ pub mod mode {
     impl_mode!(NonBlocking);
 }
 
+// Without an Embassy time driver, hardware waits have no deadline and may
+// block indefinitely if the peripheral or bus does not make progress.
 #[derive(Copy, Clone)]
 struct Timeout {
     #[cfg(feature = "embassy")]
@@ -156,9 +158,7 @@ pub mod otg_fs;
 
 /// H4's FS controller (`kind: usbfs` / `usbfs_h4`) is the same OTG-v2 device
 /// block as `crate::otg_fs`, at its own base address, so it reuses that driver.
-/// That driver waits on `embassy-time` during bring-up, so it only exists with
-/// the `embassy` feature.
-#[cfg(all(usbfs_h4, feature = "embassy"))]
+#[cfg(usbfs_h4)]
 #[path = "otg_fs/mod.rs"]
 pub mod usbfs;
 
@@ -194,8 +194,14 @@ pub mod can;
 #[path = "can/v4x7.rs"]
 pub mod can;
 // The V4x7 driver targets its own 10/100 `emac` register set; H4 has a
-// separate gigabit block (`emac_h4`) with `PHY_CFGR` and RGMII.
-#[cfg(all(any(eth, emac), not(any(ch32v4, emac_h4))))]
+// separate gigabit block (`emac_h4`) with `PHY_CFGR` and RGMII. The V208 10M
+// driver (`eth_10m`) needs `embassy-time` for TX completion and link polling,
+// so it only exists with the `embassy` feature.
+#[cfg(all(
+    any(eth, emac),
+    not(any(ch32v4, emac_h4)),
+    any(not(eth_10m), feature = "embassy")
+))]
 pub mod eth;
 #[cfg(emac_v4x7)]
 #[path = "eth/v4x7.rs"]

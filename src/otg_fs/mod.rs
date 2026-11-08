@@ -253,7 +253,7 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
 
         regs::reset_sie(regs);
 
-        embassy_time::block_for(embassy_time::Duration::from_micros(10));
+        crate::internal::delay::block_for_us(10);
 
         // Clear all
         regs::clear_ctrl(regs);
