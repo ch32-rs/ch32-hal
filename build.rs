@@ -447,8 +447,7 @@ fn main() {
         (("spi", "NSS"), quote!(crate::spi::CsPin)),
         (("can", "TX"), quote!(crate::can::TxPin)),
         (("can", "RX"), quote!(crate::can::RxPin)),
-        // H4 does have USBHS pins, but its block is `usbhs_h4` while the module
-        // is `#[cfg(usbhs_v3)]`, so the rows are removed below on that family.
+        // H4's `usbhs_h4` block keeps the V4x7 layout and reuses that driver.
         (("usbhs", "DP"), quote!(crate::usbhs::DpPin)),
         (("usbhs", "DM"), quote!(crate::usbhs::DmPin)),
         // H4 gigabit Ethernet. FV3x also uses the `emac` kind, so these rows
@@ -473,13 +472,6 @@ fn main() {
     ]
     .into();
 
-    // Modules `lib.rs` compiles out on CH32H4 while the chip still has pins of
-    // that kind, so a row naming one would not resolve. SPI is `version: h4`
-    // but keeps the V3 layout, and CAN now reuses the V4x7 driver, so both
-    // stay. USBHS is still gated: its block is `usbhs_h4` while the module is
-    // `#[cfg(usbhs_v3)]`/`usbhs_v4x7`. ADC and DAC are not in this table:
-    // their pin macros live inside the gated modules and are emitted below.
-    //
     // WCH USBFS (`kind: usb`) has four register layouts: v1fs / v2fs / l1fs /
     // x0fs (see ch32-data docs/usb_ip.md). `crate::usbfs` is currently the
     // l1fs backend only, so pin rows for the other versions would point at a
@@ -494,9 +486,10 @@ fn main() {
     if !usb_l1fs {
         pin_signals.retain(|key, _| key.0 != "usb");
     }
-    if h4 {
-        pin_signals.retain(|key, _| !matches!(key.0, "usbhs"));
-    }
+    // No pin row is dropped on CH32H4 today: SPI is `version: h4` but keeps
+    // the V3 layout, and CAN and USBHS reuse the V4x7 drivers. ADC and DAC are
+    // not in this table: their pin macros live inside the gated modules and
+    // are emitted below.
     // The `emac` rows belong to the H4 gigabit driver. FV3x and V4x7 also use
     // the `emac` kind, but their `crate::eth` is the v1/v4x7 module, which has
     // no RGMII/MDC traits.
