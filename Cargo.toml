@@ -13,10 +13,10 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# ch32-rs/ch32-data bfc4d55 (H4 USBHS endpoint register arrays, PR #85).
+# ch32-rs/ch32-data 24d5b47 (H4 USBHS endpoint register arrays, PR #86).
 ch32-metapac = { features = [
     "rt",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "9a1460cc2a67a25a2759711809e9a13624c45b36" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "056580182123575ee2604215bc6d107fb5b618de" }
 
 # `unsafe-trust-wch-atomics`: qingke 0.8.2 refuses to build whenever the target
 # claims byte atomics unless this is set, and every A-extension target does.
@@ -61,7 +61,7 @@ embedded-storage = "0.3.1"
 # Same revision as the `[dependencies]` entry.
 ch32-metapac = { features = [
     "metadata",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "9a1460cc2a67a25a2759711809e9a13624c45b36" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "056580182123575ee2604215bc6d107fb5b618de" }
 
 proc-macro2 = "1.0"
 quote = "1.0"
