@@ -35,15 +35,16 @@ bind_interrupts!(struct Irqs {
     USBFS => InterruptHandler<peripherals::USBFS>;
 });
 
-type UsbDriver = Driver<'static, peripherals::USBFS, 3, 64>;
+type UsbDriver = Driver<'static, peripherals::USBFS, 4, 64>;
 
-/// Endpoint memory: one 64-byte packet for EP0 and one for each CDC endpoint.
-/// The driver only requires 4-byte alignment and RAM residence; the cast below
+/// Endpoint memory: one 64-byte packet for EP0 plus one for each endpoint the
+/// CDC class allocates (data IN, data OUT, and its notification endpoint). The
+/// driver only requires 4-byte alignment and RAM residence; the cast below
 /// relies on `EndpointDataBuffer64` being `repr(C, align(4))`.
 #[repr(align(4))]
-struct EndpointMemory([u8; 3 * 64]);
+struct EndpointMemory([u8; 4 * 64]);
 
-static mut ENDPOINT_MEMORY: EndpointMemory = EndpointMemory([0; 3 * 64]);
+static mut ENDPOINT_MEMORY: EndpointMemory = EndpointMemory([0; 4 * 64]);
 static mut CONFIG_DESCRIPTOR: [u8; 128] = [0; 128];
 static mut BOS_DESCRIPTOR: [u8; 32] = [0; 32];
 static mut MSOS_DESCRIPTOR: [u8; 32] = [0; 32];
@@ -90,7 +91,7 @@ async fn main(spawner: Spawner) -> ! {
         pac::RCC.ctlr().read().usbhs_pllrdy()
     );
 
-    let memory: &mut [EndpointDataBuffer64; 3] = unsafe { &mut *core::ptr::addr_of_mut!(ENDPOINT_MEMORY.0).cast() };
+    let memory: &mut [EndpointDataBuffer64; 4] = unsafe { &mut *core::ptr::addr_of_mut!(ENDPOINT_MEMORY.0).cast() };
     let driver = Driver::new(p.USBFS, p.PA12, p.PA11, memory);
 
     let mut usb_config = embassy_usb::Config::new(0xc0de, 0xcafe);
