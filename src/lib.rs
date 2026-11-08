@@ -119,6 +119,8 @@ pub mod dac;
 #[cfg(dac_h4)]
 #[path = "dac/h4.rs"]
 pub mod dac;
+#[cfg(crc)]
+pub mod crc;
 pub mod exti;
 pub mod gpio;
 // H4 flags I2C as `version: v3`, so the existing V3 driver applies directly.
@@ -145,6 +147,8 @@ pub mod spi;
 #[cfg(any(timer_x0, timer_v3, timer_h4, timer_v4x7))]
 pub mod timer;
 pub mod usart;
+#[cfg(any(iwdg, wwdg))]
+pub mod wdg;
 
 /// Shared USB endpoint-buffer helpers (not a controller driver).
 ///
