@@ -65,6 +65,12 @@ trait SealedInstance {
 #[allow(private_bounds)]
 pub trait Instance: SealedInstance + RccPeripheral + PeripheralType + 'static {}
 
+impl<'d, T: Instance> Drop for Crc<'d, T> {
+    fn drop(&mut self) {
+        T::disable();
+    }
+}
+
 foreach_peripheral!(
     (crc, $inst:ident) => {
         impl SealedInstance for peripherals::$inst {
