@@ -189,9 +189,9 @@ ch643 = ["ch32-metapac/ch643", "qingke-rt/v4c", "qingke/v4c"]
 # H4 chip features — paired with ch32-data's CH32H4 family definitions.
 # Cores: V3F (qingke-v3f, hart 0, control core) and V5F (qingke-v5f, hart
 # 1, compute core with FP + ICache). RCC, GPIO/AFIO, USART, I2C, timer,
-# DMA/DMAMUX, SPI, SDIO, RNG, ADC, DAC and flash are wired up; CAN,
-# USBHS/USBFS/USBSS and USBPD still need H4-specific drivers (separate
-# follow-up PRs).
+# DMA/DMAMUX, SPI, SDIO, RNG, ADC, DAC, flash, USBHS and USBFS are wired up;
+# CAN, USBSS and USBPD still need H4-specific drivers (separate follow-up
+# PRs).
 ch32h417qeu6-v3f = [
     "ch32-metapac/ch32h417qeu6-qingke-v3f",
     "qingke-rt/v3f",

@@ -1,6 +1,10 @@
 //! USB_FS and OTG_FS device mode peripheral driver
 //! Note that this currently only implements device mode
 //!
+//! Serves both register models of the FS device block: `kind: otg`
+//! (`otg_v2`, the V2/V3 OTG parts) and `kind: usbfs` (`usbfs_h4`, CH32H417).
+//! The field-name differences live in the private `regs` module.
+//!
 //! <div class="warning">
 //! There's a lot of TODOs and panics where things are not implemented
 //! </div>
@@ -30,17 +34,19 @@ use core::marker::PhantomData;
 use core::task::Poll;
 
 use bitmaps::Bitmap;
-use ch32_metapac::otg::vals::{EpRxResponse, EpTxResponse, UsbToken};
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_usb_driver::{Direction, EndpointAddress, EndpointInfo, EndpointType, Event};
 use endpoint::{ControlPipe, Endpoint};
+use regs::{EpRxResponse, EpTxResponse, Regs, UsbToken};
 
+#[cfg(otg_v2)]
 use crate::gpio::{AFType, Speed};
 use crate::interrupt::typelevel::Interrupt;
 use crate::usb::{Dir, EndpointBufferAllocator, EndpointDataBuffer, In, Out};
 use crate::{interrupt, peripherals, Peri, PeripheralType, RccPeripheral};
 
 pub mod endpoint;
+mod regs;
 
 // TODO: We technically support 16, but we only allow 8 for now (0, 1-7).
 const MAX_NR_EP: usize = 8;
@@ -57,28 +63,28 @@ pub struct InterruptHandler<T: Instance> {
 impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
     unsafe fn on_interrupt() {
         let regs = T::regs();
-        let int_fg = regs.int_fg().read();
+        let int_fg = regs::int_fg(regs);
 
-        if int_fg.fifo_ov() {
+        if int_fg.fifo_ov {
             panic!("overflow");
         }
 
         // All the interrupt we handle
-        if int_fg.suspend() || int_fg.transfer() || int_fg.bus_rst() {
+        if int_fg.suspend || int_fg.transfer || int_fg.bus_rst {
             T::Interrupt::disable();
 
             // Bus stuff we wakup bus
-            if int_fg.bus_rst() || int_fg.suspend() {
+            if int_fg.bus_rst || int_fg.suspend {
                 BUS_WAKER.wake();
             }
 
-            if int_fg.transfer() {
-                let status = regs.int_st().read();
+            if int_fg.transfer {
+                let status = regs::int_st(regs);
 
-                let token = status.mask_token();
+                let token = status.token;
                 match token {
                     UsbToken::IN | UsbToken::OUT => {
-                        let ep = status.mask_uis_endp();
+                        let ep = status.ep;
 
                         if ep as usize >= MAX_NR_EP {
                             error!("[USBFS] Unexpected EP: {} got token: {:#x}", ep, token.to_bits());
@@ -95,8 +101,8 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
         }
 
         // Clear the host sof, we are in device mode.... It's garbage
-        if int_fg.hst_sof() {
-            regs.int_fg().write(|v| v.set_hst_sof(true));
+        if int_fg.hst_sof {
+            regs::clear_hst_sof(regs);
         }
     }
 }
@@ -120,8 +126,15 @@ where
     ) -> Self {
         assert!(ep_buffer.len() > 0);
 
-        dp.set_as_af_output(AFType::OutputPushPull, Speed::High);
-        dm.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        // RM table 9-12: on H4 the FS controller drives DP/DM itself once it
+        // is clocked, so the pins need no alternate-function setup.
+        #[cfg(otg_v2)]
+        {
+            dp.set_as_af_output(AFType::OutputPushPull, Speed::High);
+            dm.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        }
+        #[cfg(usbfs_h4)]
+        let _ = (dp, dm);
 
         T::enable_and_reset();
 
@@ -236,40 +249,25 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
         assert!(control_max_packet_size <= EP_MAX_PACKET_SIZE);
         let regs = T::regs();
 
-        regs.uep_rx_ctrl(0).write(|v| v.set_mask_r_res(EpRxResponse::NAK));
+        regs::ep_rx_ctrl_write(regs, 0, false, EpRxResponse::NAK);
 
-        regs.ctrl().write(|w| {
-            w.set_clr_all(true);
-            w.set_reset_sie(true);
-        });
+        regs::reset_sie(regs);
 
         embassy_time::block_for(embassy_time::Duration::from_micros(10));
 
         // Clear all
-        regs.ctrl().write(|_| {});
+        regs::clear_ctrl(regs);
 
-        regs.int_en().write(|w| {
-            // w.set_dev_nak(true);
-            // w.set_fifo_ov(true);
+        // Host SOF is ignored, not our usecase here
+        regs::enable_interrupts(regs);
 
-            // Host SOF is ignored, not our usecase here
-
-            w.set_suspend(true);
-            w.set_transfer(true);
-            w.set_bus_rst(true);
-        });
-
-        regs.ctrl().write(|w| {
-            w.set_int_busy(true);
-            w.set_dma_en(true);
-            w.set_dev_pu_en(true);
-        });
+        regs::enter_device_mode(regs);
 
         let ep0_buf = self.allocator.alloc_endpoint(control_max_packet_size).unwrap();
-        regs.uep_dma(0).write_value(ep0_buf.addr() as u32);
+        regs::set_ep_dma(regs, 0, ep0_buf.addr() as u32);
 
-        regs.uep_rx_ctrl(0).write(|w| w.set_mask_r_res(EpRxResponse::ACK));
-        regs.uep_tx_ctrl(0).write(|w| w.set_mask_t_res(EpTxResponse::NAK));
+        regs::ep_rx_ctrl_write(regs, 0, false, EpRxResponse::ACK);
+        regs::ep_tx_ctrl_write(regs, 0, false, EpTxResponse::NAK);
 
         critical_section::with(|_cs| {
             T::Interrupt::unpend();
@@ -298,20 +296,18 @@ impl<'d, T: Instance> Bus<'d, T> {
         let regs = T::regs();
 
         // Reset device address
-        regs.dev_ad().write(|v| {
-            v.set_mask_usb_addr(0);
-        });
+        regs::set_device_address(regs, 0);
 
         // Reset endpoint state on bus reset
         // EP0 get ACK/NAK so it can recieve setup
-        regs.uep_rx_ctrl(0).write(|v| v.set_mask_r_res(EpRxResponse::ACK));
-        regs.uep_tx_ctrl(0).write(|v| v.set_mask_t_res(EpTxResponse::NAK));
+        regs::ep_rx_ctrl_write(regs, 0, false, EpRxResponse::ACK);
+        regs::ep_tx_ctrl_write(regs, 0, false, EpTxResponse::NAK);
 
         // Mark all other EPs as NAK
         for i in 1..=7 {
             use embassy_usb_driver::Bus;
-            regs.uep_rx_ctrl(i).write(|v| v.set_mask_r_res(EpRxResponse::NAK));
-            regs.uep_tx_ctrl(i).write(|v| v.set_mask_t_res(EpTxResponse::NAK));
+            regs::ep_rx_ctrl_write(regs, i, false, EpRxResponse::NAK);
+            regs::ep_tx_ctrl_write(regs, i, false, EpTxResponse::NAK);
 
             // It looks like the HW has a bug, after reset, all EP Tx/Rx
             // are set to enabled. So we disable them here after bus reset.
@@ -326,14 +322,8 @@ where
     T: Instance,
 {
     async fn enable(&mut self) {
-        let regs = T::regs();
-
         // Enable the port
-        regs.udev_ctrl().write(|w| {
-            // Pull Down needs to be disabled because that is for HOST
-            w.set_pd_dis(true);
-            w.set_port_en(true);
-        });
+        regs::enable_port(T::regs());
 
         // Do a bus reset on "enable"
         self.bus_reset();
@@ -355,25 +345,23 @@ where
 
             let poll_res = {
                 let regs = T::regs();
-                let interrupt_flags = regs.int_fg().read();
+                let interrupt_flags = regs::int_fg(regs);
 
                 // Either Suspend or Resume has happened
-                if interrupt_flags.suspend() {
+                if interrupt_flags.suspend {
                     // Clear suspend flag
-                    regs.int_fg().write(|v| v.set_suspend(true));
+                    regs::clear_suspend(regs);
 
-                    if regs.mis_st().read().suspend() {
+                    if regs::is_suspended(regs) {
                         Poll::Ready(Event::Suspend)
                     } else {
                         Poll::Ready(Event::Resume)
                     }
-                } else if interrupt_flags.bus_rst() {
+                } else if interrupt_flags.bus_rst {
                     trace!("bus: reset");
                     self.bus_reset();
 
-                    regs.int_fg().write(|v| {
-                        v.set_bus_rst(true);
-                    });
+                    regs::clear_bus_rst(regs);
 
                     Poll::Ready(Event::Reset)
                 } else {
@@ -470,7 +458,7 @@ pin_trait!(DpPin, Instance);
 pin_trait!(DmPin, Instance);
 
 trait SealedInstance: RccPeripheral {
-    fn regs() -> crate::pac::otg::Usbd;
+    fn regs() -> Regs;
 }
 
 /// OTG_FS peripheral instance
@@ -479,12 +467,30 @@ pub trait Instance: SealedInstance + PeripheralType + 'static {
     type Interrupt: interrupt::typelevel::Interrupt;
 }
 
+#[cfg(otg_v2)]
 foreach_peripheral!(
     (otg, $inst:ident) => {
         impl SealedInstance for peripherals::$inst {
-            fn regs() -> crate::pac::otg::Usbd {
+            fn regs() -> Regs {
                 // datasheet
-                unsafe { crate::pac::otg::Usbd::from_ptr(crate::pac::OTG_FS.as_ptr()) }
+                unsafe { Regs::from_ptr(crate::pac::OTG_FS.as_ptr()) }
+            }
+        }
+
+        impl Instance for peripherals::$inst {
+            type Interrupt = crate::_generated::peripheral_interrupts::$inst::GLOBAL;
+        }
+    };
+);
+
+// H4's FS controller (`kind: usbfs`, version `h4`) is the same device block as
+// the V4x7 OTG FS, addressed at its own base (RM §26).
+#[cfg(usbfs_h4)]
+foreach_peripheral!(
+    (usbfs, $inst:ident) => {
+        impl SealedInstance for peripherals::$inst {
+            fn regs() -> Regs {
+                unsafe { Regs::from_ptr(crate::pac::USBFS.as_ptr()) }
             }
         }
 

@@ -437,6 +437,10 @@ fn main() {
         (("sdio", "D8"), quote!(crate::sdio::D8Pin)),
         (("otg", "DP"), quote!(crate::otg_fs::DpPin)),
         (("otg", "DM"), quote!(crate::otg_fs::DmPin)),
+        // H4's USBFS (`kind: usbfs`, version `h4`) is the same device block as
+        // OTG FS, so `crate::usbfs` points at the OTG-v2 driver there.
+        (("usbfs", "DP"), quote!(crate::usbfs::DpPin)),
+        (("usbfs", "DM"), quote!(crate::usbfs::DmPin)),
         (("usb", "DP"), quote!(crate::usbfs::DpPin)),
         (("usb", "DM"), quote!(crate::usbfs::DmPin)),
         (("usbd", "DP"), quote!(crate::usbd::DpPin)),
@@ -485,6 +489,12 @@ fn main() {
     });
     if !usb_l1fs {
         pin_signals.retain(|key, _| key.0 != "usb");
+    }
+    // `crate::usbfs` on H4 is the OTG-v2 driver, which only exists with the
+    // `embassy` feature (see `src/lib.rs`), so its pin rows follow it.
+    let embassy = env::var_os("CARGO_FEATURE_EMBASSY").is_some();
+    if !embassy {
+        pin_signals.retain(|key, _| key.0 != "usbfs");
     }
     // No pin row is dropped on CH32H4 today: SPI is `version: h4` but keeps
     // the V3 layout, and CAN and USBHS reuse the V4x7 drivers. ADC and DAC are
