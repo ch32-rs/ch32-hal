@@ -1,8 +1,10 @@
-//! USBSS link-training check (device mode).
+//! USBSS link-training and enumeration check (device mode).
 //!
-//! This does not enumerate yet: it brings the SuperSpeed PHY and the link
-//! state machine up, answers the Port Capability LMPs, and logs every LTSSM
-//! state change. Connect the USB-C port to a USB3 host to see training run.
+//! Brings the SuperSpeed PHY and link state machine up, answers the Port
+//! Capability LMPs, serves EP0 from a built-in vendor descriptor set, and logs
+//! every LTSSM state change. Connect the USB-C port to a USB3 host; the host
+//! should list a `c0de:cafe` device (`lsusb -v` shows bcdUSB 3.00 and the
+//! endpoint companion descriptors).
 //!
 //! ```text
 //! cargo xtask run --example usbss_link_check
@@ -59,10 +61,14 @@ async fn main(_spawner: Spawner) -> ! {
     );
 
     let mut usb = Driver::new(p.USBSS, Irqs);
-    info!("USBSS initialized, link state {}", name(usb.link_state()));
+    info!(
+        "USBSS initialized, link state {} configured={}",
+        name(usb.link_state()),
+        usb.configured()
+    );
 
     loop {
         let state = usb.wait_link_change().await;
-        info!("USBSS link -> {}", name(state));
+        info!("USBSS link -> {} configured={}", name(state), usb.configured());
     }
 }

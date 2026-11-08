@@ -7,18 +7,27 @@
 //! machine that must answer Port Capability LMPs before the host will
 //! enumerate the device.
 //!
-//! This module currently brings the link up to U0 and exposes link-state
-//! changes. Endpoint and control-transfer support are built on top of it.
+//! This module brings the link up to U0, answers the link-management
+//! handshake and implements the EP0 control pipe (enumeration). Bulk endpoint
+//! data paths are built on top of it.
 
+use core::cell::{RefCell, UnsafeCell};
 use core::marker::PhantomData;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::rcc::vals::UsbsspllRefsel;
 use crate::pac::usbss::UsbssDevice;
 use crate::{interrupt, Peri, PeripheralType, RccPeripheral};
+
+pub mod descriptors;
+
+/// Control-endpoint packet size: `4096 * 2^bMaxPacketSize0` with 9, i.e. 512.
+const EP0_MAX_PACKET: usize = 512;
 
 /// `LINK_STATUS.LINK_STATE` values (RM §27.2.6.5).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -75,7 +84,9 @@ const UP_STREAM: u32 = 2 << 16;
 struct State {
     link_waker: AtomicWaker,
     link_state: AtomicU8,
-    low_power: core::sync::atomic::AtomicBool,
+    low_power: AtomicBool,
+    ep0: Mutex<CriticalSectionRawMutex, RefCell<Ep0State>>,
+    ep0_buf: Ep0Buffer,
 }
 
 impl State {
@@ -83,8 +94,55 @@ impl State {
         Self {
             link_waker: AtomicWaker::new(),
             link_state: AtomicU8::new(LINK_STATE_UNKNOWN),
-            low_power: core::sync::atomic::AtomicBool::new(false),
+            low_power: AtomicBool::new(false),
+            ep0: Mutex::new(RefCell::new(Ep0State::new())),
+            ep0_buf: Ep0Buffer::new(),
         }
+    }
+}
+
+/// Control-transfer state carried across the SETUP, data and status stages.
+struct Ep0State {
+    descr: &'static [u8],
+    descr_pos: usize,
+    /// Bytes left to move in the data stage.
+    remaining: u16,
+    /// The next packet is already in `ep0_buf` instead of `descr`.
+    from_buffer: bool,
+    /// Address to commit once the status stage completes.
+    pending_address: Option<u8>,
+    configured: bool,
+}
+
+impl Ep0State {
+    const fn new() -> Self {
+        Self {
+            descr: &[],
+            descr_pos: 0,
+            remaining: 0,
+            from_buffer: false,
+            pending_address: None,
+            configured: false,
+        }
+    }
+}
+
+/// EP0 packet buffer, shared by both directions like the EVT example. The
+/// controller DMAs through this, so it must keep a stable address.
+#[repr(align(64))]
+struct Ep0Buffer(UnsafeCell<[u8; EP0_MAX_PACKET]>);
+
+// Safety: the buffer is only touched from the GLOBAL interrupt, and from
+// `init` before that interrupt is enabled.
+unsafe impl Sync for Ep0Buffer {}
+
+impl Ep0Buffer {
+    const fn new() -> Self {
+        Self(UnsafeCell::new([0; EP0_MAX_PACKET]))
+    }
+
+    fn as_ptr(&self) -> *mut u8 {
+        self.0.get().cast()
     }
 }
 
@@ -131,19 +189,7 @@ pub struct InterruptHandler<T: Instance> {
 
 impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
     unsafe fn on_interrupt() {
-        // Endpoint handling arrives with the control pipe. Until then, clear
-        // every write-1-to-zero flag: the SETUP/STATUS/transfer interrupts are
-        // enabled by `reset_protocol`, and a host that starts enumeration
-        // would otherwise leave them asserted and storm the core.
-        T::device().status().write(|w| {
-            w.set_uif_transfer(true);
-            w.set_udif_setup(true);
-            w.set_udif_status(true);
-            w.set_uif_rx_ping(true);
-            w.set_uif_itp(true);
-            w.set_uif_fifo_txov(true);
-            w.set_uif_fifo_rxov(true);
-        });
+        handle_global::<T>();
     }
 }
 
@@ -192,6 +238,11 @@ impl<'d, T: Instance> Driver<'d, T> {
         LinkState::from_raw(T::device().link_status().read().link_state())
     }
 
+    /// Whether the host has selected a configuration other than zero.
+    pub fn configured(&self) -> bool {
+        T::state().ep0.lock(|cell| cell.borrow().configured)
+    }
+
     /// Waits for the next link-state change.
     pub async fn wait_link_change(&mut self) -> LinkState {
         core::future::poll_fn(|cx| {
@@ -206,6 +257,223 @@ impl<'d, T: Instance> Driver<'d, T> {
         })
         .await
     }
+}
+
+/// Control-pipe requests this driver answers.
+mod request {
+    pub const GET_STATUS: u8 = 0x00;
+    pub const CLEAR_FEATURE: u8 = 0x01;
+    pub const SET_FEATURE: u8 = 0x03;
+    pub const SET_ADDRESS: u8 = 0x05;
+    pub const GET_DESCRIPTOR: u8 = 0x06;
+    pub const GET_CONFIGURATION: u8 = 0x08;
+    pub const SET_CONFIGURATION: u8 = 0x09;
+    pub const GET_INTERFACE: u8 = 0x0a;
+    pub const SET_INTERFACE: u8 = 0x0b;
+}
+
+/// Subset of the eight-byte SETUP packet the control pipe needs.
+struct Setup {
+    request_type: u8,
+    request: u8,
+    value: u16,
+    length: u16,
+}
+
+impl Setup {
+    unsafe fn read(buf: *const u8) -> Self {
+        let word = |offset: usize| u16::from_le_bytes([buf.add(offset).read(), buf.add(offset + 1).read()]);
+        Self {
+            request_type: buf.read(),
+            request: buf.add(1).read(),
+            value: word(2),
+            length: word(6),
+        }
+    }
+}
+
+/// GLOBAL interrupt: SETUP, STATUS and transfer completions.
+unsafe fn handle_global<T: Instance>() {
+    let d = T::device();
+    let status = d.status().read();
+
+    if status.udif_setup() && !status.udif_status() {
+        handle_setup::<T>(d);
+        d.status().write(|w| w.set_udif_setup(true));
+    } else if status.udif_status() {
+        d.status().write(|w| w.set_udif_status(true));
+
+        // The address takes effect only after the status stage, as the USB
+        // specification requires.
+        let address = T::state().ep0.lock(|cell| cell.borrow_mut().pending_address.take());
+        if let Some(address) = address {
+            d.usbss_ctrl().modify(|w| w.set_dev_addr(address.into()));
+        }
+
+        // Return EP0 to idle for the next transfer.
+        d.uep0_tx_ctrl().write(|_| {});
+        d.uep0_rx_ctrl().write(|_| {});
+    } else if status.uif_transfer() {
+        d.status().write(|w| w.set_uif_transfer(true));
+
+        if status.ep_dir() && status.ep_id() == 0 {
+            let remaining = T::state().ep0.lock(|cell| cell.borrow().remaining);
+            if remaining == 0 {
+                // The last packet went out; ready the OUT status stage.
+                d.uep0_tx_ctrl().write(|w| w.set_ep0_tx_res(1));
+                d.uep0_rx_ctrl().write(|w| {
+                    w.set_ep0_rx_res(1);
+                    w.set_ep0_rx_erdy(true);
+                });
+            } else {
+                ep0_send_chunk::<T>(d, false);
+            }
+        }
+    } else {
+        // Clear every write-1-to-zero flag so a stray interrupt cannot storm
+        // the core.
+        d.status().write(|w| {
+            w.set_uif_transfer(true);
+            w.set_udif_setup(true);
+            w.set_udif_status(true);
+            w.set_uif_rx_ping(true);
+            w.set_uif_itp(true);
+            w.set_uif_fifo_txov(true);
+            w.set_uif_fifo_rxov(true);
+        });
+    }
+}
+
+unsafe fn handle_setup<T: Instance>(d: UsbssDevice) {
+    let buf = T::state().ep0_buf.as_ptr();
+    let setup = Setup::read(buf);
+
+    // Only standard requests are implemented. Class and vendor requests stall
+    // until there is a control trait to dispatch them to.
+    let mut stall = setup.request_type & 0x60 != 0;
+    let in_dir = setup.request_type & 0x80 != 0;
+    let mut length = setup.length;
+    let mut descr: &'static [u8] = &[];
+    let mut from_buffer = false;
+    let mut address = None;
+    let mut configuration = None;
+
+    if !stall {
+        match setup.request {
+            request::GET_DESCRIPTOR => match descriptors::get((setup.value >> 8) as u8, setup.value as u8) {
+                Some(found) => descr = found,
+                None => stall = true,
+            },
+            request::SET_ADDRESS => address = Some((setup.value & 0x7f) as u8),
+            request::SET_CONFIGURATION => {
+                // Only configuration 1 exists, plus the unconfigured state.
+                if setup.value <= 1 {
+                    configuration = Some(setup.value == 1);
+                } else {
+                    stall = true;
+                }
+            }
+            request::GET_CONFIGURATION => {
+                let configured = T::state().ep0.lock(|cell| cell.borrow().configured);
+                buf.write(configured as u8);
+                length = length.min(1);
+                from_buffer = true;
+            }
+            request::GET_STATUS => {
+                // Bus powered, no remote wakeup, no halted endpoints.
+                buf.write(0);
+                buf.add(1).write(0);
+                length = length.min(2);
+                from_buffer = true;
+            }
+            request::GET_INTERFACE => {
+                buf.write(0);
+                length = length.min(1);
+                from_buffer = true;
+            }
+            request::CLEAR_FEATURE | request::SET_FEATURE | request::SET_INTERFACE => {}
+            _ => stall = true,
+        }
+    }
+
+    if stall {
+        d.uep0_tx_ctrl().write(|w| w.set_ep0_tx_res(2));
+        d.uep0_rx_ctrl().write(|w| {
+            w.set_ep0_rx_res(2);
+            w.set_ep0_rx_erdy(true);
+        });
+        return;
+    }
+
+    T::state().ep0.lock(|cell| {
+        let mut ep0 = cell.borrow_mut();
+        ep0.descr = descr;
+        ep0.descr_pos = 0;
+        ep0.remaining = length;
+        ep0.from_buffer = from_buffer;
+        if let Some(address) = address {
+            ep0.pending_address = Some(address);
+        }
+        if let Some(configured) = configuration {
+            ep0.configured = configured;
+        }
+    });
+
+    if in_dir {
+        if length == 0 {
+            // No data stage: ready the OUT status stage directly.
+            d.uep0_rx_ctrl().write(|w| {
+                w.set_ep0_rx_res(1);
+                w.set_ep0_rx_erdy(true);
+            });
+        } else {
+            ep0_send_chunk::<T>(d, true);
+        }
+    } else if length == 0 {
+        // The status stage is an IN zero-length packet.
+        d.uep0_tx_ctrl().write(|w| {
+            w.set_ep0_tx_res(1);
+            w.set_ep0_tx_erdy(true);
+        });
+        d.uep0_rx_ctrl().write(|w| {
+            w.set_ep0_rx_res(1);
+            w.set_ep0_rx_erdy(true);
+        });
+    } else {
+        d.uep0_rx_ctrl().write(|w| {
+            w.set_ep0_rx_res(1);
+            w.set_ep0_rx_erdy(true);
+        });
+    }
+}
+
+/// Pushes the next data-stage packet into the EP0 buffer and arms ERDY.
+unsafe fn ep0_send_chunk<T: Instance>(d: UsbssDevice, first: bool) {
+    let buf = T::state().ep0_buf.as_ptr();
+    let mut seq = 0;
+
+    let len = T::state().ep0.lock(|cell| {
+        let mut ep0 = cell.borrow_mut();
+        let len = (ep0.remaining as usize).min(EP0_MAX_PACKET);
+        if !ep0.from_buffer {
+            core::ptr::copy_nonoverlapping(ep0.descr.as_ptr().add(ep0.descr_pos), buf, len);
+            ep0.descr_pos += len;
+        }
+        ep0.remaining -= len as u16;
+        if !first {
+            // The hardware auto-increments the sequence number; mirror the
+            // EVT example, which reads it back and adds one.
+            seq = (d.uep0_tx_ctrl().read().ep0_tx_seq() + 1) & 0x1f;
+        }
+        len
+    });
+
+    d.uep0_tx_ctrl().write(|w| {
+        w.set_ep0_tx_len(len as u16);
+        w.set_ep0_tx_seq(seq);
+        w.set_ep0_tx_res(1);
+        w.set_ep0_tx_erdy(true);
+    });
 }
 
 unsafe fn init<T: Instance>() {
@@ -260,6 +528,13 @@ unsafe fn init<T: Instance>() {
     reset_protocol(d);
 
     phy_tuning(d);
+
+    // EP0: both directions share one 512-byte buffer, as in the EVT example.
+    let buf = T::state().ep0_buf.as_ptr() as u32;
+    d.uep0_tx_ctrl().write(|_| {});
+    d.uep0_rx_ctrl().write(|_| {});
+    d.u3ep0_tx_dma().write(|w| w.set_u3ep0_tx_dma(buf));
+    d.u3ep0_rx_dma().write(|w| w.set_u3ep0_rx_dma(buf));
 }
 
 /// Resets the protocol/FIFO layer and re-enables the device interrupts
