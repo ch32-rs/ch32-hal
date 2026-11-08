@@ -1,4 +1,9 @@
-//! USBFS device-mode driver for the WCH `usb_l1fs` IP (CH32L103).
+//! USBFS device-mode driver for the WCH **`usb_l1fs`** layout (CH32L103).
+//!
+//! Manual name: "USB 全速主机/设备控制器（USBFS）" (CH32L103RM §20).
+//! This is one register layout of the shared WCH FS (`UEP*`) IP family;
+//! `v1fs` / `v2fs` / `x0fs` / OTG / H4-USBFS are siblings, not this module.
+//! Census and rename plan: `ch32-data` `docs/usb_ip.md`.
 //!
 //! Register layout follows `ch32-data` `usb_l1fs.yaml` / CH32L103RM 表 20-3:
 //! combined 16-bit `UEP_CTRL` (TX low byte, RX high byte), 15-bit `UEP_DMA`,

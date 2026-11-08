@@ -480,8 +480,12 @@ fn main() {
     // `#[cfg(usbhs_v3)]`/`usbhs_v4x7`. ADC and DAC are not in this table:
     // their pin macros live inside the gated modules and are emitted below.
     //
-    // `kind: usb` is shared by v1fs / v2fs / x0fs / l1fs, but `crate::usbfs`
-    // only compiles for `usb_l1fs`. Drop the pin rows on every other USB FS.
+    // WCH USBFS (`kind: usb`) has four register layouts: v1fs / v2fs / l1fs /
+    // x0fs (see ch32-data docs/usb_ip.md). `crate::usbfs` is currently the
+    // l1fs backend only, so pin rows for the other versions would point at a
+    // missing module — keep them only on l1fs chips. OTG (`kind: otg`) and
+    // H4 USBFS (`kind: usbfs`) are the same FS IP with different kind strings
+    // and are handled by their own rows above / elsewhere.
     let usb_l1fs = METADATA.peripherals.iter().any(|p| {
         p.registers
             .as_ref()
