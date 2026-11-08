@@ -222,7 +222,14 @@ impl<T: Instance> Drop for RingBufferedUartRx<'_, T> {
 fn clear_idle_flag<T: Instance>() -> ch32_metapac::usart::regs::Statr {
     let r = T::regs();
     let sr = r.statr().read();
-    let _ = r.datar().read();
+    // DATAR is shared with the DMA: if a byte is pending there when the CPU
+    // reads it, the DMA request disappears and the byte is lost. Clear only
+    // when a flag is set; steady reception leaves none set, and the DMA keeps
+    // the byte (RM §17.10.1: IDLE and the error flags are cleared by a STATR
+    // read followed by a DATAR read).
+    if sr.idle() || sr.pe() || sr.fe() || sr.ne() || sr.ore() {
+        let _ = r.datar().read();
+    }
     sr
 }
 
