@@ -55,7 +55,8 @@ edrv-bme280 = "0.1.1"
 embedded-sdmmc = { version = "0.9.0", default-features = false }
 exfat-embedded = { version = "0.1.3", default-features = false }
 
-# `usbhs_cdc`: the USB device stack over the HAL's USBHS driver.
+# `usbhs_cdc` / `usbfs_cdc`: the USB device stack over the HAL's USBHS and
+# USBFS drivers.
 embassy-usb = { version = "0.6.0", optional = true, default-features = false }
 
 [features]
@@ -63,7 +64,7 @@ embassy-usb = { version = "0.6.0", optional = true, default-features = false }
 # owns the same counter, so this stays off unless the example asks for it.
 embassy = ["ch32-hal/embassy", "dep:embassy-executor", "dep:embassy-time"]
 
-# `usbhs_cdc`: Embassy plus the USB device stack.
+# `usbhs_cdc` / `usbfs_cdc`: Embassy plus the USB device stack.
 usb = ["embassy", "dep:embassy-usb"]
 
 # `eth_internal` / `eth_bench`: Embassy + the Ethernet stack. `ch32-hal/defmt`
@@ -100,6 +101,11 @@ required-features = ["embassy"]
 [[bin]]
 name = "usbhs_cdc"
 path = "src/bin/usbhs_cdc.rs"
+required-features = ["usb"]
+
+[[bin]]
+name = "usbfs_cdc"
+path = "src/bin/usbfs_cdc.rs"
 required-features = ["usb"]
 
 [profile.release]
