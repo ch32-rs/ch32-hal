@@ -211,7 +211,9 @@ impl<T: Instance> Drop for RingBufferedUartRx<'_, T> {
         self.ring_buf.request_stop();
         self.rx.as_ref().map(|x| x.set_as_disconnected());
         self.rts.as_ref().map(|x| x.set_as_disconnected());
-        T::disable();
+        // This drop owns the RX half's refcount taken by `UartRx::new_inner`;
+        // `mem::forget` in `into_ring_buffered` transferred it here.
+        super::disable_peripheral::<T>();
     }
 }
 
