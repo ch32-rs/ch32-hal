@@ -13,10 +13,12 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# ch32-rs/ch32-data eacf3ae (H4 USBFS endpoint arrays; otg/v2fs UEP_T_LEN width).
+# ch32-rs/ch32-data usbss-h4-data branch (USBSS register gaps + EXP_NUMP width).
+# Local path while the data change is in review; switch back to a git rev before
+# opening the HAL PR.
 ch32-metapac = { features = [
     "rt",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "ebae7b71c2450b818de11228c5005265ae89b628" }
+], path = "../ch32-data/build/ch32-metapac" }
 
 # `unsafe-trust-wch-atomics`: qingke 0.8.2 refuses to build whenever the target
 # claims byte atomics unless this is set, and every A-extension target does.
@@ -58,10 +60,10 @@ sdio-host = "0.5.0"
 embedded-storage = "0.3.1"
 
 [build-dependencies]
-# Same revision as the `[dependencies]` entry.
+# Same source as the `[dependencies]` entry.
 ch32-metapac = { features = [
     "metadata",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "ebae7b71c2450b818de11228c5005265ae89b628" }
+], path = "../ch32-data/build/ch32-metapac" }
 
 proc-macro2 = "1.0"
 quote = "1.0"

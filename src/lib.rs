@@ -182,6 +182,10 @@ pub mod usbhs;
 #[path = "usbhs/v4x7/mod.rs"]
 pub mod usbhs;
 
+/// USB 3.0 SuperSpeed device (`kind: usbss`, CH32H417) — RM §27.
+#[cfg(usbss_h4)]
+pub mod usbss;
+
 // H4's USBPD register layout differs from V3 — gate out for now.
 #[cfg(all(usbpd, not(ch32h4)))]
 pub mod usbpd;
