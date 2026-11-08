@@ -68,6 +68,10 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 
 **V00X** covers CH32V002 / CH32V004 / CH32V005 / CH32V006 / CH32V007 and CH32M007.
 
+I2C also has slave support (blocking, interrupt and DMA); see
+[`examples/ch32l103/src/bin/i2c_slave.rs`](examples/ch32l103/src/bin/i2c_slave.rs),
+validated on the CH32L103 against a CH32V203 master.
+
 Dual-core examples for the CH32H417 (separate V3F and V5F images, a shared
 mailbox, `xtask` for flash/report) live in [`examples/ch32h417`](examples/ch32h417).
 
