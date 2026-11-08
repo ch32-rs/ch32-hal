@@ -2,7 +2,8 @@
 #![no_main]
 
 //! Self-test for `RingBufferedUartRx` on USART1: continuous DMA reception
-//! across idle gaps, a 100 kB randomised stress stream at 500 kbaud, overrun
+//! across idle gaps, three 500 kbaud stress shapes (random chunks and gaps,
+//! back-to-back, and short bursts at the idle-line boundary), overrun
 //! recovery through `request_pause`/`set_count`, and the V4x7 clock refcount
 //! on drop.
 //!
@@ -41,57 +42,90 @@ async fn read_full<T: usart::Instance>(rx: &mut RingBufferedUartRx<'_, T>, buf: 
 }
 
 const STRESS_BAUD: u32 = 500_000;
-const STRESS_BYTES: usize = 100_000;
 
-/// RX-side failure of the stress phase.
+/// Spacing between transmitted chunks.
+#[derive(Clone, Copy)]
+enum Gap {
+    /// Back-to-back: no idle line between chunks.
+    None,
+    /// A fixed gap, chosen to always cross the idle-line threshold.
+    Fixed(u64),
+    /// A pseudo-random gap of `0..max` microseconds.
+    RandomUpTo(u32),
+}
+
+/// RX-side failure of a stress phase.
 enum StressError {
     Uart(usart::Error),
     /// The received byte diverged from the expected stream at this offset.
     Mismatch(usize),
 }
 
-/// Drive [`STRESS_BYTES`] bytes in pseudo-random chunks separated by idle gaps
-/// of 0..1000 us, following embassy-stm32's `usart_rx_ringbuffered` test.
-/// Byte `i` of the stream is `i as u8`, so the receiver can verify it without
-/// carrying state across reads.
-async fn stress_tx<T: usart::Instance>(tx: &mut usart::UartTx<'_, T, Async>) -> Result<(), usart::Error> {
-    let mut rng: u32 = 0x2545_f491;
+/// Byte `offset` of the stream seeded with `seed`. Each phase uses its own
+/// seed so data left over from a previous phase cannot accidentally match.
+fn sequence_byte(offset: usize, seed: u32) -> u8 {
+    let word = seed.wrapping_add((offset / 4) as u32);
+    word.to_le_bytes()[offset % 4]
+}
+
+/// Drive `total` bytes in chunks of `chunk_min..=chunk_max` bytes separated by
+/// `gap`. The chunk/gap patterns follow embassy-stm32's
+/// `usart_rx_ringbuffered` and `lpuart_bbq_rx_continuous` tests.
+async fn stress_tx<T: usart::Instance>(
+    tx: &mut usart::UartTx<'_, T, Async>,
+    seed: u32,
+    total: usize,
+    chunk_min: usize,
+    chunk_max: usize,
+    gap: Gap,
+) -> Result<(), usart::Error> {
+    let mut rng: u32 = seed ^ 0x2545_f491;
     let mut sent = 0usize;
     let mut chunk = [0u8; 256];
 
-    while sent < STRESS_BYTES {
+    while sent < total {
         rng ^= rng << 13;
         rng ^= rng >> 17;
         rng ^= rng << 5;
 
-        let len = ((rng as usize & 0xff) + 1).min(STRESS_BYTES - sent);
+        let span = chunk_max - chunk_min + 1;
+        let len = (chunk_min + rng as usize % span).min(total - sent);
         for (offset, byte) in chunk[..len].iter_mut().enumerate() {
-            *byte = (sent + offset) as u8;
+            *byte = sequence_byte(sent + offset, seed);
         }
         tx.write(&chunk[..len]).await?;
         sent += len;
 
-        Timer::after_micros(u64::from((rng >> 16) % 1_000)).await;
+        match gap {
+            Gap::None => {}
+            Gap::Fixed(micros) => Timer::after_micros(micros).await,
+            Gap::RandomUpTo(max) => Timer::after_micros(u64::from(rng >> 16) % u64::from(max)).await,
+        }
     }
     tx.flush().await
 }
 
-/// Verify the stress stream positionally, in whatever sized pieces the ring
-/// buffer hands out.
-async fn stress_rx<T: usart::Instance>(rx: &mut RingBufferedUartRx<'_, T>) -> Result<(), StressError> {
+/// Verify the stream positionally, in whatever sized pieces the ring buffer
+/// hands out.
+async fn stress_rx<T: usart::Instance>(
+    rx: &mut RingBufferedUartRx<'_, T>,
+    seed: u32,
+    total: usize,
+) -> Result<(), StressError> {
     let mut received = 0usize;
     let mut buf = [0u8; 64];
 
-    while received < STRESS_BYTES {
+    while received < total {
         let len = rx.read(&mut buf).await.map_err(StressError::Uart)?;
         for (offset, &byte) in buf[..len].iter().enumerate() {
-            if byte != (received + offset) as u8 {
-                let at = received + offset;
+            let at = received + offset;
+            let want = sequence_byte(at, seed);
+            if byte != want {
                 defmt::error!(
                     "uart_ring: mismatch at {}: got {=u8}, want {=u8}, chunk {}, sr {=u32:08x}",
                     at,
                     byte,
-                    at as u8,
+                    want,
                     len,
                     pac::USART1.statr().read().0
                 );
@@ -101,6 +135,41 @@ async fn stress_rx<T: usart::Instance>(rx: &mut RingBufferedUartRx<'_, T>) -> Re
         received += len;
     }
     Ok(())
+}
+
+/// Run one stress phase; failures are reported under `code..=code + 3`.
+async fn run_stress<T: usart::Instance>(
+    tx: &mut usart::UartTx<'_, T, Async>,
+    rx: &mut RingBufferedUartRx<'_, T>,
+    seed: u32,
+    total: usize,
+    chunk_min: usize,
+    chunk_max: usize,
+    gap: Gap,
+    code: u32,
+) {
+    let result = with_timeout(
+        Duration::from_secs(20),
+        join(
+            stress_tx(tx, seed, total, chunk_min, chunk_max, gap),
+            stress_rx(rx, seed, total),
+        ),
+    )
+    .await;
+    report_check!(UART_RING_RESULT, result.is_ok(), code, "stress phase timed out");
+    let (tx_result, rx_result) = result.unwrap();
+    match rx_result {
+        Ok(()) => {}
+        Err(StressError::Mismatch(at)) => {
+            defmt::error!("uart_ring: stress mismatch at byte {}", at);
+            report_fail!(UART_RING_RESULT, code + 1, "stress stream mismatch");
+        }
+        Err(StressError::Uart(err)) => {
+            defmt::error!("uart_ring: stress rx error {}", err);
+            report_fail!(UART_RING_RESULT, code + 2, "stress rx error");
+        }
+    }
+    report_check!(UART_RING_RESULT, tx_result.is_ok(), code + 3, "stress tx error");
 }
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
@@ -212,34 +281,36 @@ async fn main(_spawner: Spawner) -> ! {
     defmt::info!("uart_ring: overrun recovery pass");
     report_set!(UART_RING_RESULT, 3);
 
-    // 3. Stress: 500 kbaud, random chunk sizes and idle gaps, 100,000 bytes
-    //    verified positionally. The ring buffer must keep up without losing a
-    //    byte; the baud rate only exists in the shared BRR, so reconfiguring
-    //    the TX half retunes the receiver too.
+    // 3. Stress at 500 kbaud in three traffic shapes: random chunks and gaps
+    //    (embassy's `usart_rx_ringbuffered` pattern), back-to-back chunks with
+    //    no idle line at all, and 61-byte bursts separated by a gap that
+    //    always crosses the idle-line threshold. The ring buffer must keep up
+    //    without losing a byte. The baud rate only exists in the shared BRR,
+    //    so reconfiguring the TX half retunes the receiver too.
     let mut fast = usart::Config::default();
     fast.baudrate = STRESS_BAUD;
     tx.set_config(&fast).unwrap();
-    let result = with_timeout(Duration::from_secs(20), join(stress_tx(&mut tx), stress_rx(&mut rx))).await;
-    report_check!(UART_RING_RESULT, result.is_ok(), 23, "stress phase timed out");
-    let (tx_result, rx_result) = result.unwrap();
-    match rx_result {
-        Ok(()) => {}
-        Err(StressError::Mismatch(at)) => {
-            defmt::error!("uart_ring: stress mismatch at byte {}", at);
-            report_fail!(UART_RING_RESULT, 24, "stress stream mismatch");
-        }
-        Err(StressError::Uart(err)) => {
-            defmt::error!("uart_ring: stress rx error {}", err);
-            report_fail!(UART_RING_RESULT, 25, "stress rx error");
-        }
-    }
-    report_check!(UART_RING_RESULT, tx_result.is_ok(), 26, "stress tx error");
+
+    run_stress(
+        &mut tx,
+        &mut rx,
+        0x1111_1111,
+        100_000,
+        1,
+        256,
+        Gap::RandomUpTo(1_000),
+        23,
+    )
+    .await;
+    defmt::info!("uart_ring: stress random pass");
+
+    run_stress(&mut tx, &mut rx, 0x2222_2222, 100_000, 256, 256, Gap::None, 27).await;
+    defmt::info!("uart_ring: stress back-to-back pass");
+
+    run_stress(&mut tx, &mut rx, 0x3333_3333, 61 * 1024, 61, 61, Gap::Fixed(100), 31).await;
+    defmt::info!("uart_ring: stress idle-boundary pass");
+
     tx.set_config(&Default::default()).unwrap();
-    defmt::info!(
-        "uart_ring: stress pass ({} bytes at {} baud)",
-        STRESS_BYTES,
-        STRESS_BAUD
-    );
     report_set!(UART_RING_RESULT, 4);
 
     // 4. Clock refcount: the ring buffer owns the RX half's reference taken by
@@ -250,14 +321,14 @@ async fn main(_spawner: Spawner) -> ! {
     report_check!(
         UART_RING_RESULT,
         pac::USART1.ctlr1().read().ue() && pac::USART1.ctlr1().read().te(),
-        30,
+        40,
         "dropping RX disabled the USART while TX was alive"
     );
     let alive = with_timeout(Duration::from_millis(100), tx.write(b"TX-ALIVE\r\n")).await;
     report_check!(
         UART_RING_RESULT,
         alive.is_ok(),
-        31,
+        41,
         "TX died after dropping the ring-buffered RX"
     );
     let _ = with_timeout(Duration::from_millis(100), tx.flush()).await;
@@ -269,7 +340,7 @@ async fn main(_spawner: Spawner) -> ! {
     report_check!(
         UART_RING_RESULT,
         !ctlr1.ue() && !ctlr3.dmar(),
-        32,
+        42,
         "the last user did not disable the USART"
     );
 
