@@ -124,8 +124,11 @@ commands:
 flashing:
   --flasher wlink        (default) WCH's tool; picks the first probe, but the
                          final image cannot be read back, so it is unverified
-  --flasher probe-rs     verifies every image and resets once at the end; set
-                         PROBE_RS_PROBE=VID:PID:SERIAL when two probes are up
+  --flasher probe-rs     verifies every image and resets once at the end
+  WLINK_PROBE=VID:PID:SERIAL (or a wlink index) pins every wlink call to one
+                         probe; PROBE_RS_PROBE names the probe for probe-rs, and
+                         both tools accept the same string, so set both or point
+                         one at the other's value
 
 what gets programmed:
   (default)      the boot core alone (same as --v3f-only); the V5F region keeps
@@ -307,6 +310,36 @@ fn example_elf(core: &Core, example: &str) -> PathBuf {
         .join(example)
 }
 
+/// Probe selector passed to every `wlink` call, if one is configured.
+///
+/// Without it `wlink` uses whichever WCH-Link it enumerates first, and that
+/// order changes when probes are replugged or when one switches between RV and
+/// DAP mode — so with more than one probe attached a flash can land on the
+/// wrong board. `WLINK_PROBE` (or `PROBE_RS_PROBE`, which `probe-rs` uses for
+/// the same purpose) takes an index or `VID:PID:SERIAL`.
+fn wlink_selector_args() -> Vec<String> {
+    match env::var("WLINK_PROBE").or_else(|_| env::var("PROBE_RS_PROBE")) {
+        Ok(selector) if !selector.is_empty() => vec!["-d".to_string(), selector],
+        _ => Vec::new(),
+    }
+}
+
+/// Runs `wlink` with the configured probe selector, from `dir`.
+fn run_wlink(args: &[&str], dir: &Path) {
+    let selector = wlink_selector_args();
+    let mut all: Vec<&str> = selector.iter().map(String::as_str).collect();
+    all.extend_from_slice(args);
+    run("wlink", &all, dir);
+}
+
+/// `run_wlink` with a deadline; see [`run_timed`].
+fn run_wlink_timed(args: &[&str], dir: &Path, timeout: Duration) -> bool {
+    let selector = wlink_selector_args();
+    let mut all: Vec<&str> = selector.iter().map(String::as_str).collect();
+    all.extend_from_slice(args);
+    run_timed("wlink", &all, dir, timeout)
+}
+
 /// Runs a program from `dir`, failing the xtask if it does.
 fn run(program: &str, args: &[&str], dir: &Path) {
     println!("  {} {}", program, args.join(" "));
@@ -369,12 +402,12 @@ fn recover(attempt: u32) {
         return;
     }
     println!("  resetting the chip and re-cycling the link mode before the retry ...");
-    run_timed("wlink", &["reset", "halt"], &root(), QUICK_TIMEOUT);
+    run_wlink_timed(&["reset", "halt"], &root(), QUICK_TIMEOUT);
     thread::sleep(RECOVER_SETTLE);
-    run_timed("wlink", &["mode-switch", "--dap"], &root(), QUICK_TIMEOUT);
+    run_wlink_timed(&["mode-switch", "--dap"], &root(), QUICK_TIMEOUT);
     thread::sleep(RECOVER_SETTLE);
     for _ in 0..2 {
-        if run_timed("wlink", &["mode-switch", "--rv"], &root(), QUICK_TIMEOUT) {
+        if run_wlink_timed(&["mode-switch", "--rv"], &root(), QUICK_TIMEOUT) {
             break;
         }
         thread::sleep(RECOVER_SETTLE);
@@ -405,10 +438,12 @@ fn build_core(job: &Job) {
     }
     // `embassy_systick` and `can_async_check` are the V3F examples that start
     // the SysTick time driver; the blocking examples keep that counter for
-    // `hal::delay`. The `eth_*` examples need Embassy plus the Ethernet stack.
+    // `hal::delay`. The `eth_*` examples need Embassy plus the Ethernet stack,
+    // and `usbhs_cdc` needs Embassy plus the USB device stack.
     let feature = match job.example.as_str() {
         "embassy_systick" | "can_async_check" => Some("embassy"),
         "eth_internal" | "eth_bench" => Some("eth"),
+        "usbhs_cdc" => Some("usb"),
         _ => None,
     };
     if let Some(feature) = feature {
@@ -531,7 +566,7 @@ fn flash(opts: &Options, watch: bool) {
                 let elf = example_elf(core, &job.example);
                 println!("flashing {} ({}) ...", core.name, job.example);
                 if i + 1 == jobs.len() {
-                    run("wlink", &["flash", elf.to_str().expect("utf-8 path")], &root());
+                    run_wlink(&["flash", elf.to_str().expect("utf-8 path")], &root());
                 } else {
                     let args = ["flash", "--no-run", elf.to_str().expect("utf-8 path")];
                     program_verified(core, &job.example, &elf, &args, true);
@@ -589,7 +624,7 @@ fn flash(opts: &Options, watch: bool) {
 fn program_verified(core: &Core, example: &str, elf: &Path, args: &[&str], check: bool) {
     let expected = flatten(elf, core);
     for attempt in 1..=VERIFY_ATTEMPTS {
-        let wrote = run_timed("wlink", args, &root(), FLASH_TIMEOUT);
+        let wrote = run_wlink_timed(args, &root(), FLASH_TIMEOUT);
         if wrote && !check {
             return;
         }
@@ -636,8 +671,7 @@ fn read_flash(core: &Core, len: usize) -> Option<Vec<u8>> {
     let tmp = env::temp_dir().join(format!("h417-verify-{}-{}.bin", core.name, std::process::id()));
     let address = format!("{:#010x}", CHIP_FLASH_BASE + core.flash_base);
     let length = len.to_string();
-    let ok = run_timed(
-        "wlink",
+    let ok = run_wlink_timed(
         &["dump", &address, &length, "-o", tmp.to_str()?],
         &root(),
         QUICK_TIMEOUT,
@@ -760,8 +794,7 @@ fn report(opts: &Options) {
     let tmp = env::temp_dir().join(format!("h417-mailbox-{}.bin", std::process::id()));
     let address = format!("{base:#010x}");
     let length = len.to_string();
-    let read = run_timed(
-        "wlink",
+    let read = run_wlink_timed(
         &["dump", &address, &length, "-o", tmp.to_str().expect("utf-8 path")],
         &root(),
         QUICK_TIMEOUT,

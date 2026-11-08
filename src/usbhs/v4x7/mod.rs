@@ -1,5 +1,6 @@
-//! CH32V407/CH32V467 USBHS device driver for Embassy.
+//! CH32V407/CH32V467 and CH32H417 USBHS device driver for Embassy.
 //!
+//! The H4 block keeps the V4x7 register layout, so one driver covers both.
 //! Endpoints 1–7 support independent IN and OUT allocations. A pair shares its
 //! maximum packet length register and therefore must use the same packet size.
 //! Endpoint memory stays borrowed for the lifetime of the bus and endpoints;
@@ -25,7 +26,9 @@ use embassy_usb_driver::{
     Direction, EndpointAddress, EndpointAllocError, EndpointInfo, EndpointType, Event, Unsupported,
 };
 
-use crate::gpio::{AnyPin, Pull, SealedPin};
+use crate::gpio::AnyPin;
+#[cfg(not(usbhs_h4))]
+use crate::gpio::{Pull, SealedPin};
 use crate::interrupt::typelevel::Interrupt;
 use crate::{interrupt, pac, peripherals, Peri, RccPeripheral};
 
@@ -37,6 +40,13 @@ pub use control::ControlPipe;
 pub use embassy_usb_driver::Speed;
 pub use endpoint::Endpoint;
 use regs::Registers;
+
+/// Common and device-mode registers share one base. V4x7 names the block
+/// `Usb`, H4 names it `Usbhs`; the layout is identical.
+#[cfg(usbhs_v4x7)]
+type UsbRegs = pac::usbhs::Usb;
+#[cfg(usbhs_h4)]
+type UsbRegs = pac::usbhs::Usbhs;
 
 const ENDPOINTS: usize = 8;
 const SLOTS: usize = ENDPOINTS * 2;
@@ -185,11 +195,34 @@ fn packet_size_valid(speed: Speed, kind: EndpointType, size: u16, interval: u8) 
     }
 }
 
-fn memory_valid(address: usize, length: usize, ram_size: usize) -> bool {
-    address >= 0x2000_0000
-        && address
-            .checked_add(length)
-            .is_some_and(|end| end <= 0x2000_0000 + ram_size)
+#[cfg(target_arch = "riscv32")]
+fn memory_valid(address: usize, length: usize) -> bool {
+    #[cfg(usbhs_h4)]
+    let valid = {
+        // The USBHS DMA address registers keep bits 23:0 and the engine adds
+        // `0x2000_0000` on its own (RM §25.2.1.22–25.2.1.24), so a buffer must
+        // lie in the first 16 MB of the memory region. All three H4 RAM blocks
+        // — ITCM at `0x200A_0000`, DTCM at `0x200C_0000`, shared SRAM at
+        // `0x2010_0000` — do.
+        const RAM_START: usize = 0x200A_0000;
+        const WINDOW_END: usize = 0x2100_0000;
+        address >= RAM_START && address.checked_add(length).is_some_and(|end| end <= WINDOW_END)
+    };
+    #[cfg(not(usbhs_h4))]
+    let valid = {
+        // V2/V3 can trade flash for RAM through `RAM_CODE_MOD`; the USB DMA
+        // can only reach the configured amount.
+        let ram_size = if pac::FLASH.obr().read().ram_code_mod().to_bits() == 0 {
+            200 * 1024
+        } else {
+            136 * 1024
+        };
+        address >= 0x2000_0000
+            && address
+                .checked_add(length)
+                .is_some_and(|end| end <= 0x2000_0000 + ram_size)
+    };
+    valid
 }
 
 pub struct Driver<'d, T: Instance> {
@@ -222,12 +255,7 @@ impl<'d, T: Instance> Driver<'d, T> {
         let address = endpoint_memory.as_mut_ptr() as usize;
         #[cfg(target_arch = "riscv32")]
         {
-            let ram_size = if pac::FLASH.obr().read().ram_code_mod().to_bits() == 0 {
-                200 * 1024
-            } else {
-                136 * 1024
-            };
-            if !memory_valid(address, endpoint_memory.len(), ram_size) {
+            if !memory_valid(address, endpoint_memory.len()) {
                 return Err(Error::InvalidMemory);
             }
         }
@@ -369,7 +397,11 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
 
 pub struct Bus<'d, T: Instance> {
     _peri: Peri<'d, T>,
+    // Held for ownership only on H4, where the pins connect to the internal
+    // PHY without any GPIO configuration.
+    #[cfg_attr(usbhs_h4, allow(dead_code))]
     dp: Peri<'d, AnyPin>,
+    #[cfg_attr(usbhs_h4, allow(dead_code))]
     dm: Peri<'d, AnyPin>,
     config: Config,
     _memory: PhantomData<&'d mut [u8]>,
@@ -386,8 +418,15 @@ impl<T: Instance> Bus<'_, T> {
                 }
                 T::set_utmi(true);
                 T::enable_and_reset();
-                self.dp.set_as_input(Pull::None);
-                self.dm.set_as_input(Pull::None);
+                // On H4 the muxed USB pins connect to the internal 480 MHz PHY
+                // as soon as the block is clocked (RM table 9-11), so they must
+                // be left alone. V4x7 drives them from the UTMI PHY and needs
+                // them released to the function.
+                #[cfg(not(usbhs_h4))]
+                {
+                    self.dp.set_as_input(Pull::None);
+                    self.dm.set_as_input(Pull::None);
+                }
                 let regs = Registers(T::REGS);
                 T::REGS.usb_ctrl().write_value(pac::usbhs::regs::UsbCtrl(9));
                 regs.initialize();
@@ -431,8 +470,11 @@ impl<T: Instance> Bus<'_, T> {
                     T::Interrupt::unpend();
                     T::disable();
                     T::set_utmi(false);
-                    self.dp.set_as_disconnected();
-                    self.dm.set_as_disconnected();
+                    #[cfg(not(usbhs_h4))]
+                    {
+                        self.dp.set_as_disconnected();
+                        self.dm.set_as_disconnected();
+                    }
                 }
                 inner.powered = false;
                 inner.suspended = false;
@@ -718,7 +760,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 }
 
 trait SealedInstance {
-    const REGS: pac::usbhs::Usb;
+    const REGS: UsbRegs;
     fn state() -> &'static State;
     fn set_utmi(enabled: bool);
 }
@@ -728,16 +770,21 @@ pub trait Instance: SealedInstance + RccPeripheral + embassy_hal_internal::Perip
     type Interrupt: Interrupt;
 }
 
+// On V4x7 each instance has its own UTMI gate (`UTMI1ON`/`UTMI2ON` in
+// `CFGR2`); H4 has a single one (`UTMION` in `CFGR0`) for the whole block.
 macro_rules! instance {
     ($name:ident, $set_utmi:ident) => {
         impl SealedInstance for peripherals::$name {
-            const REGS: pac::usbhs::Usb = pac::$name;
+            const REGS: UsbRegs = pac::$name;
             fn state() -> &'static State {
                 static STATE: State = State::new();
                 &STATE
             }
             fn set_utmi(enabled: bool) {
+                #[cfg(usbhs_v4x7)]
                 pac::RCC.cfgr2().modify(|reg| reg.$set_utmi(enabled));
+                #[cfg(usbhs_h4)]
+                pac::RCC.cfgr0().modify(|reg| reg.set_utmion(enabled));
             }
         }
         impl Instance for peripherals::$name {
@@ -750,7 +797,9 @@ macro_rules! instance {
 instance!(USBHS1, set_utmi1on);
 #[cfg(peri_usbhs2)]
 instance!(USBHS2, set_utmi2on);
+// The second macro argument only feeds the V4x7 branch above.
+#[cfg(peri_usbhs)]
+instance!(USBHS, set_utmion);
 
 pin_trait!(DpPin, Instance);
 pin_trait!(DmPin, Instance);
-

@@ -55,10 +55,16 @@ edrv-bme280 = "0.1.1"
 embedded-sdmmc = { version = "0.9.0", default-features = false }
 exfat-embedded = { version = "0.1.3", default-features = false }
 
+# `usbhs_cdc`: the USB device stack over the HAL's USBHS driver.
+embassy-usb = { version = "0.6.0", optional = true, default-features = false }
+
 [features]
 # Pulls in the H4 SysTick time driver. Other bins keep the blocking delay, which
 # owns the same counter, so this stays off unless the example asks for it.
 embassy = ["ch32-hal/embassy", "dep:embassy-executor", "dep:embassy-time"]
+
+# `usbhs_cdc`: Embassy plus the USB device stack.
+usb = ["embassy", "dep:embassy-usb"]
 
 # `eth_internal` / `eth_bench`: Embassy + the Ethernet stack. `ch32-hal/defmt`
 # gives `ch32_hal::eth::Error`/`Link` their `defmt::Format`, which both bins
@@ -90,6 +96,11 @@ required-features = ["eth"]
 name = "can_async_check"
 path = "src/bin/can_async_check.rs"
 required-features = ["embassy"]
+
+[[bin]]
+name = "usbhs_cdc"
+path = "src/bin/usbhs_cdc.rs"
+required-features = ["usb"]
 
 [profile.release]
 debug = 2

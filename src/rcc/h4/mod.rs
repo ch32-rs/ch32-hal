@@ -20,9 +20,10 @@ pub use pll::{AuxPlls, UsbhsPll, UsbssPll};
 use prescale::{ahb_from_sysclk, hclk_from_ahb};
 pub use prescale::{ahb_hz, hclk_hz, pclk_hz, pll_mul_x2};
 
-use crate::pac::rcc::vals::{
-    Adcpre, Adcsrc, Fpre, Hpre, Mco, Pllmul, Pllsrc, Ppre, Sw as SysclkSw, SyspllSel, UsbhspllRefsel, Usbhspllsrc,
-};
+use crate::pac::rcc::vals::{Adcpre, Adcsrc, Fpre, Hpre, Mco, Pllmul, Pllsrc, Ppre, Sw as SysclkSw, SyspllSel};
+// The auxiliary-PLL types appear in `AuxPlls`' public fields, so they have to
+// be nameable by callers too.
+pub use crate::pac::rcc::vals::{SerdespllMul, UsbhspllRefsel, Usbhspllsrc, UsbsspllRefsel};
 use crate::pac::{FLASH, RCC};
 use crate::time::Hertz;
 
