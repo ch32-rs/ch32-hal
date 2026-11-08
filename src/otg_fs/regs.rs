@@ -119,7 +119,7 @@ mod imp {
     }
 
     pub(crate) fn set_ep_t_len(regs: Regs, ep: usize, len: u16) {
-        regs.uep_t_len(ep).write_value(len as u8);
+        regs.uep_t_len(ep).write(|v| v.set_t_len(len));
     }
 
     pub(crate) fn ep_tx_ctrl_write(regs: Regs, ep: usize, tog: bool, res: EpTxResponse) {
