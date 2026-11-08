@@ -131,7 +131,19 @@ pub struct InterruptHandler<T: Instance> {
 
 impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
     unsafe fn on_interrupt() {
-        // Endpoint handling is added together with the control pipe.
+        // Endpoint handling arrives with the control pipe. Until then, clear
+        // every write-1-to-zero flag: the SETUP/STATUS/transfer interrupts are
+        // enabled by `reset_protocol`, and a host that starts enumeration
+        // would otherwise leave them asserted and storm the core.
+        T::device().status().write(|w| {
+            w.set_uif_transfer(true);
+            w.set_udif_setup(true);
+            w.set_udif_status(true);
+            w.set_uif_rx_ping(true);
+            w.set_uif_itp(true);
+            w.set_uif_fifo_txov(true);
+            w.set_uif_fifo_rxov(true);
+        });
     }
 }
 
