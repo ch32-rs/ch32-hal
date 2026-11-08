@@ -145,6 +145,16 @@ impl AnyChannel {
         info.clear_flags(0xf);
     }
 
+    /// Clear only EN: the configuration stays, so `start` resumes the channel.
+    pub(super) fn request_pause(&self) {
+        self.info().regs().cfgr().modify(|register| register.set_en(false));
+    }
+
+    /// Reload the transfer count (the channel must be disabled).
+    pub(super) fn set_count(&self, count: u16) {
+        self.info().regs().cntr().write(|register| register.set_ndt(count));
+    }
+
     pub(super) fn is_running(&self) -> bool {
         let info = self.info();
         let config = info.regs().cfgr().read();

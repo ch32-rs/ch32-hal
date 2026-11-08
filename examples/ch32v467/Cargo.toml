@@ -100,6 +100,14 @@ name = "hal_usart"
 required-features = ["embassy"]
 
 [[bin]]
+name = "uart_ring"
+required-features = ["embassy"]
+
+[[bin]]
+name = "uart_errors"
+required-features = ["embassy"]
+
+[[bin]]
 name = "hal_timer"
 required-features = ["embassy"]
 

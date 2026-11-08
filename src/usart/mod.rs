@@ -13,7 +13,7 @@ Multiple interrupt sources
 
 use core::future::poll_fn;
 use core::marker::PhantomData;
-use core::sync::atomic::{compiler_fence, Ordering};
+use core::sync::atomic::{compiler_fence, AtomicU32, Ordering};
 #[cfg(usart_v4x7)]
 use core::sync::atomic::AtomicUsize;
 use core::task::Poll;
@@ -29,6 +29,9 @@ use crate::mode::{Async, Blocking, Mode};
 use crate::time::Hertz;
 use crate::{interrupt, pac, peripherals, Peri};
 
+mod ringbuffered;
+pub use ringbuffered::RingBufferedUartRx;
+
 /// Interrupt handler.
 pub struct InterruptHandler<T: Instance> {
     _phantom: PhantomData<T>,
@@ -43,6 +46,17 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
 
         let has_errors = (sr.pe() && cr1.peie()) || ((sr.fe() || sr.ne() || sr.ore()) && cr3.eie());
         if has_errors {
+            // Latch the receive error bits: this `STATR` read plus the DMA's
+            // `DATAR` read can clear them before the reader gets to poll, and
+            // the reader would then wait forever for a transfer that the
+            // disabled DMA request can no longer complete.
+            critical_section::with(|_| {
+                // PE/FE/NE/ORE are `STATR` bits 0..=3.
+                let error_bits = sr.0 & 0xf;
+                let latched = s.rx_errors.load(Ordering::Relaxed);
+                s.rx_errors.store(latched | error_bits, Ordering::Release);
+            });
+
             // clear all interrupts and DMA Rx Request
             r.ctlr1().modify(|w| {
                 // disable RXNE interrupt
@@ -59,12 +73,14 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 w.set_dmar(false);
             });
         } else if cr1.idleie() && sr.idle() {
-            // IDLE detected: no more data will come
+            // IDLE detected: no more data will come. Keep DMAR set: a
+            // one-shot read stops the DMA itself once it sees this flag, and
+            // the ring-buffered receiver must keep receiving across idle
+            // gaps, because an idle bus is not the end of the stream.
             r.ctlr1().modify(|w| {
                 // disable idle line detection
                 w.set_idleie(false);
             });
-            r.ctlr3().modify(|register| register.set_dmar(false));
         } else if cr1.tcie() && sr.tc() {
             // Transmission complete detected
             r.ctlr1().modify(|w| {
@@ -583,6 +599,10 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
             // clear_interrupt_flags(r, sr);
         }
 
+        // Start from a clean slate: errors latched before this transfer belong
+        // to an earlier read (or to a ring-buffered reception).
+        critical_section::with(|_| T::state().rx_errors.store(0, Ordering::Release));
+
         r.ctlr1().modify(|w| {
             // disable RXNE interrupt
             w.set_rxneie(false);
@@ -607,10 +627,40 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
         compiler_fence(Ordering::SeqCst);
 
         // future which completes when idle line or error is detected
+        let mut first_poll = true;
         let abort = poll_fn(move |cx| {
             let s = T::state();
 
             s.rx_waker.register(cx.waker());
+
+            compiler_fence(Ordering::SeqCst);
+
+            // Take the error the interrupt handler latched before checking
+            // `STATR`: the handler's own status read and the DMA's data read
+            // may already have cleared the flag from the register.
+            let latched = critical_section::with(|_| {
+                let latched = s.rx_errors.load(Ordering::Acquire);
+                s.rx_errors.store(0, Ordering::Release);
+                latched
+            });
+            if let Some(error) = receive_error(pac::usart::regs::Statr(latched)) {
+                r.ctlr3().modify(|register| register.set_dmar(false));
+                let _ = r.datar().read();
+                return Poll::Ready(Err(error));
+            }
+
+            // The first poll runs before any byte can have arrived. Reading
+            // `STATR` here would arm the RM §17.10.1 "read STATR, then read
+            // DATAR" clear sequence, so the DMA's own `DATAR` read would
+            // clear a FE/NE/ORE raised by the first frame before the
+            // interrupt handler gets to read it; the handler would then find
+            // nothing and the read would hang. The interrupt handler is the
+            // only observer of those bits, so only its latched copy is safe
+            // to consume here.
+            if first_poll {
+                first_poll = false;
+                return Poll::Pending;
+            }
 
             let sr = r.statr().read();
 
@@ -1122,6 +1172,9 @@ struct State {
     #[allow(unused)]
     rx_waker: AtomicWaker,
     tx_waker: AtomicWaker,
+    /// PE/FE/NE/ORE bits the interrupt handler observed, latched for the
+    /// reader because clearing them from the register races with the DMA.
+    rx_errors: AtomicU32,
 }
 
 impl State {
@@ -1131,6 +1184,7 @@ impl State {
             users: AtomicUsize::new(0),
             rx_waker: AtomicWaker::new(),
             tx_waker: AtomicWaker::new(),
+            rx_errors: AtomicU32::new(0),
         }
     }
 }
