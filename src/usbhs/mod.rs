@@ -87,6 +87,15 @@ fn in_enabled(d: crate::pac::usbhs::Usbd, mask: u16) -> u16 {
     mask & d.ep_config().read().0 as u16
 }
 
+/// The endpoints of `mask` (bit n: endpoint n) whose OUT direction is enabled.
+fn out_enabled(d: crate::pac::usbhs::Usbd, mask: u16) -> u16 {
+    if mask == 0 {
+        return 0;
+    }
+    // EP_CONFIG bits 16..: endpoint n's OUT enable
+    mask & (d.ep_config().read().0 >> 16) as u16
+}
+
 /// The isochronous IN response: "data ready" (TinyUSB `USBHS_EP_T_RES_NYET`).
 const TX_RES_ISO: EpTxResponse = EpTxResponse::_RESERVED_1;
 
@@ -255,6 +264,15 @@ pub fn iso_out_take<R>(ep: usize, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
     let r = f(unsafe { core::slice::from_raw_parts(s.slot_addr(tail) as *const u8, len) });
     s.tail.store(tail.wrapping_add(1), Ordering::Release);
     Some(r)
+}
+
+/// Packets dropped because isochronous OUT endpoint `ep`'s ring was full (the newest packet
+/// is dropped), since the driver was created. 0 for an endpoint that is not isochronous OUT.
+pub fn iso_out_overruns(ep: usize) -> u32 {
+    if ep == 0 || ep >= MAX_NR_EP || !OUT_STATE[ep].iso.load(Ordering::Relaxed) {
+        return 0;
+    }
+    OUT_STATE[ep].overruns.load(Ordering::Relaxed)
 }
 
 /// Wake `waker` when isochronous IN endpoint `ep` sends a packet (a slot frees up), to
@@ -441,7 +459,8 @@ fn toggled(r: crate::pac::usbhs::Usb, d: crate::pac::usbhs::Usbd, ep: usize, dir
 /// late entry may stand for an OUT and show the transaction after it. (a packet that starts
 /// with the mark is lost; zero-length ones aren't seen.) Interrupt only.
 fn iso_out_check(r: crate::pac::usbhs::Usb, d: crate::pac::usbhs::Usbd, entry: Option<(usize, u16)>) {
-    let mut eps = ISO_OUT_EPS.load(Ordering::Relaxed);
+    // a disabled endpoint's slot still holds its last packet: it is not an arrival
+    let mut eps = out_enabled(d, ISO_OUT_EPS.load(Ordering::Relaxed));
     while eps != 0 {
         let ep = eps.trailing_zeros() as usize;
         eps &= eps - 1;
@@ -986,7 +1005,10 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
 
         let s = state(addr);
         s.iso.store(iso, Ordering::Relaxed);
-        if iso && dir == Direction::In && interval_ms == 0 {
+        // one packet per microframe (the only rate the SOF catch-up handles): the descriptor's
+        // bInterval is 1 at high speed, but 0 is accepted as "every microframe" by drivers that
+        // pass it through
+        if iso && dir == Direction::In && interval_ms <= 1 {
             ISO_IN_EVERY.store(
                 ISO_IN_EVERY.load(Ordering::Relaxed) | 1 << addr.index(),
                 Ordering::Relaxed,
