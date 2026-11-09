@@ -2,9 +2,10 @@
 //!
 //! Brings the SuperSpeed PHY and link state machine up, answers the Port
 //! Capability LMPs, serves EP0 from a built-in vendor descriptor set, and logs
-//! every LTSSM state change. Connect the USB-C port to a USB3 host; the host
-//! should list a `c0de:cafe` device (`lsusb -v` shows bcdUSB 3.00 and the
-//! endpoint companion descriptors).
+//! LTSSM state changes. A correctly wired SuperSpeed device connection to a
+//! host is required; the CH32H417QEU6-R0 board's Type-A port is wired for
+//! downstream operation. This example has not been validated by enumeration.
+//! The advertised bulk endpoints do not yet implement data transfers.
 //!
 //! ```text
 //! cargo xtask run --example usbss_link_check

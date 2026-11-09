@@ -21,10 +21,11 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::rcc::vals::UsbsspllRefsel;
-use crate::pac::usbss::UsbssDevice;
+use crate::pac::usbss::{UsbssDevice, UsbssHost};
 use crate::{interrupt, Peri, PeripheralType, RccPeripheral};
 
 pub mod descriptors;
+pub mod host;
 
 /// Control-endpoint packet size: `4096 * 2^bMaxPacketSize0` with 9, i.e. 512.
 const EP0_MAX_PACKET: usize = 512;
@@ -70,6 +71,11 @@ impl LinkState {
 
 const LINK_STATE_UNKNOWN: u8 = 0xff;
 
+/// Operating mode, set once at initialization. Host and device mode share the
+/// same interrupt handlers and register block.
+const MODE_DEVICE: u8 = 0;
+const MODE_HOST: u8 = 1;
+
 // LMP transaction words, from the EVT device example.
 const LMP_SUBTYPE_MASK: u32 = 0xf << 5;
 const LMP_SET_LINK_FUNC: u32 = 0x1 << 5;
@@ -80,11 +86,20 @@ const LMP_PORT_CFG_RES: u32 = 0x6 << 5;
 const LMP_LINK_SPEED: u32 = 1 << 9;
 const NUM_HP_BUF: u32 = 4;
 const UP_STREAM: u32 = 2 << 16;
+const DOWN_STREAM: u32 = 1 << 16;
 
 struct State {
     link_waker: AtomicWaker,
     link_state: AtomicU8,
+    /// Last state reported through the host driver's `wait_link_change`.
+    host_reported_state: AtomicU8,
     low_power: AtomicBool,
+    mode: AtomicU8,
+    /// A SuperSpeed device finished the Port Configuration handshake.
+    connected: AtomicBool,
+    /// The current connection was already reported to `wait_connected`.
+    connected_reported: AtomicBool,
+    device_waker: AtomicWaker,
     ep0: Mutex<CriticalSectionRawMutex, RefCell<Ep0State>>,
     ep0_buf: Ep0Buffer,
 }
@@ -94,7 +109,12 @@ impl State {
         Self {
             link_waker: AtomicWaker::new(),
             link_state: AtomicU8::new(LINK_STATE_UNKNOWN),
+            host_reported_state: AtomicU8::new(LINK_STATE_UNKNOWN),
             low_power: AtomicBool::new(false),
+            mode: AtomicU8::new(MODE_DEVICE),
+            connected: AtomicBool::new(false),
+            connected_reported: AtomicBool::new(false),
+            device_waker: AtomicWaker::new(),
             ep0: Mutex::new(RefCell::new(Ep0State::new())),
             ep0_buf: Ep0Buffer::new(),
         }
@@ -148,6 +168,7 @@ impl Ep0Buffer {
 
 trait SealedInstance: RccPeripheral {
     fn device() -> UsbssDevice;
+    fn host() -> UsbssHost;
     fn state() -> &'static State;
 }
 
@@ -167,6 +188,10 @@ foreach_peripheral!(
         impl SealedInstance for peripherals::$inst {
             fn device() -> UsbssDevice {
                 unsafe { UsbssDevice::from_ptr(crate::pac::$inst.as_ptr()) }
+            }
+
+            fn host() -> UsbssHost {
+                unsafe { UsbssHost::from_ptr(crate::pac::$inst.as_ptr()) }
             }
 
             fn state() -> &'static State {
@@ -219,7 +244,7 @@ impl<'d, T: Instance> Driver<'d, T> {
             + 'd,
     ) -> Self {
         unsafe {
-            init::<T>();
+            init_device::<T>();
             T::Interrupt::enable();
             T::LinkInterrupt::enable();
         }
@@ -361,7 +386,10 @@ unsafe fn handle_setup<T: Instance>(d: UsbssDevice) {
     if !stall {
         match setup.request {
             request::GET_DESCRIPTOR => match descriptors::get((setup.value >> 8) as u8, setup.value as u8) {
-                Some(found) => descr = found,
+                Some(found) => {
+                    descr = found;
+                    length = length.min(found.len() as u16);
+                }
                 None => stall = true,
             },
             request::SET_ADDRESS => address = Some((setup.value & 0x7f) as u8),
@@ -394,6 +422,12 @@ unsafe fn handle_setup<T: Instance>(d: UsbssDevice) {
             request::CLEAR_FEATURE | request::SET_FEATURE | request::SET_INTERFACE => {}
             _ => stall = true,
         }
+    }
+
+    // No other request supplies IN data. Reject malformed direction and length
+    // combinations instead of reading past the empty descriptor slice.
+    if in_dir && length != 0 && !from_buffer && descr.is_empty() {
+        stall = true;
     }
 
     if stall {
@@ -476,15 +510,20 @@ unsafe fn ep0_send_chunk<T: Instance>(d: UsbssDevice, first: bool) {
     });
 }
 
-unsafe fn init<T: Instance>() {
-    // RM §27 has no clock section; the EVT example enables the USBSS PLL,
-    // the block clock, the PIPE clock and the UTMI clock in this order.
+/// Enables the USBSS PLL, the block clock, the PIPE clock and the UTMI clock.
+/// RM §27 has no clock section; this order follows the EVT examples.
+unsafe fn init_clocks<T: Instance>() {
     crate::rcc::enable_usbss_pll(UsbsspllRefsel::F25MHZ);
     T::enable_and_reset();
     crate::pac::RCC.cfgr0().modify(|w| {
         w.set_pipeon(true);
         w.set_utmion(true);
     });
+}
+
+unsafe fn init_device<T: Instance>() {
+    init_clocks::<T>();
+    T::state().mode.store(MODE_DEVICE, Ordering::Relaxed);
 
     let d = T::device();
 
@@ -537,6 +576,89 @@ unsafe fn init<T: Instance>() {
     d.u3ep0_rx_dma().write(|w| w.set_u3ep0_rx_dma(buf));
 }
 
+/// Initializes the block as a SuperSpeed host (`USBSSH_Init` in the EVT
+/// example). The PHY/global registers are reached through the device view;
+/// both views start at the same base address.
+///
+/// Safe to call again on a warm reset: the clocks are set up once by
+/// `init_clocks`.
+unsafe fn init_host<T: Instance>() {
+    T::state().mode.store(MODE_HOST, Ordering::Relaxed);
+    T::state().connected.store(false, Ordering::Relaxed);
+    T::state().connected_reported.store(false, Ordering::Relaxed);
+
+    let h = T::host();
+    let d = T::device();
+
+    // Clear the protocol/FIFO layer before programming the link.
+    h.usbss_ctrl().modify(|w| w.set_usb_clr_all(true));
+    h.usbss_ctrl().modify(|w| w.set_usb_clr_all(false));
+    h.uh_tx_ctrl().write(|_| {});
+    h.uh_rx_ctrl().write(|_| {});
+
+    // Assert the PHY reset with DOWN_MODE set, force P2, then release it and
+    // enable terminal detection once the power mode has settled.
+    h.link_cfg().write(|w| {
+        w.set_link_rx_eq_en(true);
+        w.set_link_tx_deemph(3);
+        w.set_link_down_mode(true);
+        w.set_link_phy_reset(true);
+    });
+    h.link_ctrl().write(|w| {
+        w.set_link_pd_mode(2);
+        w.set_link_go_disabled(true);
+    });
+    h.link_cfg().write(|w| {
+        w.set_link_rx_eq_en(true);
+        w.set_link_tx_deemph(3);
+        w.set_link_down_mode(true);
+        w.set_link_u2_det_en(true);
+        w.set_link_ltssm_mode(true);
+    });
+    h.link_lpm_cr().modify(|w| w.set_lpm_en(true));
+
+    // The EVT example spins on LINK_BUSY. Bound the wait so a misconfigured
+    // PHY cannot hang the firmware forever.
+    for _ in 0..1_000_000 {
+        if !d.link_status().read().link_busy() {
+            break;
+        }
+    }
+
+    h.link_cfg().modify(|w| w.set_link_rx_term_en(true));
+    h.link_int_ctrl().write(|w| {
+        w.set_link_ie_tx_lmp(true);
+        w.set_link_ie_rx_lmp(true);
+        w.set_link_ie_rx_lmp_tout(true);
+        w.set_link_ie_state_chg(true);
+        w.set_link_ie_warm_rst(true);
+    });
+    h.link_ctrl().write(|w| w.set_link_pd_mode(2));
+    h.link_itp_pre().write(|w| w.set_itp_pre(122));
+    h.usbss_ctrl().modify(|w| w.set_force_rst(true));
+
+    // Host mode, ITP generation, DMA and pending-packet control; this write
+    // also releases FORCE_RST.
+    h.usbss_ctrl().write(|w| {
+        w.set_host_mode(true);
+        w.set_itp_en(true);
+        w.set_dma_en(true);
+        w.set_reg_hp_pend(2);
+    });
+    h.uh_tx_ctrl().write(|_| {});
+    h.status().write(|w| w.set_uif_transfer(true));
+
+    let buf = T::state().ep0_buf.as_ptr() as u32;
+    h.uh_tx_dma().write(|w| w.set_uh_tx_dma(buf));
+    h.uh_rx_dma().write(|w| w.set_uh_rx_dma(buf));
+    // The endpoint enable registers live in the device view at the same
+    // offsets 0x80/0x82; host mode drives them too.
+    d.uep_tx_en().write(|w| w.set_ep_tx_en(1));
+    d.uep_rx_en().write(|w| w.set_ep_rx_en(1));
+
+    phy_tuning(d);
+}
+
 /// Resets the protocol/FIFO layer and re-enables the device interrupts
 /// (`USBSS_Device_Endp_Deinit` + control write in the EVT example).
 unsafe fn reset_protocol(d: UsbssDevice) {
@@ -572,7 +694,16 @@ unsafe fn phy_tuning(d: UsbssDevice) {
     core::ptr::write_volatile(0x5003_C018 as *mut u32, 0xB005_4000);
 }
 
+/// Dispatches a LINK interrupt to the mode that was initialized.
 unsafe fn handle_link<T: Instance>() {
+    if T::state().mode.load(Ordering::Relaxed) == MODE_HOST {
+        handle_link_host::<T>();
+    } else {
+        handle_link_device::<T>();
+    }
+}
+
+unsafe fn handle_link_device<T: Instance>() {
     let d = T::device();
     let flags = d.link_int_flag().read();
 
@@ -678,6 +809,89 @@ unsafe fn handle_link<T: Instance>() {
 
     if flags.link_if_term_pres() {
         d.link_int_flag().write(|w| w.set_link_if_term_pres(true));
+    }
+
+    T::state().link_waker.wake();
+}
+
+/// Host-side link management. A downstream port sends PORT_CAP and answers
+/// the device's PORT_CAP with PORT_CFG; PORT_CFG_RES means training
+/// completed (EVT `USBSS_LINK_Handle`, `LINK_DOWN_MODE` branch).
+unsafe fn handle_link_host<T: Instance>() {
+    let h = T::host();
+    let flags = h.link_int_flag().read();
+
+    if flags.link_if_state_chg() {
+        h.link_int_flag().write(|w| w.set_link_if_state_chg(true));
+        let state = h.link_status().read().link_state();
+
+        match state {
+            4 => {
+                // DISABLED: release the forced state so the LTSSM re-detects.
+                h.link_ctrl().modify(|w| w.set_link_go_disabled(false));
+            }
+            5 => {
+                // RXDET: the cable was unplugged or the link was lost.
+                T::state().connected.store(false, Ordering::Relaxed);
+                T::state().connected_reported.store(false, Ordering::Relaxed);
+                T::state().device_waker.wake();
+            }
+            9 => {
+                // HOT_RESET: end the handshake.
+                let ts = h.link_ctrl().read().link_tx_ts_cfg() & !1;
+                h.link_ctrl().modify(|w| w.set_link_tx_ts_cfg(ts));
+            }
+            _ => {}
+        }
+
+        T::state().link_state.store(state, Ordering::Relaxed);
+    }
+
+    if flags.link_if_tx_lmp() {
+        h.link_int_flag().write(|w| w.set_link_if_tx_lmp(true));
+        h.link_lmp_tx_data0()
+            .write(|w| w.set_link_lmp_tx_data0(LMP_LINK_SPEED | LMP_PORT_CAP));
+        h.link_lmp_tx_data1()
+            .write(|w| w.set_link_lmp_tx_data1(DOWN_STREAM | NUM_HP_BUF));
+        h.link_lmp_tx_data2().write(|w| w.set_link_lmp_tx_data2(0));
+    }
+
+    if flags.link_if_rx_lmp() {
+        h.link_int_flag().write(|w| w.set_link_if_rx_lmp(true));
+        let data0 = h.link_lmp_rx_data0().read().0;
+
+        match data0 & LMP_SUBTYPE_MASK {
+            LMP_PORT_CAP => {
+                // The device advertised its capabilities; configure the link.
+                h.link_lmp_tx_data0()
+                    .write(|w| w.set_link_lmp_tx_data0(LMP_LINK_SPEED | LMP_PORT_CFG));
+                h.link_lmp_tx_data1().write(|w| w.set_link_lmp_tx_data1(0));
+                h.link_lmp_tx_data2().write(|w| w.set_link_lmp_tx_data2(0));
+            }
+            LMP_PORT_CFG_RES => {
+                // The device accepted our PORT_CFG: the SS link is up.
+                h.link_lmp_port_cap().modify(|w| w.set_link_lmp_tx_cap_vld(true));
+                T::state().connected.store(true, Ordering::Relaxed);
+                T::state().device_waker.wake();
+            }
+            _ => {}
+        }
+    }
+
+    if flags.link_if_rx_lmp_tout() {
+        h.link_int_flag().write(|w| w.set_link_if_rx_lmp_tout(true));
+        h.link_ctrl().modify(|w| {
+            w.set_link_go_disabled(true);
+            w.set_link_go_rx_det(true);
+        });
+    }
+
+    if flags.link_if_warm_rst() {
+        h.link_int_flag().write(|w| w.set_link_if_warm_rst(true));
+        if h.link_status().read().link_rx_warm_rst() {
+            T::state().connected.store(false, Ordering::Relaxed);
+            init_host::<T>();
+        }
     }
 
     T::state().link_waker.wake();

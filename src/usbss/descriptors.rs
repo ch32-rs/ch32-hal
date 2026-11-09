@@ -87,7 +87,7 @@ pub const BOS: &[u8] = &[
     0x05, // bLength
     0x0f, // bDescriptorType: BOS
     0x16, 0x00, // wTotalLength: 22
-    0x01, // bNumDeviceCaps
+    0x02, // bNumDeviceCaps
     // USB 2.0 extension: link power management.
     0x07, // bLength
     0x10, // bDescriptorType: DEVICE_CAPABILITY
