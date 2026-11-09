@@ -108,6 +108,16 @@ name = "usbfs_cdc"
 path = "src/bin/usbfs_cdc.rs"
 required-features = ["usb"]
 
+[[bin]]
+name = "usbss_link_check"
+path = "src/bin/usbss_link_check.rs"
+required-features = ["embassy"]
+
+[[bin]]
+name = "usbss_host_link_check"
+path = "src/bin/usbss_host_link_check.rs"
+required-features = ["embassy"]
+
 [profile.release]
 debug = 2
 strip = false
