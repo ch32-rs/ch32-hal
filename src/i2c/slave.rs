@@ -422,6 +422,12 @@ impl<'d, T: Instance> I2c<'d, T, Async, Slave> {
         let total = buf.len();
         let on_drop = OnDrop::new(Self::abort_slave_transfer);
 
+        // The DMA transfer counter is 16 bits wide; the master path rejects
+        // longer buffers the same way.
+        if total > u16::MAX as usize {
+            return Err(Error::BufferTooLong);
+        }
+
         if total == 0 {
             T::regs().ctlr2().modify(|w| w.set_dmaen(false));
             on_drop.defuse();
@@ -506,6 +512,12 @@ impl<'d, T: Instance> I2c<'d, T, Async, Slave> {
     async fn respond_to_read_dma(&mut self, data: &[u8]) -> Result<SendStatus, Error> {
         let total = data.len();
         let on_drop = OnDrop::new(Self::abort_slave_transfer);
+
+        // The DMA transfer counter is 16 bits wide; the master path rejects
+        // longer buffers the same way.
+        if total > u16::MAX as usize {
+            return Err(Error::BufferTooLong);
+        }
 
         if total == 0 {
             T::regs().ctlr2().modify(|w| w.set_dmaen(false));

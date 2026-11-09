@@ -101,7 +101,8 @@ pub enum Error {
     ZeroLengthTransfer,
     /// DMA buffer exceeds the hardware transfer counter.
     BufferTooLong,
-    /// Address is outside the 7-bit address range.
+    /// Address is invalid for the selected addressing mode, or the second
+    /// address cannot be combined with the primary one.
     InvalidAddress,
 }
 
@@ -132,6 +133,9 @@ pub struct SlaveConfig {
 
 impl SlaveConfig {
     /// Create a configuration with only the primary address set.
+    ///
+    /// A plain integer selects a 7-bit address; use [`SlaveAddress::TenBit`]
+    /// for a 10-bit one.
     pub fn new(address: impl Into<SlaveAddress>) -> Self {
         Self {
             address: address.into(),
@@ -173,15 +177,13 @@ impl Default for SlaveConfig {
     }
 }
 
+// Only 7-bit addresses get an implicit conversion: with a second candidate an
+// unsuffixed literal such as `SlaveConfig::new(0x42)` would fall back to `i32`
+// and fail to compile. 10-bit addresses are written as
+// `SlaveAddress::TenBit(..)`, which also keeps the wider type explicit.
 impl From<u8> for SlaveAddress {
     fn from(value: u8) -> Self {
         Self::SevenBit(value)
-    }
-}
-
-impl From<u16> for SlaveAddress {
-    fn from(value: u16) -> Self {
-        Self::TenBit(value)
     }
 }
 
