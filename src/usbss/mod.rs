@@ -1,15 +1,16 @@
-//! USB 3.0 SuperSpeed device controller (USBSS) — RM §27.
+//! Experimental USB 3.0 SuperSpeed controller (USBSS) — RM §27.
 //!
-//! The reference manual only documents the register map; the initialization
-//! order, PHY tuning values and the link-management handshake follow the WCH
-//! EVT `USBSS/DEVICE/CH372Device` example. The controller is a separate IP
-//! from `usbhs`: it has its own 125 MHz PLL, PIPE/UTMI gates and a link state
-//! machine that must answer Port Capability LMPs before the host will
-//! enumerate the device.
+//! # Validation status
 //!
-//! This module brings the link up to U0, answers the link-management
-//! handshake and implements the EP0 control pipe (enumeration). Bulk endpoint
-//! data paths are built on top of it.
+//! This is an incomplete framework and has not been verified to work. Neither
+//! SuperSpeed link training nor enumeration has succeeded in hardware tests.
+//! Device bulk transfers and host control transfers, pipes and enumeration are
+//! not implemented. Do not rely on this module for USB communication.
+//!
+//! The reference manual documents the register map; the initialization order,
+//! PHY tuning values and link-management handshake follow the WCH EVT USBSS
+//! examples. This controller is separate from `usbhs` and has its own 125 MHz
+//! PLL, PIPE/UTMI clocks and link state machine.
 
 use core::cell::{RefCell, UnsafeCell};
 use core::marker::PhantomData;
@@ -27,7 +28,7 @@ use crate::{interrupt, Peri, PeripheralType, RccPeripheral};
 pub mod descriptors;
 pub mod host;
 
-/// Control-endpoint packet size: `4096 * 2^bMaxPacketSize0` with 9, i.e. 512.
+/// SuperSpeed control-endpoint packet size: `2^bMaxPacketSize0`, or 512 bytes.
 const EP0_MAX_PACKET: usize = 512;
 
 /// `LINK_STATUS.LINK_STATE` values (RM §27.2.6.5).
