@@ -10,5 +10,11 @@ rustflags = [
 # runner = "gdb -q -x openocd.gdb"
 # runner = "wlink -v flash"
 
-runner = "wlink -v flash --enable-sdi-print --watch-serial --erase"
+runner = "probe-rs run --chip CH32V203G6U6"
+# runner = "wlink -v flash --enable-sdi-print --watch-serial --erase"
 # runner = "wlink -v flash"
+
+[env]
+# defmt's compile-time filter defaults to `error` when this is unset, which
+# compiles out every `info!`/`warn!` call.
+DEFMT_LOG = "info"
