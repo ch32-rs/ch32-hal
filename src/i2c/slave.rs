@@ -5,6 +5,10 @@
 //! `respond_to_read()` runs the data phase. The data phase has to start right
 //! after `listen()` returns; see `respond_to_write_irq()` for why.
 //!
+//! `Config::timeout` bounds the blocking waits only. The asynchronous
+//! operations never time out: a slave is idle until a master addresses it, and
+//! a caller that needs a deadline should select the future against a timer.
+//!
 //! Based on [PR #199](https://github.com/ch32-rs/ch32-hal/pull/199) (slave API
 //! with blocking, interrupt and DMA transfers) and
 //! [PR #164](https://github.com/ch32-rs/ch32-hal/pull/164) (slave driver and
@@ -15,11 +19,11 @@ use super::*;
 impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Master> {
     /// Switch this driver to slave mode.
     ///
-    /// The bus timing configured by the constructor is kept; only the own
-    /// address and the slave control bits are reprogrammed.
-    pub fn into_slave(mut self, config: SlaveConfig) -> Result<I2c<'d, T, M, Slave>, Error> {
-        config.validate()?;
-        Self::init_slave(config);
+    /// The bus timing and timeout configured by the constructor are kept; only
+    /// the own address and the slave control bits are reprogrammed.
+    pub fn into_slave(mut self, slave_config: SlaveConfig) -> Result<I2c<'d, T, M, Slave>, Error> {
+        slave_config.validate()?;
+        Self::init_slave(slave_config);
 
         Ok(I2c {
             tx_dma: self.tx_dma.take(),
@@ -34,15 +38,17 @@ impl<'d, T: Instance, M: Mode> I2c<'d, T, M, Master> {
 
 impl<'d, T: Instance> I2c<'d, T, Blocking, Slave> {
     /// Create a new blocking I2C slave.
+    ///
+    /// `config.timeout` bounds every `blocking_*` call.
     pub fn new_slave_blocking<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
         scl: Peri<'d, if_remap!(impl SclPin<T, REMAP>)>,
         sda: Peri<'d, if_remap!(impl SdaPin<T, REMAP>)>,
         freq: Hertz,
-        config: SlaveConfig,
+        config: Config,
+        slave_config: SlaveConfig,
     ) -> Result<Self, Error> {
-        I2c::<'d, T, Blocking, Master>::new_inner(peri, scl, sda, None, None, freq, Config::default())
-            .into_slave(config)
+        I2c::<'d, T, Blocking, Master>::new_inner(peri, scl, sda, None, None, freq, config).into_slave(slave_config)
     }
 
     /// Block until the master addresses this slave.
@@ -182,6 +188,10 @@ impl<'d, T: Instance> I2c<'d, T, Blocking, Slave> {
 
 impl<'d, T: Instance> I2c<'d, T, Async, Slave> {
     /// Create a new interrupt-driven I2C slave.
+    ///
+    /// `config` is accepted for symmetry with the master constructors. Its
+    /// timeout is stored but not applied: asynchronous operations wait for the
+    /// master indefinitely.
     pub fn new_slave<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
         scl: Peri<'d, if_remap!(impl SclPin<T, REMAP>)>,
@@ -190,12 +200,13 @@ impl<'d, T: Instance> I2c<'d, T, Async, Slave> {
             + interrupt::typelevel::Binding<T::ErrorInterrupt, ErrorInterruptHandler<T>>
             + 'd,
         freq: Hertz,
-        config: SlaveConfig,
+        config: Config,
+        slave_config: SlaveConfig,
     ) -> Result<Self, Error> {
         use crate::interrupt::typelevel::Interrupt;
 
-        let slave = I2c::<'d, T, Async, Master>::new_inner(peri, scl, sda, None, None, freq, Config::default())
-            .into_slave(config)?;
+        let slave = I2c::<'d, T, Async, Master>::new_inner(peri, scl, sda, None, None, freq, config)
+            .into_slave(slave_config)?;
 
         T::EventInterrupt::unpend();
         T::ErrorInterrupt::unpend();
@@ -206,6 +217,10 @@ impl<'d, T: Instance> I2c<'d, T, Async, Slave> {
     }
 
     /// Create a new I2C slave that uses DMA for the data phase.
+    ///
+    /// As with [`new_slave`](Self::new_slave), `config` is accepted for
+    /// symmetry with the master constructors; no asynchronous operation uses
+    /// the timeout.
     pub fn new_slave_with_dma<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
         scl: Peri<'d, if_remap!(impl SclPin<T, REMAP>)>,
@@ -216,20 +231,14 @@ impl<'d, T: Instance> I2c<'d, T, Async, Slave> {
         tx_dma: Peri<'d, impl TxDma<T>>,
         rx_dma: Peri<'d, impl RxDma<T>>,
         freq: Hertz,
-        config: SlaveConfig,
+        config: Config,
+        slave_config: SlaveConfig,
     ) -> Result<Self, Error> {
         use crate::interrupt::typelevel::Interrupt;
 
-        let slave = I2c::<'d, T, Async, Master>::new_inner(
-            peri,
-            scl,
-            sda,
-            new_dma!(tx_dma),
-            new_dma!(rx_dma),
-            freq,
-            Config::default(),
-        )
-        .into_slave(config)?;
+        let slave =
+            I2c::<'d, T, Async, Master>::new_inner(peri, scl, sda, new_dma!(tx_dma), new_dma!(rx_dma), freq, config)
+                .into_slave(slave_config)?;
 
         T::EventInterrupt::unpend();
         T::ErrorInterrupt::unpend();

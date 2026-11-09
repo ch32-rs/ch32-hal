@@ -29,7 +29,7 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_time::Timer;
 use hal::gpio::{Level, Output};
-use hal::i2c::{Error, ErrorInterruptHandler, EventInterruptHandler, I2c, SlaveCommandKind, SlaveConfig};
+use hal::i2c::{Config, Error, ErrorInterruptHandler, EventInterruptHandler, I2c, SlaveCommandKind, SlaveConfig};
 use hal::time::Hertz;
 use hal::{bind_interrupts, pac, peripherals};
 use panic_halt as _;
@@ -114,6 +114,7 @@ async fn main(_spawner: Spawner) -> ! {
         p.DMA1_CH4,
         p.DMA1_CH5,
         Hertz::khz(100),
+        Config::default(),
         SlaveConfig::new(SLAVE_ADDR),
     )
     .unwrap();

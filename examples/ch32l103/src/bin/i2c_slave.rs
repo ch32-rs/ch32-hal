@@ -35,7 +35,7 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_time::Timer;
 use hal::gpio::{Level, Output};
-use hal::i2c::{ErrorInterruptHandler, EventInterruptHandler, I2c, SlaveCommandKind, SlaveConfig};
+use hal::i2c::{Config, ErrorInterruptHandler, EventInterruptHandler, I2c, SlaveCommandKind, SlaveConfig};
 use hal::time::Hertz;
 use hal::{bind_interrupts, pac, peripherals};
 use panic_halt as _;
@@ -115,6 +115,7 @@ async fn main(spawner: Spawner) -> ! {
         p.DMA1_CH4,
         p.DMA1_CH5,
         Hertz::khz(100),
+        Config::default(),
         SlaveConfig::new(SLAVE_ADDR),
     )
     .unwrap();
