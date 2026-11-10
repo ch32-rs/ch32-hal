@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 use core::task::Poll;
 
-use embassy_usb_driver::{Direction, EndpointError, EndpointInfo};
+use embassy_usb_driver::{EndpointError, EndpointInfo};
 use futures::future::poll_fn;
 
 use super::regs::{self, EpRxResponse, EpTxResponse, UsbToken};
@@ -40,28 +40,7 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
     }
 
     fn is_enabled(&self) -> bool {
-        let regs = T::regs();
-        match (self.info.addr.index(), self.info.addr.direction()) {
-            (4, Direction::In) => regs.uep4_1_mod().read().uep4_tx_en(),
-            (4, Direction::Out) => regs.uep4_1_mod().read().uep4_rx_en(),
-            (1, Direction::In) => regs.uep4_1_mod().read().uep1_tx_en(),
-            (1, Direction::Out) => regs.uep4_1_mod().read().uep1_rx_en(),
-
-            (2, Direction::In) => regs.uep2_3_mod().read().uep2_tx_en(),
-            (2, Direction::Out) => regs.uep2_3_mod().read().uep2_rx_en(),
-            (3, Direction::In) => regs.uep2_3_mod().read().uep3_tx_en(),
-            (3, Direction::Out) => regs.uep2_3_mod().read().uep3_rx_en(),
-
-            (5, Direction::In) => regs.uep5_6_mod().read().uep5_tx_en(),
-            (5, Direction::Out) => regs.uep5_6_mod().read().uep5_rx_en(),
-            (6, Direction::In) => regs.uep5_6_mod().read().uep6_tx_en(),
-            (6, Direction::Out) => regs.uep5_6_mod().read().uep6_rx_en(),
-
-            (7, Direction::In) => regs.uep7_mod().read().uep7_tx_en(),
-            (7, Direction::Out) => regs.uep7_mod().read().uep7_rx_en(),
-
-            _ => panic!("Unsupported EP"),
-        }
+        regs::ep_is_enabled(T::regs(), self.info.addr.index(), self.info.addr.direction())
     }
 }
 
@@ -149,20 +128,23 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
                 let status = regs::int_st(regs);
                 if status.ep as usize == ep {
                     let ret = match status.token {
-                        UsbToken::OUT => {
+                        UsbToken::OUT if status.tog_ok => {
                             // upper bits are reserved (0)
                             let len = regs::rx_len(regs) as usize;
 
                             self.data.buffer.read_volatile(&mut buf[..len]);
+                            regs::ep_rx_ctrl_flip_tog(regs, ep, EpRxResponse::NAK);
                             Poll::Ready(Ok(len))
                         }
+                        // A retransmitted packet leaves the endpoint armed.
+                        UsbToken::OUT => Poll::Pending,
                         token => {
                             error!("Unexpected USB Token {}", token.to_bits());
+                            regs::ep_rx_ctrl_set_res(regs, ep, EpRxResponse::NAK);
                             Poll::Ready(Err(EndpointError::Disabled))
                         }
                     };
 
-                    regs::ep_rx_ctrl_flip_tog(regs, ep, EpRxResponse::NAK);
                     regs::clear_transfer(regs);
                     ret
                 } else {
@@ -265,7 +247,8 @@ where
                             regs::ep_rx_ctrl_set_res(regs, 0, EpRxResponse::NAK);
                             Poll::Ready(Ok(len))
                         }
-                        UsbToken::RSVD | UsbToken::IN | UsbToken::SETUP => unreachable!(),
+                        // X0 names bit 0 of the token field `SOF`, not `RSVD`.
+                        _ => unreachable!(),
                     };
 
                     regs::clear_transfer(regs);

@@ -477,17 +477,17 @@ fn main() {
     .into();
 
     // WCH USBFS (`kind: usb`) has four register layouts: v1fs / v2fs / l1fs /
-    // x0fs (see ch32-data docs/usb_ip.md). `crate::usbfs` is currently the
-    // l1fs backend only, so pin rows for the other versions would point at a
-    // missing module — keep them only on l1fs chips. OTG (`kind: otg`) and
-    // H4 USBFS (`kind: usbfs`) are the same FS IP with different kind strings
-    // and are handled by their own rows above / elsewhere.
-    let usb_l1fs = METADATA.peripherals.iter().any(|p| {
+    // x0fs (see ch32-data docs/usb_ip.md). `crate::usbfs` currently binds the
+    // l1fs and x0fs backends, so pin rows for the other versions would point
+    // at a missing module — keep them only on those chips. OTG (`kind: otg`)
+    // and H4 USBFS (`kind: usbfs`) are the same FS IP with different kind
+    // strings and are handled by their own rows above / elsewhere.
+    let usb_pin_traits = METADATA.peripherals.iter().any(|p| {
         p.registers
             .as_ref()
-            .is_some_and(|r| r.kind == "usb" && r.version == "l1fs")
+            .is_some_and(|r| r.kind == "usb" && matches!(r.version, "l1fs" | "x0fs"))
     });
-    if !usb_l1fs {
+    if !usb_pin_traits {
         pin_signals.retain(|key, _| key.0 != "usb");
     }
     // No pin row is dropped on CH32H4 today: SPI is `version: h4` but keeps
