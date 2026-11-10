@@ -130,6 +130,10 @@ pub mod i2c;
 pub mod i3c;
 #[cfg(rng)]
 pub mod rng;
+// Independent of `cfg(i2c)`: soft I2C exists precisely for chips or pins
+// without an I2C peripheral.
+#[cfg(feature = "soft-i2c")]
+pub mod soft_i2c;
 // The RTC block is the shared F1-style layout, but only CH32H4 currently has
 // a PWR peripheral in the PAC for the `DBP` backup-domain write enable. V4x7
 // has `PWR.CTLR.DBP` too, but a raw `RTCSEL` byte instead of the `Rtcsel`

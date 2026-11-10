@@ -80,6 +80,8 @@ memory-x = ["ch32-metapac/memory-x"]
 memory-split-usr = ["memory-x", "ch32-metapac/memory-split-usr"]
 ## Built-in EXTI driver and interrupt handlers. Disable to provide your own.
 exti = []
+## Software (bit-banged) I2C master.
+soft-i2c = []
 
 
 # Features starting with `_` are for internal use only. They're not intended
