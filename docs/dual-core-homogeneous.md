@@ -3,8 +3,10 @@
 Status: **spike done, API v1 implemented (`ch32_hal::multicore`), hart 1 runs
 its own interrupt setup + `embassy_executor`, and cross-core
 `critical-section` is implemented on a qingke branch — all verified on the
-bench board. Remaining gaps: per-hart time driver, V5F-specific core setup,
-checked peripheral ownership, and getting the qingke change released.**
+bench board. Cross-core `embassy_time` works when hart 0 also schedules, but a
+hart-1-only timer does not fire yet. Remaining gaps: that time bug, V5F-specific
+core setup, checked peripheral ownership, and getting the qingke change
+released.**
 Worktree branch: `dual-core-homogeneous`. Examples:
 `examples/ch32h417/v3f/src/bin/homogeneous.rs` (mechanism),
 `.../multicore.rs` (API + lock litmus), `.../multicore_embassy.rs` (one
@@ -271,11 +273,19 @@ Measured (default clock recipe unless noted):
   same `.text`/`.data`.
 - `multicore_embassy.rs`: an `embassy_executor::Executor` on each hart; both
   cooperative tasks advance (`h0_seq` 411 k → 3.2 M while `h1_seq` 411 k →
-  4.6 M over 5 s), and the self-wake path works (`h1_resumes` 0.8 M → 7.8 M).
+  4.6 M over 5 s), and the self-wake path works.
 - The same example pends `IPC_CH0` (interrupt 16) on hart 1 only. `h1_irqs`
   reads exactly **1** and stays 1: the shared vector table dispatched to
   hart 1, the handler ran, `unpend_interrupt` cleared it with no storm.
   Hart 0's interrupts were untouched.
+- Cross-core `embassy_time`: with hart 0 also scheduling, hart 0's and
+  hart 1's `Timer::after(500 ms)` counters advance in lockstep (6 → 47 in 5 s,
+  the 4×-fast default HSI recipe), i.e. hart 1 tasks are woken by hart 0's
+  SysTick ISR. **But** in two runs where hart 1 was the *only* user of
+  `embassy_time`, `h1_timer_ticks` stayed 0: the alarm never fired. So the
+  driver's re-arm path is not yet proven for a hart-1-only timer; this is the
+  next thing to debug (start from `schedule_next`/`set_alarm` in
+  `src/embassy/time_driver_systick_h4.rs`).
 
 Constraints the implementation has to encode:
 
@@ -327,7 +337,8 @@ Constraints the implementation has to encode:
    on the same hart" nesting path is covered by the depth counter; it has not
    been stress-tested with a real IRQ storm yet — that is worth adding when
    the API grows interrupt-driven drivers.
-3. **Then — per-hart time driver:** `SysTick1` (vector 13) in `qingke-rt`
-   plus per-hart `embassy-time` state, or one TIM per core. Only this unlocks
-   `embassy_time` tasks on hart 1; an executor with cooperative tasks already
-   works today.
+3. **Next — time on hart 1.** First debug the hart-1-only `Timer` failure
+   above (a shared driver served by hart 0's SysTick is enough in principle,
+   and already works when hart 0 schedules too). Only if that proves
+   structural is a per-hart driver needed: `SysTick1` (vector 13) in
+   `qingke-rt` plus per-hart `embassy-time` state, or one TIM per core.

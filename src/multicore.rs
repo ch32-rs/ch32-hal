@@ -37,10 +37,12 @@
 //!   Per-hart state is fine; anything both harts touch (a mailbox, a logger,
 //!   `embassy-sync`'s `CriticalSectionRawMutex`) needs a cross-core spinlock,
 //!   either [`SpinLock`] below or a real `critical-section` implementation.
-//! - **No time driver on hart 1.** Embassy's CH32H4 SysTick driver is hart 0
-//!   only; hart 1's counter interrupts through `SysTick1` (vector 13), which
-//!   `qingke-rt` does not expose yet. An `embassy_executor::Executor` runs on
-//!   hart 1, but `embassy_time` must not be initialised there.
+//! - **Do not initialise a time driver on hart 1.** Embassy's CH32H4 SysTick
+//!   driver owns counter 0 and its `SysTick` vector; hart 1's counter
+//!   interrupts through `SysTick1` (vector 13), which `qingke-rt` does not
+//!   expose yet. `embassy_time` tasks on hart 1 can use the hart-0 driver
+//!   (alarm on hart 0, waker wakes the hart-1 task), but the re-arm path has a
+//!   measured caveat — see `multicore_embassy.rs` in `examples/ch32h417`.
 //! - **Interrupts are enabled with the boot core's setup.** Before the closure
 //!   runs, hart 1 calls `qingke-rt`'s `_setup_interrupts`: `mtvec` points at
 //!   the shared vector table, the hardware push/pop stack is on, `mstatus.MIE`
