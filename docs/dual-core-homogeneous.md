@@ -198,6 +198,36 @@ Rejected alternatives:
 Blocking `Delay` is unaffected: it uses the calling hart's own counter (0 on
 hart 0, 1 on hart 1), so it never writes across the domains.
 
+## Review outcomes (2026-11-11)
+
+Three candidate "must-fix" items were checked against hardware/code before
+changing anything:
+
+1. **`spawn_core1` from hart 1 — real, fixed.** The wake register addresses
+   the *other* hart, so a call from hart 1 would start hart 0 inside the
+   hart-1 trampoline with hart 1's stack. Now asserts `HartId::C0`.
+2. **Stale V5F I-cache after wake — real enough, fixed cheaply.** The cache is
+   not guaranteed to be reset by a wake from deep sleep, and hart 0 has just
+   rewritten the shared-SRAM code. A `fence.i` was added to the trampoline
+   (no-op when the cache is off).
+3. **`Delay` vs the time driver racing on the shared `SYSTICK.SR` — not
+   reproduced, left alone.** Both clear their own `CNTIF` with a
+   read-modify-write on the same 32-bit register, so in principle one can clear
+   the other's freshly-set flag and stall the 1 ms tick. Stress test: hart 1
+   runs `Delay.delay_ms(1)` (~4 000 SR writes/s at the 4×-fast default clock)
+   while hart 0's time driver ticks at 1 kHz and a hart-1 `Timer` runs — 60 s,
+   no stall (`h1_timer` and the driver tick kept advancing). The pending core
+   interrupt appears to be latched, so clearing the source flag before the
+   handler runs does not lose it. No code change; the rule "one counter per
+   hart, do not use the time driver's counter with `Delay`" stays documented.
+
+Also considered and rejected: a blanket `compile_error!` when
+`multicore` is used without qingke's `dual-core-critical-section`. The launch
+mechanism and atomics-only sharing work fine with the single-hart section; the
+failure is specific to shared queues (`embassy_time`, `embassy-sync`). Gating
+the whole module would forbid a valid use, so the requirement is documented in
+`multicore`'s module docs and enforced by the example's feature switch instead.
+
 ## Blockers, in the order they will bite
 
 1. **`Peripherals` is a single-image singleton — partly solved.**

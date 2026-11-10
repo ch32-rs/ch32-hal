@@ -33,16 +33,20 @@
 //!   closure (`let pf0 = p.PF0;`) or call `Peripherals::steal()` inside it and
 //!   promise to touch disjoint hardware. Never let both harts own the same
 //!   peripheral.
-//! - **`critical-section` still masks only the calling hart's interrupts.**
-//!   Per-hart state is fine; anything both harts touch (a mailbox, a logger,
-//!   `embassy-sync`'s `CriticalSectionRawMutex`) needs a cross-core spinlock,
-//!   either [`SpinLock`] below or a real `critical-section` implementation.
+//! - **`critical-section` is only cross-core with qingke's
+//!   `dual-core-critical-section` feature.** The released 0.8.4 implementation
+//!   masks only the calling hart's interrupts. Per-hart state is fine; anything
+//!   both harts touch (a mailbox, a logger, `embassy-sync`'s
+//!   `CriticalSectionRawMutex`, the shared `embassy_time` queue) loses updates
+//!   without the cross-core section — reproduced on the bench: a hart-1-only
+//!   `Timer` stopped after ~8 rounds. Enable the feature (or use [`SpinLock`]
+//!   for your own state) before sharing anything.
 //! - **Do not initialise a time driver on hart 1.** Embassy's CH32H4 SysTick
 //!   driver owns counter 0 and its `SysTick` vector; hart 1's counter
 //!   interrupts through `SysTick1` (vector 13), which `qingke-rt` does not
-//!   expose yet. `embassy_time` tasks on hart 1 can use the hart-0 driver
-//!   (alarm on hart 0, waker wakes the hart-1 task), but the re-arm path has a
-//!   measured caveat — see `multicore_embassy.rs` in `examples/ch32h417`.
+//!   expose yet. `embassy_time` tasks on hart 1 can use the hart-0 driver:
+//!   hart 1 only queues its wake, and hart 0's 1 ms re-arm tick programs the
+//!   comparator (the V5F cannot write `CTLR0`/`CMP0`).
 //! - **Interrupts are enabled with the boot core's setup.** Before the closure
 //!   runs, hart 1 calls `qingke-rt`'s `_setup_interrupts`: `mtvec` points at
 //!   the shared vector table, the hardware push/pop stack is on, `mstatus.MIE`
@@ -136,6 +140,12 @@ pub fn spawn_core1<F, const N: usize>(stack: &'static mut Stack<N>, entry: F)
 where
     F: FnOnce() + Send + 'static,
 {
+    // The wake register addresses the *other* hart, so calling this from hart 1
+    // would start hart 0 inside the hart-1 trampoline with hart 1's stack.
+    assert!(
+        HartId::current() == HartId::C0,
+        "spawn_core1 must be called from hart 0"
+    );
     assert!(
         !SPAWNED.swap(true, Ordering::AcqRel),
         "hart 1 has already been spawned"
@@ -232,6 +242,12 @@ _ch32_hart1_trampoline:
     csrrc x0, mstatus, t0
     li t0, 0x2000
     csrrs x0, mstatus, t0
+
+    /* The V5F may have an I-cache line for this shared-SRAM range from a
+       previous image (the cache is not reset by a wake from deep sleep), and
+       hart 0 has just rewritten the code. Drop any stale line before running
+       it; a no-op when the cache is off. */
+    fence.i
 
     call _ch32_hart1_start
 1:
