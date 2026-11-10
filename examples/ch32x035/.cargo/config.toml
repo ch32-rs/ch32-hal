@@ -2,11 +2,14 @@
 target = "riscv32imc-unknown-none-elf"
 
 [target.riscv32imc-unknown-none-elf]
-runner = "wlink flash --enable-sdi-print --watch-serial"
-# runner = "wlink -v flash --no-erase --dry-run"
-# runner = "probe-rs run --chip CH32V307"
+runner = "probe-rs run"
+# runner = "wlink flash --enable-sdi-print --watch-serial"
 # runner = "wlink -v flash"
-# runner = "wchisp flash"
+
+[env]
+# defmt's compile-time filter defaults to `error` when this is unset, which
+# compiles out every `info!`/`warn!` call.
+DEFMT_LOG = "info"
 
 # Use the following or build.rs
 #rustflags = [
