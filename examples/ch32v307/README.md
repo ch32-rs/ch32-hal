@@ -59,3 +59,11 @@ seen, the microframe number, the OUT packet count and the OUT ring's overrun cou
 with isochronous transfer support (for example Linux with libusb; macOS does not support
 isochronous transfers through libusb) can set alt setting 1 and check that IN sequences never
 repeat and that the echoed OUT sequence only moves forward.
+
+## USBHS interrupt endpoint echo
+
+`src/bin/usb_hs_int.rs` is a vendor-class device with an interrupt OUT (0x01) and an
+interrupt IN (0x81) endpoint, 64-byte packets. The task reads one OUT packet and writes it
+back on the IN endpoint. A host using libusb (macOS or Linux both support interrupt
+transfers) can send 64-byte, short and zero-length packets and compare the echo; this
+exercises the interrupt arm/ready path, NAK flow control and the hardware toggle handling.
