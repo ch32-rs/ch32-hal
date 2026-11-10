@@ -18,10 +18,18 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
+    hal::debug::SDIPrint::enable();
+    hal::try_println!("usbd example: starting");
+
     let p = hal::init(hal::Config {
         rcc: hal::rcc::Config::SYSCLK_FREQ_48MHZ_HSI,
         ..Default::default()
     });
+    hal::try_println!(
+        "usbd example: sysclk {} Hz, hclk {} Hz",
+        hal::rcc::clocks().sysclk.0,
+        hal::rcc::clocks().hclk.0
+    );
 
     let mut ep_buffers: [EndpointDataBuffer512; 4] = core::array::from_fn(|_| EndpointDataBuffer512::default());
     let driver = Driver::new(p.USBFS, p.PC17, p.PC16, &mut ep_buffers);
@@ -58,8 +66,12 @@ async fn main(_spawner: Spawner) {
     let usb_fut = usb.run();
     let echo_fut = async {
         loop {
+            hal::try_println!("usbd example: waiting for host");
             class.wait_connection().await;
-            let _ = echo(&mut class).await;
+            hal::try_println!("usbd example: CDC connected");
+            if echo(&mut class).await.is_err() {
+                hal::try_println!("usbd example: CDC disconnected");
+            }
         }
     };
 
