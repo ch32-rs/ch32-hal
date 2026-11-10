@@ -94,6 +94,13 @@ mod interrupt_ext;
 
 pub use crate::_generated::{peripherals, Peripherals};
 
+/// Run code on the second hart in the same image (`embassy-rp` style).
+///
+/// Only the boot core can start hart 1, so this module is absent from V5F
+/// images.
+#[cfg(all(ch32h4, not(qingke_v5f)))]
+pub mod multicore;
+
 #[cfg(not(time_driver_systick))]
 pub mod delay;
 pub mod dma;
