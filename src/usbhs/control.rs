@@ -40,6 +40,28 @@ async fn complete(s: &EpState) -> Result<usize, EndpointError> {
     .await
 }
 
+impl<'d, T: Instance, const SIZE: usize> ControlPipe<'d, T, SIZE> {
+    /// The zero-length IN status stage; false if a new setup packet came instead.
+    async fn status_in(&mut self) -> bool {
+        let d = T::dregs();
+
+        if setup_pending() {
+            return false;
+        }
+        IN_STATE[0].ready.store(false, Ordering::Relaxed);
+        critical_section::with(|_| {
+            d.ep_t_len(0).write(|w| w.set_len(0));
+            d.ep_tx_ctrl(0).modify(|w| {
+                // status stage starts with DATA1
+                w.set_mask_uep_t_tog(EpTog::DATA1);
+                w.set_mask_uep_t_res(EpTxResponse::ACK);
+            });
+        });
+
+        complete(&IN_STATE[0]).await.is_ok()
+    }
+}
+
 impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::ControlPipe for ControlPipe<'d, T, SIZE> {
     fn max_packet_size(&self) -> usize {
         use embassy_usb_driver::Endpoint;
@@ -141,23 +163,8 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::ControlPipe for Con
     }
 
     async fn accept(&mut self) {
-        let d = T::dregs();
-
-        if setup_pending() {
-            return;
-        }
-        IN_STATE[0].ready.store(false, Ordering::Relaxed);
-        critical_section::with(|_| {
-            d.ep_t_len(0).write(|w| w.set_len(0));
-            d.ep_tx_ctrl(0).modify(|w| {
-                // status stage starts with DATA1
-                w.set_mask_uep_t_tog(EpTog::DATA1);
-                w.set_mask_uep_t_res(EpTxResponse::ACK);
-            });
-        });
-
         // a new setup packet instead of the status stage: nothing left to do
-        let _ = complete(&IN_STATE[0]).await;
+        let _ = self.status_in().await;
     }
 
     async fn reject(&mut self) {
@@ -172,9 +179,10 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::ControlPipe for Con
     }
 
     async fn accept_set_address(&mut self, addr: u8) {
-        let r = T::regs();
         trace!("accepting address: {}", addr);
-        self.accept().await;
-        r.dev_ad().write(|w| w.set_addr(addr));
+        // USB 2.0 §9.4.6: the address changes only after the status stage completes.
+        if self.status_in().await {
+            T::regs().dev_ad().write(|w| w.set_addr(addr));
+        }
     }
 }
