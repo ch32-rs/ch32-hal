@@ -1,7 +1,8 @@
-//! Software (bit-banged) I2C master.
+//! Software (bit-banged) I2C master, behind the `soft-i2c` feature.
 //!
 //! Needed on chips without an I2C peripheral (early CH32X033/X034) and on
-//! pins that do not carry an I2C alternate function.
+//! pins that do not carry an I2C alternate function. The feature is off by
+//! default because most chips have a hardware I2C block.
 //!
 //! CH32X0 GPIO has no general-purpose open-drain output: the only open-drain
 //! mode is the I2C alternate function (CH32X035RM §8.2.4). This driver

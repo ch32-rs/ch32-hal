@@ -10,6 +10,7 @@ ch32-hal = { path = "../../", features = [
     "embassy",
     "rt",
     "time-driver-tim2",
+    "soft-i2c",
 ] }
 embassy-executor = { version = "0.10.0", features = [
     "platform-spin",
