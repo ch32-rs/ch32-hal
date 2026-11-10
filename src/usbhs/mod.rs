@@ -10,7 +10,8 @@
 //! Isochronous endpoints run without a task in the loop:
 //! - OUT: a ring of [`ISO_OUT_SLOTS`] packet buffers. The interrupt points the endpoint's
 //!   DMA at the next free slot after each packet; `read` drains the ring, or
-//!   [`iso_out_take`] in place. A full ring drops the newest packet.
+//!   [`iso_out_take`] in place. A full ring drops the newest packet, and zero-length
+//!   packets are not delivered (arrivals are detected by a marker in the slot).
 //! - IN: a ring of [`ISO_IN_SLOTS`] packets. After each IN transaction the interrupt
 //!   loads the next queued packet, or a zero-length one when none is queued. `write`
 //!   waits for a free slot, so a writer keeps the ring full and stays at most
@@ -24,10 +25,13 @@
 //! [`set_sof_callback`] runs a function from the interrupt on every SOF (125 us at high
 //! speed).
 //!
-//! An endpoint number can be used for both an IN and an OUT endpoint.
+//! An endpoint number can be used for both an IN and an OUT endpoint of the same type.
+//! Isochronous and bulk / interrupt endpoints must use different numbers: a PING to a bulk
+//! OUT whose number is isochronous on the IN side hangs the SIE.
 //!
 //! Not supported: remote wakeup, high-bandwidth isochronous (more than one transaction per
-//! microframe), hardware double buffering.
+//! microframe), hardware double buffering, full-speed operation (the block is configured
+//! for high speed).
 
 use core::future::poll_fn;
 use core::marker::PhantomData;
@@ -970,7 +974,7 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
                 }
 
                 let ep_num = addr.index();
-                if ep_num == 0 || ep_num >= MAX_NR_EP || allocated.get(ep_num) {
+                if ep_num == 0 || ep_num >= MAX_NR_EP || allocated.get(ep_num) || taken.get(ep_num) {
                     return Err(EndpointAllocError);
                 }
 
