@@ -436,13 +436,13 @@ fn build_core(job: &Job) {
     if !job.example.is_empty() {
         args.extend(["--bin", &job.example]);
     }
-    // `embassy_systick`, `can_async_check` and the `usbss_*_check` examples are
+    // `embassy_systick`, `can_async_check` and `usbss_host_link_check` are
     // the V3F examples that start the SysTick time driver; the blocking
     // examples keep that counter for `hal::delay`. The `eth_*` examples need
     // Embassy plus the Ethernet stack, and the `usb*_cdc` examples need Embassy
     // plus the USB device stack.
     let feature = match job.example.as_str() {
-        "embassy_systick" | "can_async_check" | "usbss_link_check" | "usbss_host_link_check" => Some("embassy"),
+        "embassy_systick" | "can_async_check" | "usbss_host_link_check" => Some("embassy"),
         "eth_internal" | "eth_bench" => Some("eth"),
         "usbhs_cdc" | "usbfs_cdc" => Some("usb"),
         _ => None,

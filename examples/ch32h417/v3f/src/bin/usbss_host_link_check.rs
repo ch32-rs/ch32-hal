@@ -36,15 +36,15 @@ fn name(state: LinkState) -> &'static str {
         LinkState::U1 => "U1",
         LinkState::U2 => "U2",
         LinkState::U3 => "U3",
-        LinkState::Disabled => "DISABLED",
-        LinkState::RxDetect => "RXDET",
-        LinkState::Inactive => "INACTIVE",
-        LinkState::Polling => "POLLING",
-        LinkState::Recovery => "RECOVERY",
-        LinkState::HotReset => "HOTRESET",
-        LinkState::Compliance => "COMPLIANCE",
-        LinkState::Loopback => "LOOPBACK",
-        LinkState::Unknown(_) => "UNKNOWN",
+        LinkState::DISABLED => "DISABLED",
+        LinkState::RXDET => "RXDET",
+        LinkState::INACTIVE => "INACTIVE",
+        LinkState::POLLING => "POLLING",
+        LinkState::RECOVERY => "RECOVERY",
+        LinkState::HOTRST => "HOTRESET",
+        LinkState::COMPLIANCE => "COMPLIANCE",
+        LinkState::LOOPBACK => "LOOPBACK",
+        _ => "UNKNOWN",
     }
 }
 
@@ -105,7 +105,7 @@ async fn main(_spawner: Spawner) -> ! {
         status.term_present,
         status.rx_detect,
         status.ready,
-        status.pd_mode,
+        status.pd_mode as u8,
         usb.connected()
     );
 
@@ -122,12 +122,12 @@ async fn main(_spawner: Spawner) -> ! {
                     status.rx_detect,
                     status.ready,
                     status.busy,
-                    status.pd_mode
+                    status.pd_mode as u8
                 );
                 // Re-arm SS.RX_DETECT while nothing is detected; the bit is
                 // self-clearing and the EVT relies on it being implicit. Once
                 // a receiver shows up, start the polling handshake ourselves.
-                if status.state == LinkState::RxDetect {
+                if status.state == LinkState::RXDET {
                     if status.term_present {
                         info!("receiver termination detected, starting polling");
                         usb.start_polling();
