@@ -13,6 +13,11 @@
 //! [`Ethernet::new_rmii`] for an external PHY. RMII pins are configured and
 //! retained by the driver.
 //!
+//! With the built-in PHY the driver also corrects a reversed receive pair: once
+//! the MAC counters show CRC errors and not a single good frame, it swaps the
+//! PHY polarity and negotiates again, as WCH's driver does. The PHY's automatic
+//! detection does not catch every cable.
+//!
 //! ## RMII mode pins (default mapping)
 //!
 //! | Signal           | Pin  | Direction |
@@ -37,11 +42,20 @@ use embassy_sync::waitqueue::AtomicWaker;
 use crate::{pac, Peri};
 
 mod dma;
+mod mmc;
 mod phy;
 mod pins;
 mod smi;
 
 use dma::MTU;
+use mmc::Mmc;
+
+/// CRC errors after which a link that received nothing good is assumed to have
+/// a reversed receive pair. Same threshold as WCH's driver.
+const POLARITY_CRC_ERRORS: u32 = 3;
+/// Polarity swaps tried on one link before the driver stops second-guessing
+/// the PHY.
+const MAX_POLARITY_SWAPS: u8 = 2;
 pub use dma::{PacketQueue, RDes, RDesRing, RxToken, TDes, TDesRing, TxToken};
 pub use phy::{GenericPhy, InternalPhy, Phy};
 pub use pins::{CrsDvPin, MdcPin, MdioPin, RefClkPin, RmiiPins, Rxd0Pin, Rxd1Pin, TxEnPin, Txd0Pin, Txd1Pin};
@@ -101,6 +115,10 @@ pub struct Ethernet<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> {
     link_up: bool,
     /// MAC duplex mode, from the PHY at link-up.
     full_duplex: bool,
+    /// Receive polarity swaps tried on this link.
+    polarity_swaps: u8,
+    /// The last link drop came from a polarity swap restarting auto-negotiation.
+    polarity_swapping: bool,
     _pins: Option<[Peri<'d, crate::gpio::AnyPin>; 9]>,
     _phantom: PhantomData<T>,
 }
@@ -242,6 +260,8 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             rx_recovery_pending: false,
             link_up: false,
             full_duplex: true,
+            polarity_swaps: 0,
+            polarity_swapping: false,
             _pins: pins,
             _phantom: PhantomData,
         })
@@ -254,6 +274,46 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         if full != self.full_duplex {
             e.maccr().modify(|w| w.set_dm(full));
             self.full_duplex = full;
+        }
+        // The MMC counters describe one link; start them over.
+        Mmc::new(e).reset();
+    }
+
+    /// Keep the polarity attempt budget across link drops the driver caused.
+    fn on_link_down(&mut self) {
+        // A swap restarts auto-negotiation, so the link drops on purpose.
+        // Forgetting the attempts there would make the driver alternate the
+        // polarity for as long as the cable stays reversed.
+        if self.polarity_swapping {
+            self.polarity_swapping = false;
+        } else {
+            self.polarity_swaps = 0;
+        }
+    }
+
+    /// Recover from a reversed receive pair on the built-in 10M PHY.
+    ///
+    /// The PHY's automatic detection does not cover every cable: with a
+    /// reversed pair the link still comes up, because the link pulses do not
+    /// care about polarity, but every frame fails its FCS. The MAC counts both
+    /// cases, so a link that keeps producing CRC errors without a single good
+    /// unicast frame is treated as reversed, as in WCH's `WCHNET_PhyPNProcess`.
+    fn check_receive_polarity(&mut self) {
+        let mmc = Mmc::new(T::regs());
+        let counters = mmc.rx();
+        if counters.good_unicast != 0 {
+            // Reception works, so the polarity is right; a later cable change
+            // gets its own budget.
+            self.polarity_swaps = 0;
+            return;
+        }
+        if self.polarity_swaps >= MAX_POLARITY_SWAPS || counters.crc_errors < POLARITY_CRC_ERRORS {
+            return;
+        }
+        if self.phy.swap_polarity(&mut self.smi).unwrap_or(false) {
+            self.polarity_swaps += 1;
+            self.polarity_swapping = true;
+            mmc.reset();
         }
     }
 
@@ -580,9 +640,12 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driv
         let up = self.phy.poll_link(&mut self.smi, cx).unwrap_or(false);
         if up && !self.link_up {
             self.on_link_up();
+        } else if !up && self.link_up {
+            self.on_link_down();
         }
         self.link_up = up;
         if up {
+            self.check_receive_polarity();
             LinkState::Up
         } else {
             LinkState::Down

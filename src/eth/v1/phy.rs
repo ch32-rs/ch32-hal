@@ -21,6 +21,16 @@ pub trait Phy {
     fn full_duplex(&mut self, _smi: &mut Smi) -> Result<bool, SmiError> {
         Ok(true)
     }
+    /// Swap the polarity of the receive pair and restart auto-negotiation.
+    ///
+    /// Called when the MAC has seen frames that fail their FCS and not a
+    /// single one that passes, which is what a reversed pair looks like: the
+    /// link comes up and link pulses are polarity independent, but every frame
+    /// is inverted. Returns true if the PHY reconfigured itself. The default
+    /// leaves the PHY alone.
+    fn swap_polarity(&mut self, _smi: &mut Smi) -> Result<bool, SmiError> {
+        Ok(false)
+    }
 }
 
 /// MII PHY register constants.
@@ -91,6 +101,9 @@ impl InternalPhy {
     const STATUS_FULL_DUPLEX: u16 = 1 << 2;
     /// Auto PN polarity detection (bits 3:2 = 0b10).
     const MDIX_PN_AUTO: u16 = 2 << 2;
+    /// Receive polarity field (bits 3:2): 0b00 normal, 0b01 reversed.
+    const MDIX_PN_MASK: u16 = 3 << 2;
+    const MDIX_PN_REVERSED: u16 = 1 << 2;
 
     /// Create a driver for the built-in PHY.
     pub fn new() -> Self {
@@ -124,5 +137,22 @@ impl Phy for InternalPhy {
         }
         let anlpar = smi.read(Self::PHY_ADDR, phy_regs::ANLPAR)?;
         Ok(anlpar & phy_regs::ANLPAR_SELECTOR != phy_regs::ANLPAR_SELECTOR_IEEE802_3)
+    }
+
+    fn swap_polarity(&mut self, smi: &mut Smi) -> Result<bool, SmiError> {
+        // Step the automatic detection one way or the other, as WCH does in
+        // `WCHNET_PhyPNProcess`: auto and normal keep receiving inverted
+        // frames, so the first swap forces the reversed setting and the next
+        // one goes back to normal.
+        let mdix = smi.read(Self::PHY_ADDR, Self::MDIX)?;
+        let mdix = if mdix & Self::MDIX_PN_REVERSED != 0 {
+            mdix & !Self::MDIX_PN_MASK
+        } else {
+            (mdix & !Self::MDIX_PN_MASK) | Self::MDIX_PN_REVERSED
+        };
+        smi.write(Self::PHY_ADDR, Self::MDIX, mdix)?;
+        // The PHY only applies the new polarity when it negotiates again.
+        self.phy.phy_init(smi)?;
+        Ok(true)
     }
 }
