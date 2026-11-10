@@ -206,3 +206,16 @@ ch32h417qeu6-v5f = [
     "qingke/v5f",
     "qingke/dual-core",
 ]
+
+# Unreleased embassy main, for the double-buffered bulk endpoints in
+# embassy-usb-driver. embassy-sync and the network crates stay on crates.io:
+# main replaced embassy-net-driver with xarxa, and the released
+# embassy-net-driver-channel doesn't build against main's embassy-sync.
+[patch.crates-io]
+embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-executor-timer-queue = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
