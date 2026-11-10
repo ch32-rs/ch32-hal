@@ -139,7 +139,7 @@ fn main() -> ! {
     }
 
     let stack = unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) };
-    multicore::spawn_core1(stack, || {
+    multicore::spawn_core1(multicore::Core1::take(), stack, || {
         OBS.h1_hart
             .store(multicore::hart_id() as u32, Ordering::Relaxed);
 

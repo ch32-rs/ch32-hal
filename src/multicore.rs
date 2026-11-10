@@ -14,9 +14,10 @@
 //! #[ch32_hal::entry]
 //! fn main() -> ! {
 //!     let p = ch32_hal::init(Default::default());
+//!     let core1 = ch32_hal::multicore::Core1::take();
 //!     let pf0 = p.PF0;
 //!
-//!     ch32_hal::multicore::spawn_core1(unsafe { &mut CORE1_STACK }, move || {
+//!     ch32_hal::multicore::spawn_core1(core1, unsafe { &mut CORE1_STACK }, move || {
 //!         let mut led = ch32_hal::gpio::Output::new(pf0, Default::default(), Default::default());
 //!         loop { led.toggle(); }
 //!     });
@@ -47,14 +48,13 @@
 //!   expose yet. `embassy_time` tasks on hart 1 can use the hart-0 driver:
 //!   hart 1 only queues its wake, and hart 0's 1 ms re-arm tick programs the
 //!   comparator (the V5F cannot write `CTLR0`/`CMP0`).
-//! - **Interrupts are enabled with the boot core's setup.** Before the closure
-//!   runs, hart 1 calls `qingke-rt`'s `_setup_interrupts`: `mtvec` points at
-//!   the shared vector table, the hardware push/pop stack is on, `mstatus.MIE`
-//!   is set, and `corecfgr`/`intsyscr`/`inestcr` get qingke-rt's *V3F* values.
-//!   Those last writes are the open question: the vendor's V5F startup also
-//!   sets V5F-only `corecfgr` bits (`NLP_EN`, `GHR_EN`, `LSU_DUAL`), which
-//!   qingke-rt does not know about. It works on the bench, but a V5F-specific
-//!   setup belongs in `qingke-rt` before this is called done.
+//! - **Interrupts are enabled with the V5F core setup.** Before the closure
+//!   runs, hart 1 calls `qingke-rt`'s `_setup_interrupts` (shared `mtvec`,
+//!   hardware push/pop stack, `mstatus.MIE`), then replaces the V3F
+//!   `corecfgr`/`intsyscr`/`inestcr` values it just wrote with the V5F ones
+//!   from qingke-rt's own v5f startup (`0x1237B3E0`, `0x0F`, nest level 8).
+//!   The leaf-core selection is per image, so a single image built for V3F
+//!   needs this second write to configure the V5F correctly.
 //! - **IRQs above 31 are claimed by whoever enables them**, and PFIC enable
 //!   bits are per-hart: hart 1 starts with no external interrupt enabled, so
 //!   hart 0's interrupts stay on hart 0.
@@ -71,6 +71,7 @@
 //! because the closure itself lives on hart 0's stack until hart 1 moves it
 //! out, exactly like `embassy-rp`.
 
+use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ptr;
 use core::sync::atomic::{fence, AtomicBool, AtomicPtr, AtomicUsize, Ordering};
@@ -80,6 +81,39 @@ pub use qingke::pfic::HartId;
 
 /// The hart that [`spawn_core1`] starts.
 pub const SECOND_HART: HartId = HartId::C1;
+
+/// Ownership token for the second hart.
+///
+/// Take it once on hart 0 and hand it to [`spawn_core1`]. It is deliberately
+/// `!Send`, so a closure cannot carry it to hart 1, and [`Core1::take`] panics
+/// on a second take — a double spawn becomes a clear panic instead of a second
+/// wake of an already-running core.
+pub struct Core1 {
+    _not_send: PhantomData<*mut ()>,
+}
+
+static CORE1_TAKEN: AtomicBool = AtomicBool::new(false);
+
+impl Core1 {
+    /// Take the hart-1 token.
+    ///
+    /// # Panics
+    ///
+    /// If the token was already taken, or if this runs on hart 1.
+    pub fn take() -> Self {
+        assert!(
+            HartId::current() == HartId::C0,
+            "Core1::take must run on hart 0"
+        );
+        assert!(
+            !CORE1_TAKEN.swap(true, Ordering::AcqRel),
+            "Core1 was already taken"
+        );
+        Self {
+            _not_send: PhantomData,
+        }
+    }
+}
 
 /// A stack for hart 1, aligned for the RISC-V psABI.
 ///
@@ -124,7 +158,6 @@ static CH32_MULTICORE_STACK_TOP: AtomicUsize = AtomicUsize::new(0);
 static ENTRY: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static ENTRY_CALL: AtomicUsize = AtomicUsize::new(0);
 static ACK: AtomicBool = AtomicBool::new(false);
-static SPAWNED: AtomicBool = AtomicBool::new(false);
 
 /// Start `entry` on hart 1 with `stack`.
 ///
@@ -136,7 +169,7 @@ static SPAWNED: AtomicBool = AtomicBool::new(false);
 ///
 /// Panics if called twice, or if hart 1 does not answer (it is not powered, or
 /// the wake register was already claimed by another image).
-pub fn spawn_core1<F, const N: usize>(stack: &'static mut Stack<N>, entry: F)
+pub fn spawn_core1<F, const N: usize>(_core1: Core1, stack: &'static mut Stack<N>, entry: F)
 where
     F: FnOnce() + Send + 'static,
 {
@@ -145,10 +178,6 @@ where
     assert!(
         HartId::current() == HartId::C0,
         "spawn_core1 must be called from hart 0"
-    );
-    assert!(
-        !SPAWNED.swap(true, Ordering::AcqRel),
-        "hart 1 has already been spawned"
     );
 
     let entry_addr = _ch32_hart1_trampoline as unsafe extern "C" fn() as usize as u32;
@@ -205,6 +234,20 @@ extern "C" fn _ch32_hart1_start() -> ! {
     // stack and `mstatus.MIE`. Safe to call here: `sp` and `gp` are set and
     // nothing else on this hart has run.
     unsafe { _setup_interrupts() };
+
+    // `_setup_interrupts` is compiled for the leaf core of this image (V3F on a
+    // single image), so its `corecfgr`/`intsyscr`/`inestcr` writes are the V3F
+    // values. Hart 1 is the V5F: replace them with the values from qingke-rt's
+    // own `v5f` startup (`startup_ch32h417_v5f.S`) — corecfgr with the V5F-only
+    // `NLP_EN`/`GHR_EN`/`LSU_DUAL` bits, `intsyscr = 0x0F`, and eight nesting
+    // levels. No interrupt is enabled on this hart yet, so the window is inert.
+    unsafe {
+        qingke::register::corecfgr::write(0x1237_B3E0);
+        core::arch::asm!("csrw 0x804, {}", in(reg) 0x0F_usize);
+        qingke::register::inestcr::write(
+            qingke::register::inestcr::NestLevel::Eight as usize,
+        );
+    }
 
     let raw = ENTRY.swap(ptr::null_mut(), Ordering::Acquire);
     let call: extern "C" fn(*mut ()) -> ! =

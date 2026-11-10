@@ -347,6 +347,16 @@ impl Default for SecondaryConfig {
 /// core already took one.
 #[cfg(rcc_h4)]
 pub unsafe fn init_secondary(config: SecondaryConfig) -> Peripherals {
+    // Two-image model only: this takes the singleton that belongs to this
+    // image's hart. In a single-image build hart 0 already took it, and hart 1
+    // needs no HAL init at all — `ch32_hal::multicore` sets up the per-hart
+    // interrupt state, and `rcc::clocks()`/GPIO/DMA/time-driver state are the
+    // same statics both harts share.
+    assert!(
+        qingke::pfic::HartId::current() == qingke::pfic::HartId::C1,
+        "init_secondary is for the second hart of a two-image build; on a \
+         single image hart 1 needs no init"
+    );
     let p = Peripherals::take();
 
     unsafe {

@@ -3,8 +3,8 @@
 Status: **spike done, API v1 implemented (`ch32_hal::multicore`), hart 1 runs
 its own interrupt setup + `embassy_executor`, cross-core `critical-section`
 is implemented on a qingke branch, and cross-core `embassy_time` is fixed —
-all verified on the bench board. Remaining gaps: V5F-specific core setup,
-checked peripheral ownership, and getting the qingke change released.**
+all verified on the bench board. Remaining gaps: checked peripheral ownership
+and getting the qingke change released.**
 Worktree branch: `dual-core-homogeneous`. Examples:
 `examples/ch32h417/v3f/src/bin/homogeneous.rs` (mechanism),
 `.../multicore.rs` (API + lock litmus), `.../multicore_embassy.rs` (one
@@ -87,7 +87,7 @@ Notes from this run:
 | embassy-rp | CH32H417 spike | Gap |
 |---|---|---|
 | `Stack<N>` static | static `Hart1Stack` in `.bss` | none |
-| `spawn_core1(core1, stack, closure)` | `wake_other_core(_hart1_trampoline)` + statics | needs a `Core1` token / safe API |
+| `spawn_core1(core1, stack, closure)` | `spawn_core1(Core1::take(), stack, closure)` | none |
 | bootrom sets SP, jumps to `core1_startup` | trampoline sets `sp`/`gp` itself | entry must be 1 KiB aligned → linker slot |
 | FIFO handshake before core 1 runs | `fence` + `SETEVENT`; hart 0 polls an ack flag | handshake code to write |
 | shared `.data`/`.bss`, core 0 initialises once | same | none |
@@ -238,16 +238,15 @@ the whole module would forbid a valid use, so the requirement is documented in
    registers hart 1 also touches. A `Peripherals::split()` /
    `Peri<'static, CORE>` token would make that explicit; `init_secondary`
    should get a variant that does not `take()`.
-2. **Hart 1's interrupt setup is the boot core's, not V5F's — works, but
-   incomplete.** `multicore` calls qingke-rt's `_setup_interrupts`, which
-   writes the V3F `corecfgr` value (`0x123703E1`); the vendor's V5F startup
-   also sets V5F-only bits (`NLP_EN`, `GHR_EN`, `LSU_DUAL`). Interrupt
-   delivery and the hardware stack work on the bench, but the V5F-specific
-   configuration belongs in `qingke-rt` (a `v5f` branch of the startup) before
-   this is considered finished. Also remember IRQs above 31 are delivered to
-   exactly one core, chosen by whoever enables them; `qingke::pfic::enable_interrupt`
-   writes the whole `IENR` word, so it must only be used by a hart that owns
-   that bank.
+2. **Hart 1's interrupt setup now uses the V5F values — solved in the HAL,
+   worth moving upstream.** `multicore` calls `_setup_interrupts` and then
+   overwrites the V3F `corecfgr`/`intsyscr`/`inestcr` with the V5F values from
+   qingke-rt's v5f startup. Verified: hart-1 `Timer` and the pended `IPC_CH0`
+   still work with the new core configuration. Ideally `qingke-rt` grows a
+   `setup_secondary(HartId)` so the HAL stops hard-coding those numbers.
+   Remember IRQs above 31 are delivered to exactly one core, chosen by whoever
+   enables them; `qingke::pfic::enable_interrupt` writes the whole `IENR` word,
+   so it must only be used by a hart that owns that bank.
 3. **`critical-section` needs qingke's new dual-hart feature — implemented,
    not released.** `SingleHartCriticalSection` masks interrupt state and does
    not serialise harts, so `CriticalSectionRawMutex` (and therefore
@@ -323,10 +322,11 @@ is the largest, still inside 448 KiB today).
 
 ```rust
 pub struct Stack<const N: usize>;              // aligned 16, `const fn new()`
+pub struct Core1;                              // `!Send` token, `Core1::take()`
 
 /// Start `entry` on hart 1; returns after hart 1 has moved the closure out
 /// of hart 0's frame (`embassy-rp`'s ack, for the same reason).
-pub fn spawn_core1<F, const N: usize>(stack: &'static mut Stack<N>, entry: F)
+pub fn spawn_core1<F, const N: usize>(_core1: Core1, stack: &'static mut Stack<N>, entry: F)
 where F: FnOnce() + Send + 'static;
 
 pub fn hart_id() -> HartId;
@@ -341,7 +341,14 @@ pub struct SpinLock<T>;                        // amoswap + local IRQ mask
   0's stack, and a type-erased `extern "C" fn(*mut ()) -> !`; `fence(Release)`;
   `wake_other_core`; then spins on the ack with a bounded retry.
 - The trampoline sets `gp` from `__global_pointer$`, loads `sp` from the
-  static, `fence rw, rw`, enables `mstatus.FS`, and calls back into Rust.
+  static, `fence rw, rw`, enables `mstatus.FS`, runs `fence.i`, and calls back
+  into Rust.
+- `_ch32_hart1_start` runs `_setup_interrupts` and then replaces the V3F
+  `corecfgr`/`intsyscr`/`inestcr` values with the V5F ones from qingke-rt's
+  v5f startup (`0x1237B3E0`, `0x0F`, nest level 8), so a single image built
+  for V3F still configures hart 1 as a V5F.
+- `Core1::take()` is the ownership token: one per program, `!Send`, panics on a
+  second take or when called on hart 1. `spawn_core1` consumes it.
 - Peripherals are handed over **by move** (`let pf0 = p.PF0;` then capture
   `pf0`), so there is no `steal()` in user code and no double owner.
 - `SpinLock<T>` is the stopgap for shared state until a real cross-core
@@ -410,12 +417,14 @@ Constraints the implementation has to encode:
 
 ## Recommended order
 
-1. **Done — API v1 + hart-1 interrupts + executor.** `spawn_core1`, `Stack`,
-   `hart_id`, `SpinLock`, `_setup_interrupts` on hart 1, and
-   `multicore_embassy`. Still open inside this step: V5F-specific
-   `corecfgr`/`intsyscr` (today hart 1 gets the V3F values),
-   `Peripherals::split()` / `Core1` token, and an `init_secondary` variant
-   that does not `take()`.
+1. **Done — API v1 + hart-1 interrupts + executor + V5F core setup +
+   `Core1` token.** `spawn_core1(core1, stack, closure)`, `Stack`, `Core1`,
+   `hart_id`, `SpinLock`, `_setup_interrupts` plus the V5F
+   `corecfgr`/`intsyscr`/`inestcr` values on hart 1, and `multicore_embassy`.
+   `init_secondary` now asserts it is running on hart 1 and documents that a
+   single image must not call it. Still open: a full `Peripherals::split()`
+   (the move-based handoff plus `Core1` covers the common case) and moving the
+   V5F core setup into `qingke-rt`.
 2. **Done in qingke, waiting for release / upstream review — cross-core
    `critical-section`.** Feature `dual-core-critical-section` on the qingke
    branch, verified with `multicore` (`--features dual-core-critical-section`
