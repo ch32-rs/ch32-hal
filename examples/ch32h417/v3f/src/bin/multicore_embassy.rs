@@ -4,34 +4,32 @@
 //! `mtvec`/interrupt state (`multicore` calls qingke-rt's `_setup_interrupts`
 //! before the closure) and then runs a second `embassy_executor::Executor`.
 //!
-//! Three tasks:
+//! - hart 0: a cooperative `YieldOnce` task. It does **not** use
+//!   `embassy_time`, so this is the regression case: hart 1 is the only timer
+//!   user.
+//! - hart 1: a cooperative `YieldOnce` task plus `Timer::after(500 ms)`.
 //!
-//! - hart 0: `Timer::after(500 ms)`. The CH32H4 driver runs on hart 0's
-//!   SysTick (counter 0), so this is the known-good time path.
-//! - hart 1: a cooperative task that yields through a local `YieldOnce`
-//!   future, exercising the executor's waker path on hart 1.
-//! - hart 1: `Timer::after(500 ms)` through the **same** driver that hart 0
-//!   initialised. The alarm interrupt runs on hart 0 and the waker wakes the
-//!   hart-1 task; the spinning executor on hart 1 picks it up.
+//! The timer on hart 1 uses the driver hart 0 initialised. Hart 1 cannot
+//! program counter 0 (the V5F's stores to `CTLR0`/`CMP0` are dropped), so its
+//! `schedule_wake` only inserts into the shared queue; hart 0's re-arm tick
+//! finds it and programs the comparator. The alarm interrupt runs on hart 0,
+//! its waker wakes the hart-1 task, and the spinning executor on hart 1 picks
+//! it up.
 //!
-//! Cross-core time works, with one measured caveat: in two runs where hart 1
-//! was the only user of `embassy_time` (hart 0 just yielded), `h1_timer_ticks`
-//! stayed 0 — the alarm never fired. With hart 0 also scheduling, both counters
-//! advance in lockstep. So the driver's re-arm path needs investigating before
-//! "hart 1 timers work" can be stated unconditionally; see the notes.
-//!
-//! It is still true that hart 1 must not *initialise* a driver: the CH32H4
-//! driver owns counter 0 and its `SysTick` vector, and hart 1's `SysTick1`
-//! (vector 13) is not exposed by `qingke-rt`.
+//! Hart 1 must not *initialise* a driver: the CH32H4 driver owns counter 0 and
+//! its `SysTick` vector, and hart 1's `SysTick1` (vector 13) is not exposed by
+//! `qingke-rt`.
 //!
 //! ```text
 //! WLINK_PROBE=1a86:8010:D7708F065C7F cargo xtask flash --example multicore_embassy
-//! sleep 3 && wlink dump 0x20178000 16 -o /var/tmp/obs.bin   # read once
+//! sleep 3 && wlink dump 0x20178000 36 -o /var/tmp/obs.bin   # read once
 //! ```
 //!
-//! Expected: `h1_hart = 1` and both counters advancing. The two rates are not
-//! equal (different executors, different number of tasks); what matters is
-//! that neither is stuck.
+//! Expected: `h1_hart = 1`, `h1_timer_ticks` advancing (≈8/s on the default
+//! 4×-fast HSI recipe), and `h1_seq`/`h0_seq` advancing. The cross-core queue
+//! requires a real cross-core `critical-section` (qingke's
+//! `dual-core-critical-section`); with the default single-hart section the
+//! queue corrupts after a few timer rounds.
 
 #![no_std]
 #![no_main]
@@ -87,11 +85,31 @@ impl Future for YieldOnce {
     }
 }
 
+/// Deliberately does **not** use `embassy_time`: this is the regression case
+/// where hart 1 is the only timer user, so the alarm must be armed by hart 0
+/// from a cross-core insertion.
 #[embassy_executor::task]
 async fn hart0_task() {
     loop {
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(500)).await;
         OBS.h0_seq.fetch_add(1, Ordering::Relaxed);
+        YieldOnce(false).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn hart1_task() {
+    loop {
+        OBS.h1_seq.fetch_add(1, Ordering::Relaxed);
+
+        YieldOnce(false).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn hart1_timer_task() {
+    loop {
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(500)).await;
+        OBS.h1_timer_ticks.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -104,26 +122,6 @@ async fn hart0_task() {
 fn IPC_CH0() {
     unsafe { qingke::pfic::unpend_interrupt(ch32_hal::pac::Interrupt::IPC_CH0 as u8) };
     OBS.h1_irqs.fetch_add(1, Ordering::Relaxed);
-}
-
-#[embassy_executor::task]
-async fn hart1_task() {
-    loop {
-        OBS.h1_seq.fetch_add(1, Ordering::Relaxed);
-        YieldOnce(false).await;
-    }
-}
-
-/// Uses `embassy_time`, whose driver hart 0 initialised (`hal::init` with the
-/// `embassy` feature): the SysTick alarm runs on hart 0, the waker wakes this
-/// hart-1 task, and the spinning executor on hart 1 picks it up. This is the
-/// first cross-core time test.
-#[embassy_executor::task]
-async fn hart1_timer_task() {
-    loop {
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(500)).await;
-        OBS.h1_timer_ticks.fetch_add(1, Ordering::Relaxed);
-    }
 }
 
 #[ch32_hal::entry]

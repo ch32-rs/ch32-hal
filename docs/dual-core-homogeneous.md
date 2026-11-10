@@ -1,12 +1,10 @@
 # CH32H417 as a homogeneous dual core — feasibility spike
 
 Status: **spike done, API v1 implemented (`ch32_hal::multicore`), hart 1 runs
-its own interrupt setup + `embassy_executor`, and cross-core
-`critical-section` is implemented on a qingke branch — all verified on the
-bench board. Cross-core `embassy_time` works when hart 0 also schedules, but a
-hart-1-only timer does not fire yet. Remaining gaps: that time bug, V5F-specific
-core setup, checked peripheral ownership, and getting the qingke change
-released.**
+its own interrupt setup + `embassy_executor`, cross-core `critical-section`
+is implemented on a qingke branch, and cross-core `embassy_time` is fixed —
+all verified on the bench board. Remaining gaps: V5F-specific core setup,
+checked peripheral ownership, and getting the qingke change released.**
 Worktree branch: `dual-core-homogeneous`. Examples:
 `examples/ch32h417/v3f/src/bin/homogeneous.rs` (mechanism),
 `.../multicore.rs` (API + lock litmus), `.../multicore_embassy.rs` (one
@@ -161,6 +159,14 @@ So **the V5F can read counter 0 but writes to counter 0's control/compare
 registers are dropped**. `set_alarm` from hart 1 arms nothing; the comparator
 stays at the half-period maintenance value, and hart-0 timers work only because
 hart 0's own `schedule_wake` programs the comparator.
+
+Implemented in `time_driver_systick_h4.rs`; both changes below are in the tree.
+Measured with the qingke branch: `h1_timer_ticks` 8 → 41 over 4 s (~8/s, the
+4×-fast default recipe), `h1_seq` 0.62 M → 4.25 M, and the driver saw
+`isr1 = 0` — the SysTick interrupt stayed on hart 0. Without the cross-core
+`critical-section` the same firmware stops after ~8 timer rounds and hart 1
+slows down: that is the queue race, and it confirms the dependency ordering
+(fix 1 needs fix 2).
 
 The fix, in order of importance:
 
@@ -389,6 +395,8 @@ Constraints the implementation has to encode:
    on the same hart" nesting path is covered by the depth counter; it has not
    been stress-tested with a real IRQ storm yet — that is worth adding when
    the API grows interrupt-driven drivers.
-3. **Next — implement the cross-core time fix** specified above (hart-0-only
-   arming + ~1 ms re-arm tick + hart-1-only regression test). No qingke-rt
-   change and no per-hart driver are needed for `embassy_time`.
+3. **Done — cross-core time fix** (hart-0-only arming + 1 ms re-arm tick in
+   `time_driver_systick_h4.rs`), with `multicore_embassy` as the hart-1-only
+   regression. It requires the dual-core `critical-section` (2): with the
+   default single-hart section the queue corrupts after a few timer rounds.
+   No qingke-rt change and no per-hart driver are needed for `embassy_time`.
