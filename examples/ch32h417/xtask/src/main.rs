@@ -442,7 +442,8 @@ fn build_core(job: &Job) {
     // Embassy plus the Ethernet stack, and the `usb*_cdc` examples need Embassy
     // plus the USB device stack.
     let feature = match job.example.as_str() {
-        "embassy_systick" | "can_async_check" | "usbss_link_check" | "usbss_host_link_check" => Some("embassy"),
+        "embassy_systick" | "can_async_check" | "usbss_link_check" | "usbss_host_link_check"
+        | "multicore_embassy" => Some("embassy"),
         "eth_internal" | "eth_bench" => Some("eth"),
         "usbhs_cdc" | "usbfs_cdc" => Some("usb"),
         _ => None,

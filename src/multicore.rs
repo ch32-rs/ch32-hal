@@ -41,10 +41,17 @@
 //!   only; hart 1's counter interrupts through `SysTick1` (vector 13), which
 //!   `qingke-rt` does not expose yet. An `embassy_executor::Executor` runs on
 //!   hart 1, but `embassy_time` must not be initialised there.
-//! - **Interrupts are not enabled and `mtvec` is not changed.** The closure
-//!   runs with whatever hart 1 had after wake (interrupts off). Polling-only
-//!   executors are fine; interrupt-driven ones need per-hart `mtvec` and the
-//!   V5F core registers, which are not wired up here.
+//! - **Interrupts are enabled with the boot core's setup.** Before the closure
+//!   runs, hart 1 calls `qingke-rt`'s `_setup_interrupts`: `mtvec` points at
+//!   the shared vector table, the hardware push/pop stack is on, `mstatus.MIE`
+//!   is set, and `corecfgr`/`intsyscr`/`inestcr` get qingke-rt's *V3F* values.
+//!   Those last writes are the open question: the vendor's V5F startup also
+//!   sets V5F-only `corecfgr` bits (`NLP_EN`, `GHR_EN`, `LSU_DUAL`), which
+//!   qingke-rt does not know about. It works on the bench, but a V5F-specific
+//!   setup belongs in `qingke-rt` before this is called done.
+//! - **IRQs above 31 are claimed by whoever enables them**, and PFIC enable
+//!   bits are per-hart: hart 1 starts with no external interrupt enabled, so
+//!   hart 0's interrupts stay on hart 0.
 //!
 //! # Mechanism
 //!
@@ -173,10 +180,20 @@ extern "C" fn run_entry<F: FnOnce()>(raw: *mut ()) -> ! {
     }
 }
 
+/// qingke-rt's startup only ran on hart 0; this is the per-hart part of it.
+unsafe extern "C" {
+    fn _setup_interrupts();
+}
+
 /// Called by the trampoline once `gp` and `sp` are set and the release fence
 /// has run.
 #[no_mangle]
 extern "C" fn _ch32_hart1_start() -> ! {
+    // Installs `mtvec` (the shared vector table), enables the hardware push/pop
+    // stack and `mstatus.MIE`. Safe to call here: `sp` and `gp` are set and
+    // nothing else on this hart has run.
+    unsafe { _setup_interrupts() };
+
     let raw = ENTRY.swap(ptr::null_mut(), Ordering::Acquire);
     let call: extern "C" fn(*mut ()) -> ! =
         unsafe { core::mem::transmute(ENTRY_CALL.load(Ordering::Relaxed)) };

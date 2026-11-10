@@ -1,22 +1,25 @@
 # CH32H417 as a homogeneous dual core — feasibility spike
 
-Status: **spike done and API v1 implemented (`ch32_hal::multicore`), verified on
-the bench board. Remaining gaps: hart-1 interrupts/time, cross-core
-`critical-section`, checked peripheral ownership.**
+Status: **spike done, API v1 implemented (`ch32_hal::multicore`), and hart 1
+runs its own interrupt setup + `embassy_executor`, all verified on the bench
+board. Remaining gaps: cross-core `critical-section`, a per-hart time driver,
+V5F-specific core setup, checked peripheral ownership.**
 Worktree branch: `dual-core-homogeneous`. Examples:
-`examples/ch32h417/v3f/src/bin/homogeneous.rs` (mechanism) and
-`.../multicore.rs` (API).
+`examples/ch32h417/v3f/src/bin/homogeneous.rs` (mechanism),
+`.../multicore.rs` (API + lock litmus), `.../multicore_embassy.rs` (one
+executor per hart + hart-1 interrupt).
 
 Question: can CH32H417 run one image on both harts, the way
 `embassy_rp::multicore::spawn_core1` runs RP2040 core 1 — same `.text`, same
 `.data`/`.bss`, second hart with its own stack and entry — instead of building
 two images (V3F at flash `0x0000_0000`, V5F at `0x0001_0000`)?
 
-Short answer: **yes for the mechanism, no for the API yet.** The second hart
-boots into a 1 KiB-aligned trampoline inside the boot image, sets `gp`/`sp`,
-and runs the same Rust code and HAL drivers. What is missing is the library
-layer: a per-hart `Peripherals` split, a cross-core `critical-section`, a
-per-hart time driver, and an audit of shared peripheral registers.
+Short answer: **yes.** The second hart boots into a 1 KiB-aligned trampoline
+inside the boot image, sets `gp`/`sp`, installs the shared vector table, and
+runs the same Rust code, HAL drivers and an `embassy_executor`. What is still
+missing is the library layer around it: a cross-core `critical-section`, a
+per-hart time driver, V5F-specific core setup, and an audit of shared
+peripheral registers.
 
 ## What the spike does
 
@@ -101,12 +104,16 @@ Notes from this run:
    registers hart 1 also touches. A `Peripherals::split()` /
    `Peri<'static, CORE>` token would make that explicit; `init_secondary`
    should get a variant that does not `take()`.
-2. **Hart 1 has no interrupt setup.** The API leaves `mtvec` untouched and
-   interrupts disabled. An interrupt-driven executor or `embassy-time` on
-   hart 1 needs a per-hart `mtvec` pointing at the shared vector table plus
-   the V5F `corecfgr`/`intsyscr` values (the spike deliberately does not call
-   qingke-rt's V3F `_setup_interrupts` on V5F). Remember IRQs above 31 are
-   delivered to exactly one core, chosen by whoever enables them.
+2. **Hart 1's interrupt setup is the boot core's, not V5F's — works, but
+   incomplete.** `multicore` calls qingke-rt's `_setup_interrupts`, which
+   writes the V3F `corecfgr` value (`0x123703E1`); the vendor's V5F startup
+   also sets V5F-only bits (`NLP_EN`, `GHR_EN`, `LSU_DUAL`). Interrupt
+   delivery and the hardware stack work on the bench, but the V5F-specific
+   configuration belongs in `qingke-rt` (a `v5f` branch of the startup) before
+   this is considered finished. Also remember IRQs above 31 are delivered to
+   exactly one core, chosen by whoever enables them; `qingke::pfic::enable_interrupt`
+   writes the whole `IENR` word, so it must only be used by a hart that owns
+   that bank.
 3. **`critical-section` is local-only.** `qingke`'s `SingleHartCriticalSection`
    masks interrupt state; it does not serialise harts. Anything both harts
    touch (`embassy-sync`'s `CriticalSectionRawMutex`, the mailbox, tracing)
@@ -201,10 +208,24 @@ pub struct SpinLock<T>;                        // amoswap + local IRQ mask
   `critical_section::with` around it so a same-hart interrupt handler cannot
   deadlock the thread it interrupted.
 
-Verified with `multicore.rs` (default clock recipe, 3 consecutive flashes):
-`h1_hart = 1`, `h1_done = 1`, and `SpinLock` value **200000 exactly** after
-100 000 `with(|v| *v += 1)` on each hart — no lost updates across three runs.
-Both harts ran `Delay` and GPIO through the same `.text`/`.data`.
+Before the closure runs, hart 1 calls `qingke-rt`'s `_setup_interrupts`
+(same call hart 0's `_start` makes): shared `mtvec`, hardware push/pop stack,
+`mstatus.MIE`, `corecfgr`/`intsyscr`/`inestcr`. The closure therefore starts
+with interrupts on.
+
+Measured (default clock recipe unless noted):
+
+- `multicore.rs`, 3 consecutive flashes: `h1_hart = 1`, `h1_done = 1`, and
+  `SpinLock` value **200000 exactly** after 100 000 `with(|v| *v += 1)` on
+  each hart — no lost updates. Both harts ran `Delay` and GPIO through the
+  same `.text`/`.data`.
+- `multicore_embassy.rs`: an `embassy_executor::Executor` on each hart; both
+  cooperative tasks advance (`h0_seq` 411 k → 3.2 M while `h1_seq` 411 k →
+  4.6 M over 5 s), and the self-wake path works (`h1_resumes` 0.8 M → 7.8 M).
+- The same example pends `IPC_CH0` (interrupt 16) on hart 1 only. `h1_irqs`
+  reads exactly **1** and stays 1: the shared vector table dispatched to
+  hart 1, the handler ran, `unpend_interrupt` cleared it with no storm.
+  Hart 0's interrupts were untouched.
 
 Constraints the implementation has to encode:
 
@@ -241,19 +262,18 @@ Constraints the implementation has to encode:
 
 ## Recommended order
 
-1. **Finish the API (no dependency on the lock or the time driver):** hart-1
-   interrupt bring-up (per-hart `mtvec`, V5F `corecfgr`/`intsyscr`, vector
-   table shared with hart 0), a `Peripherals::split()` / `Core1` token, and an
-   `init_secondary` that does not `take()`. This is what makes the API usable
-   for an `embassy_executor` runner, and it is the test bed for the next step.
-2. **Cross-core `critical-section`** (upstream `qingke`): `CriticalSectionRawMutex`
-   and any shared logger/mailbox are unsound without it; `SpinLock` is a
-   stopgap in user code, not a replacement. Needs hart 1 running interrupts to
-   test the "handler vs thread on the same hart" path.
-3. **Per-hart time driver:** `SysTick1` (vector 13) in `qingke-rt` plus
-   per-hart `embassy-time` state, or one TIM per core. Only this unlocks
-   `embassy_time` tasks on hart 1; an executor with polling tasks already
+1. **Done — API v1 + hart-1 interrupts + executor.** `spawn_core1`, `Stack`,
+   `hart_id`, `SpinLock`, `_setup_interrupts` on hart 1, and
+   `multicore_embassy`. Still open inside this step: V5F-specific
+   `corecfgr`/`intsyscr` (today hart 1 gets the V3F values),
+   `Peripherals::split()` / `Core1` token, and an `init_secondary` variant
+   that does not `take()`.
+2. **Next — cross-core `critical-section`** (upstream `qingke`):
+   `CriticalSectionRawMutex` and any shared logger/mailbox are unsound without
+   it; `SpinLock` is a stopgap in user code, not a replacement. Hart 1 now
+   takes interrupts, so the "handler vs thread on the same hart" path can be
+   tested.
+3. **Then — per-hart time driver:** `SysTick1` (vector 13) in `qingke-rt`
+   plus per-hart `embassy-time` state, or one TIM per core. Only this unlocks
+   `embassy_time` tasks on hart 1; an executor with cooperative tasks already
    works today.
-
-Both 2 and 3 depend on step 1, not the other way round — that is why the API
-comes first.

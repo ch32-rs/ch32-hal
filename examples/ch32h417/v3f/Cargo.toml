@@ -118,6 +118,12 @@ name = "usbss_host_link_check"
 path = "src/bin/usbss_host_link_check.rs"
 required-features = ["embassy"]
 
+# One image, an Embassy executor on each hart. No time driver on hart 1 yet.
+[[bin]]
+name = "multicore_embassy"
+path = "src/bin/multicore_embassy.rs"
+required-features = ["embassy"]
+
 [profile.release]
 debug = 2
 strip = false
