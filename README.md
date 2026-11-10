@@ -34,39 +34,41 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 
 | Family     | V2/V3 | V1  | V003 | V00X | X0   | L1   | CH641 | CH643 | H4‡   |
 | ---------- | ----- | --- | ---- | ---- | ---- | ---- | ----- | ----- | ---- |
-| Embassy    | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ❓    |
+| Embassy    | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
 | RCC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
 | GPIO       | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
 | EXTI\*     | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
 | UART\*     | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ❓    | ❓    | ✅    |
-| SPI\*      | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | N/A   | ❓    | ❌    |
+| SPI\*      | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | N/A   | ❓    | ✅\*  |
 | I2C        | ✅    | ✅  | ✅   | ❓   | ❓   | ❓   | ❓    | ❓    | ✅    |
-| ADC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ❌    |
+| ADC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
 | Timer(PWM) | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ✅    | ✅    | ✅    |
 | IWDG       | ✅    | N/A | N/A  | ❓   | N/A  | N/A  | N/A   | N/A   | ❓    |
 | WWDG       | ✅    | N/A | N/A  | ❓   | N/A  | N/A  | N/A   | N/A   | ❓    |
 | CRC        | ✅    | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ❓    |
 | USBD       | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | N/A  |
-| USB/OTG FS | ✅\*  | N/A | N/A  | N/A  | N/A  | ✅\* | N/A   | N/A   | N/A  |
-| USB HS     | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ❌    |
+| USB/OTG FS | ✅\*  | N/A | N/A  | N/A  | N/A  | ✅\* | N/A   | N/A   | ✅\*  |
+| USB HS     | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ❓\*  |
 | USB PD     | N/A   | N/A | N/A  | N/A  | ✅\* | ✅\* | ❓    | ❓    | ❌    |
-| ETH\*      | ✅†   | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | N/A  |
-| CAN\*      | ✅    | N/A | N/A  | N/A  | N/A  | ✅   | N/A   | N/A   | ❌    |
+| ETH\*      | ✅†   | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ✅†   |
+| CAN\*      | ✅    | N/A | N/A  | N/A  | N/A  | ✅   | N/A   | N/A   | ✅    |
 
 - ✅ : Expected to work
 - ❌ : Not implemented
 - ❓ : Not tested
 - `*` marks the async driver (EXTI is also opt-in via the `exti` Cargo feature)
-- `†` ETH: only the CH32V208 10M MAC+PHY. V305/V307 Synopsys DWC MAC is in progress (PR #157)
-- `‡` H4 is the dual-core CH32H417 (QingKe V3F + V5F). The ❌ rows are compiled
-  out on purpose: those drivers reach into V3 register layouts the H4 blocks do
-  not have (ADC/DAC/SPI/CAN/USBPD), or the block is a different version than the
-  driver (USB HS is `usbhs_h4`, the module is `usbhs_v3`). I2C is the exception,
-  flagged `version: v3` in the H4 metadata, so the V3 driver applies as-is. DMA
-  is not in the table; the H4 DMAMUX is driven from request numbers in metadata.
-  Embassy has no H4 time driver yet — the SysTick one is excluded, and a
-  `time-driver-timN` feature has to be selected explicitly.
-- TODO: I haven't got a dev board yet, help-wanted
+- `†` ETH: the CH32V208 10M MAC+PHY and the H4 internal 10/100 PHY are
+  validated; the V305/V307 Synopsys DWC MAC is in progress (PR #157), and the
+  H4 RGMII/Gigabit path is not board-tested.
+- `‡` H4 is the dual-core CH32H417 (QingKe V3F + V5F). USB FS is the OTG-v2
+  device block (`usbfs_h4`, reusing the `otg_fs` driver); USB HS reuses the
+  V4x7 driver (`usbhs_h4`) and has not been validated at High Speed. USB 3.0
+  (`usbss`) has an experimental link-layer framework only, not a validated
+  device stack. USB PD is compiled out because the H4 register layout
+  differs. I2C is flagged `version: v3` in the H4 metadata, so the V3 driver
+  applies as-is. DMA is not in the table; the H4 DMAMUX is driven from
+  request numbers in metadata. The H4 Embassy time driver is
+  `time_driver_systick_h4`, so no `time-driver-timN` feature is needed.
 - N/A: Not available
 
 **V00X** covers CH32V002 / CH32V004 / CH32V005 / CH32V006 / CH32V007 and CH32M007.
@@ -80,7 +82,7 @@ mailbox, `xtask` for flash/report) live in [`examples/ch32h417`](examples/ch32h4
 
 ### Notes
 
-- For USB OTGFS and HS, look at the `mod.rs` respsectively to understand what is / is not tested.
+- For USB OTGFS and HS, look at the respective `mod.rs` to understand what is / is not tested.
 
 ### Important: ROM/RAM Split Configuration (CH32V2/V3)
 
