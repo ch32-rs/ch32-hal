@@ -39,6 +39,8 @@ use embassy_usb_driver::{Direction, EndpointAddress, EndpointInfo, EndpointType,
 use endpoint::{ControlPipe, Endpoint};
 use regs::{EpRxResponse, EpTxResponse, Regs, UsbToken};
 
+#[cfg(usb_x0fs)]
+use crate::gpio::Pull;
 #[cfg(otg_v2)]
 use crate::gpio::{AFType, Speed};
 use crate::interrupt::typelevel::Interrupt;
@@ -55,6 +57,29 @@ const EP_MAX_PACKET_SIZE: u16 = 64;
 const NEW_AW: AtomicWaker = AtomicWaker::new();
 static BUS_WAKER: AtomicWaker = NEW_AW;
 static EP_WAKERS: [AtomicWaker; MAX_NR_EP] = [NEW_AW; MAX_NR_EP];
+
+/// USB PHY configuration (X035 only).
+#[derive(Clone, Copy, Debug)]
+pub struct Config {
+    /// Use the direct VDD PHY output and pull-up. Clear this when VDD is
+    /// above 4 V.
+    #[cfg(usb_x0fs)]
+    pub usb_phy_v33: bool,
+    /// AFIO pull-up mode for UDP. `0b11` is the USB 1.5 kΩ pull-up for 3.3 V.
+    #[cfg(usb_x0fs)]
+    pub udp_pue: u8,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            #[cfg(usb_x0fs)]
+            usb_phy_v33: true,
+            #[cfg(usb_x0fs)]
+            udp_pue: 0b11,
+        }
+    }
+}
 
 pub struct InterruptHandler<T: Instance> {
     _phantom: PhantomData<T>,
@@ -95,7 +120,8 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                     UsbToken::SETUP => {
                         EP_WAKERS[0].wake();
                     }
-                    UsbToken::RSVD => panic!("rsvd token"),
+                    // X0 names bit 0 of the token field `SOF`, not `RSVD`.
+                    _ => panic!("rsvd token"),
                 }
             }
         }
@@ -124,6 +150,19 @@ where
         dm: Peri<'d, impl crate::gpio::Pin>,
         ep_buffer: &'d mut [EndpointDataBuffer<SIZE>; NR_EP],
     ) -> Self {
+        Self::new_with_config(_usb, dp, dm, ep_buffer, Config::default())
+    }
+
+    /// Use this when board-level USB PHY or pull-up settings differ from the
+    /// default 3.3 V setup.
+    pub fn new_with_config(
+        _usb: Peri<'d, T>,
+        // _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+        dp: Peri<'d, impl crate::gpio::Pin>,
+        dm: Peri<'d, impl crate::gpio::Pin>,
+        ep_buffer: &'d mut [EndpointDataBuffer<SIZE>; NR_EP],
+        config: Config,
+    ) -> Self {
         assert!(ep_buffer.len() > 0);
 
         // RM table 9-12: on H4 the FS controller drives DP/DM itself once it
@@ -132,18 +171,43 @@ where
         {
             dp.set_as_af_output(AFType::OutputPushPull, Speed::High);
             dm.set_as_af_output(AFType::OutputPushPull, Speed::High);
+            let _ = config;
         }
         #[cfg(usbfs_h4)]
-        let _ = (dp, dm);
+        let _ = (dp, dm, config);
+        // X035 keeps DP/DM as GPIO inputs and switches the on-die pull-up on
+        // through `AFIO.CTLR` instead of selecting an alternate function.
+        #[cfg(usb_x0fs)]
+        {
+            dp.set_as_input(Pull::Up);
+            dm.set_as_input(Pull::None);
+
+            crate::pac::AFIO.ctlr().modify(|w| {
+                w.set_usb_phy_v33(config.usb_phy_v33);
+                w.set_udp_pue(config.udp_pue);
+                w.set_udm_pue(0);
+                w.set_usb_ioen(true);
+            });
+        }
 
         T::enable_and_reset();
 
         let allocator = EndpointBufferAllocator::new(ep_buffer);
 
+        // EP4 shares EP0's DMA buffer on X0, so it cannot be handed out.
+        #[cfg(usb_x0fs)]
+        let allocated = {
+            let mut allocated = Bitmap::new();
+            allocated.set(4, true);
+            allocated
+        };
+        #[cfg(not(usb_x0fs))]
+        let allocated = Bitmap::new();
+
         Self {
             phantom: PhantomData,
             allocator,
-            allocated: Bitmap::new(),
+            allocated,
         }
     }
 
@@ -390,60 +454,7 @@ where
             Direction::Out => regs::ep_rx_ctrl_set_tog(regs, ep_addr.index(), false),
         }
 
-        match (ep_addr.index(), ep_addr.direction()) {
-            (4, Direction::In) => regs.uep4_1_mod().modify(|v| {
-                v.set_uep4_tx_en(enabled);
-            }),
-            (4, Direction::Out) => regs.uep4_1_mod().modify(|v| {
-                v.set_uep4_rx_en(enabled);
-            }),
-            (1, Direction::In) => regs.uep4_1_mod().modify(|v| {
-                v.set_uep1_tx_en(enabled);
-            }),
-            (1, Direction::Out) => regs.uep4_1_mod().modify(|v| {
-                v.set_uep1_rx_en(enabled);
-            }),
-
-            (2, Direction::In) => regs.uep2_3_mod().modify(|v| {
-                v.set_uep2_tx_en(enabled);
-            }),
-            (2, Direction::Out) => regs.uep2_3_mod().modify(|v| {
-                v.set_uep2_rx_en(enabled);
-            }),
-            (3, Direction::In) => regs.uep2_3_mod().modify(|v| {
-                v.set_uep3_tx_en(enabled);
-            }),
-            (3, Direction::Out) => regs.uep2_3_mod().modify(|v| {
-                v.set_uep3_rx_en(enabled);
-            }),
-
-            (5, Direction::In) => regs.uep5_6_mod().modify(|v| {
-                v.set_uep5_tx_en(enabled);
-            }),
-            (5, Direction::Out) => regs.uep5_6_mod().modify(|v| {
-                v.set_uep5_rx_en(enabled);
-            }),
-            (6, Direction::In) => regs.uep5_6_mod().modify(|v| {
-                v.set_uep6_tx_en(enabled);
-            }),
-            (6, Direction::Out) => regs.uep5_6_mod().modify(|v| {
-                v.set_uep6_rx_en(enabled);
-            }),
-
-            (7, Direction::In) => regs.uep7_mod().modify(|v| {
-                v.set_uep7_tx_en(enabled);
-            }),
-            (7, Direction::Out) => regs.uep7_mod().modify(|v| {
-                v.set_uep7_rx_en(enabled);
-            }),
-
-            _ => {
-                #[cfg(feature = "defmt")]
-                defmt::panic!("setting non-existent endpoint {} to {}", ep_addr, enabled);
-                #[cfg(not(feature = "defmt"))]
-                panic!()
-            }
-        }
+        regs::ep_set_enabled(regs, ep_addr.index(), ep_addr.direction(), enabled);
         EP_WAKERS[ep_addr.index() as usize].wake();
     }
 
@@ -497,6 +508,23 @@ foreach_peripheral!(
         impl SealedInstance for peripherals::$inst {
             fn regs() -> Regs {
                 unsafe { Regs::from_ptr(crate::pac::USBFS.as_ptr()) }
+            }
+        }
+
+        impl Instance for peripherals::$inst {
+            type Interrupt = crate::_generated::peripheral_interrupts::$inst::GLOBAL;
+        }
+    };
+);
+
+// X035's FS controller (`kind: usb`, version `x0fs`) keeps the same device
+// core in array-grouped registers.
+#[cfg(usb_x0fs)]
+foreach_peripheral!(
+    (usb, $inst:ident) => {
+        impl SealedInstance for peripherals::$inst {
+            fn regs() -> Regs {
+                unsafe { Regs::from_ptr(crate::pac::$inst.as_ptr()) }
             }
         }
 
