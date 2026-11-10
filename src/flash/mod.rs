@@ -73,7 +73,8 @@ pub struct FlashSector {
 
 #[cfg_attr(flash_v3, path = "v3.rs")]
 #[cfg_attr(flash_l1, path = "l1.rs")]
-#[cfg_attr(not(any(flash_v3, flash_l1)), path = "other.rs")]
+#[cfg_attr(flash_x0, path = "x0.rs")]
+#[cfg_attr(not(any(flash_v3, flash_l1, flash_x0)), path = "other.rs")]
 #[cfg(not(any(flash_v4x7, flash_h4)))]
 mod family;
 
