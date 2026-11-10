@@ -1,9 +1,10 @@
 # CH32H417 as a homogeneous dual core — feasibility spike
 
-Status: **spike done, API v1 implemented (`ch32_hal::multicore`), and hart 1
-runs its own interrupt setup + `embassy_executor`, all verified on the bench
-board. Remaining gaps: cross-core `critical-section`, a per-hart time driver,
-V5F-specific core setup, checked peripheral ownership.**
+Status: **spike done, API v1 implemented (`ch32_hal::multicore`), hart 1 runs
+its own interrupt setup + `embassy_executor`, and cross-core
+`critical-section` is implemented on a qingke branch — all verified on the
+bench board. Remaining gaps: per-hart time driver, V5F-specific core setup,
+checked peripheral ownership, and getting the qingke change released.**
 Worktree branch: `dual-core-homogeneous`. Examples:
 `examples/ch32h417/v3f/src/bin/homogeneous.rs` (mechanism),
 `.../multicore.rs` (API + lock litmus), `.../multicore_embassy.rs` (one
@@ -16,10 +17,10 @@ two images (V3F at flash `0x0000_0000`, V5F at `0x0001_0000`)?
 
 Short answer: **yes.** The second hart boots into a 1 KiB-aligned trampoline
 inside the boot image, sets `gp`/`sp`, installs the shared vector table, and
-runs the same Rust code, HAL drivers and an `embassy_executor`. What is still
-missing is the library layer around it: a cross-core `critical-section`, a
-per-hart time driver, V5F-specific core setup, and an audit of shared
-peripheral registers.
+runs the same Rust code, HAL drivers and an `embassy_executor`. A cross-core
+`critical-section` is implemented on a qingke branch. What is still missing is
+a per-hart time driver, V5F-specific core setup, an audit of shared peripheral
+registers, and a released qingke with the new feature.
 
 ## What the spike does
 
@@ -94,6 +95,48 @@ Notes from this run:
 | `Peri<'static, CORE1>` ownership split | `Peripherals::steal()` | **blocker** |
 | time driver per core | SysTick0 driver only; V5F uses `SysTick1` (vector 13) that `qingke-rt` does not expose | **blocker** |
 
+## Cross-core `critical-section` (qingke branch)
+
+`~/Repos/qingke`, branch `dual-core-critical-section`, commit `9b855be`:
+
+```toml
+# qingke/Cargo.toml
+dual-core-critical-section = ["critical-section-impl"]
+```
+
+`src/critical_section_impl.rs` now has two variants selected by that feature.
+The dual-hart one masks `MIE`/`MPIE` on the calling hart (as before), then
+takes a shared `AtomicBool` with `compare_exchange`, tracked per hart with a
+depth counter, and releases in reverse order. Mechanism notes:
+
+- Interrupts are masked **before** the spinlock, so an ISR on the same hart
+  cannot spin on a lock its own thread holds.
+- Nesting is per hart, so `critical_section::with` inside `with` is safe; the
+  other hart still sees the lock held.
+- Releasing the lock before unmasking avoids a woken handler observing it
+  still held.
+- The lock state is in `.bss`, so this is only correct in the single-image
+  model. Two separately flashed images get two independent locks and no
+  exclusion.
+
+To reproduce: check out that qingke branch, add
+`[patch.crates-io] qingke = { path = "~/Repos/qingke" }` to
+`examples/ch32h417/v3f/Cargo.toml`, add
+
+```toml
+qingke = { version = "0.8.4", features = [..., "dual-core-critical-section"] }
+```
+
+and build with `--features dual-core-critical-section` (the v3f feature of the
+same name turns on the example half; it does not depend on the qingke feature,
+because that would not resolve against the released 0.8.4). Without the qingke
+patch the example still builds but `cs_value` will be short — that is the
+demonstration of why the single-hart section is not enough.
+
+Result: 2 × 100 000 increments gave `lock_value = cs_value = 200000` on four
+consecutive flashes (three before, one after the cfg refactor), with both
+harts advancing.
+
 ## Blockers, in the order they will bite
 
 1. **`Peripherals` is a single-image singleton — partly solved.**
@@ -114,12 +157,19 @@ Notes from this run:
    exactly one core, chosen by whoever enables them; `qingke::pfic::enable_interrupt`
    writes the whole `IENR` word, so it must only be used by a hart that owns
    that bank.
-3. **`critical-section` is local-only.** `qingke`'s `SingleHartCriticalSection`
-   masks interrupt state; it does not serialise harts. Anything both harts
-   touch (`embassy-sync`'s `CriticalSectionRawMutex`, the mailbox, tracing)
-   needs an `amoswap`-based spinlock impl. The A extension and CAS are
-   proven working (`unsafe-trust-wch-atomics`, 2×1 M increments), so this is
-   implementable in `qingke`, not just desirable.
+3. **`critical-section` needs qingke's new dual-hart feature — implemented,
+   not released.** `SingleHartCriticalSection` masks interrupt state and does
+   not serialise harts, so `CriticalSectionRawMutex` (and therefore
+   `embassy-sync`), the shared logger and the mailbox are unsound without it.
+   Implemented on the `dual-core-critical-section` branch of the local qingke
+   checkout (`~/Repos/qingke`, commit `9b855be`): the critical section masks
+   the calling hart's interrupts, then takes an `amoswap` spinlock shared by
+   both harts, with per-hart nesting depth so a `with` inside a `with` does
+   not self-deadlock. Measured on the bench (see below): 2 × 100 000
+   `critical_section::with` increments of a shared `u32` gave **200000
+   exactly** on 4 runs. Caveats: it relies on both harts executing the same
+   image (the lock lives in `.bss`), it deadlocks if a hart is halted by the
+   debugger while holding it, and it only makes sense for short sections.
 4. **Embassy time is hart-0 only.** `src/embassy/mod.rs`: the H4 SysTick driver
    is compiled for hart 0; V5F's counter interrupts through `SysTick1`
    (vector 13), which `qingke-rt` does not expose, so V5F images use a TIM
@@ -268,11 +318,15 @@ Constraints the implementation has to encode:
    `corecfgr`/`intsyscr` (today hart 1 gets the V3F values),
    `Peripherals::split()` / `Core1` token, and an `init_secondary` variant
    that does not `take()`.
-2. **Next — cross-core `critical-section`** (upstream `qingke`):
-   `CriticalSectionRawMutex` and any shared logger/mailbox are unsound without
-   it; `SpinLock` is a stopgap in user code, not a replacement. Hart 1 now
-   takes interrupts, so the "handler vs thread on the same hart" path can be
-   tested.
+2. **Done in qingke, waiting for release / upstream review — cross-core
+   `critical-section`.** Feature `dual-core-critical-section` on the qingke
+   branch, verified with `multicore` (`--features dual-core-critical-section`
+   against that checkout). Next actions: upstream the qingke change, cut a
+   release, then make the H4 chip features enable it (and drop the HAL
+   `SpinLock` from the docs as the recommended path). The "handler vs thread
+   on the same hart" nesting path is covered by the depth counter; it has not
+   been stress-tested with a real IRQ storm yet — that is worth adding when
+   the API grows interrupt-driven drivers.
 3. **Then — per-hart time driver:** `SysTick1` (vector 13) in `qingke-rt`
    plus per-hart `embassy-time` state, or one TIM per core. Only this unlocks
    `embassy_time` tasks on hart 1; an executor with cooperative tasks already

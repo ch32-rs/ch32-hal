@@ -9,6 +9,11 @@
 //! increments on each hart, no lost updates), and `h1_seq` advancing in the
 //! second read. As with every dual-core test on this board, read the block
 //! **once**: a later `wlink dump` leaves hart 0 halted and `h0_seq` freezes.
+//!
+//! With `--features dual-core-critical-section` (and qingke built from the
+//! `dual-core-critical-section` branch) the block also reports
+//! `cs_value = 200000`, the same test through `critical_section::with`; see
+//! the comment on `CS_SHARED`.
 
 #![no_std]
 #![no_main]
@@ -27,6 +32,8 @@ struct Obs {
     lock_value: AtomicU32,
     h1_done: AtomicU32,
     h1_hart: AtomicU32,
+    cs_value: AtomicU32,
+    cs_done: AtomicU32,
 }
 
 #[link_section = ".shared"]
@@ -36,11 +43,22 @@ static OBS: Obs = Obs {
     lock_value: AtomicU32::new(0),
     h1_done: AtomicU32::new(0),
     h1_hart: AtomicU32::new(0),
+    cs_value: AtomicU32::new(0),
+    cs_done: AtomicU32::new(0),
 };
 
 /// State that both harts mutate: the counter is plain `u32`, so every access
 /// goes through the lock.
 static SHARED: SpinLock<u32> = SpinLock::new(0);
+
+/// The same test through `critical_section::with` instead of [`SpinLock`].
+/// This only works with qingke's `dual-core-critical-section` feature, which
+/// puts a shared spinlock inside the critical section; the default
+/// `SingleHartCriticalSection` would lose updates here. Build with
+/// `--features dual-core-critical-section` against the qingke branch of the
+/// same name to run it.
+#[cfg(feature = "dual-core-critical-section")]
+static mut CS_SHARED: u32 = 0;
 
 /// Increments per hart. Both must land, or the lock lost an update.
 const INCREMENTS: u32 = 100_000;
@@ -57,6 +75,8 @@ fn main() -> ! {
         &OBS.lock_value,
         &OBS.h1_done,
         &OBS.h1_hart,
+        &OBS.cs_value,
+        &OBS.cs_done,
     ] {
         f.store(0, Ordering::Relaxed);
     }
@@ -79,6 +99,14 @@ fn main() -> ! {
         }
         OBS.h1_done.store(1, Ordering::Release);
 
+        #[cfg(feature = "dual-core-critical-section")]
+        {
+            for _ in 0..INCREMENTS {
+                critical_section::with(|_| unsafe { CS_SHARED += 1 });
+            }
+            OBS.cs_done.store(1, Ordering::Release);
+        }
+
         loop {
             led.toggle();
             OBS.h1_seq.fetch_add(1, Ordering::Relaxed);
@@ -93,6 +121,20 @@ fn main() -> ! {
         core::hint::spin_loop();
     }
     OBS.lock_value.store(SHARED.with(|v| *v), Ordering::Relaxed);
+
+    #[cfg(feature = "dual-core-critical-section")]
+    {
+        for _ in 0..INCREMENTS {
+            critical_section::with(|_| unsafe { CS_SHARED += 1 });
+        }
+        while OBS.cs_done.load(Ordering::Acquire) == 0 {
+            core::hint::spin_loop();
+        }
+        OBS.cs_value.store(
+            unsafe { core::ptr::read_volatile(&raw const CS_SHARED) },
+            Ordering::Relaxed,
+        );
+    }
 
     loop {
         OBS.h0_seq.fetch_add(1, Ordering::Relaxed);
