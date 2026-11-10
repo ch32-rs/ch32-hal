@@ -139,6 +139,59 @@ Result: 2 × 100 000 increments gave `lock_value = cs_value = 200000` on four
 consecutive flashes (three before, one after the cfg refactor), with both
 harts advancing.
 
+## Cross-core `embassy_time`: root cause and fix
+
+Symptom: when hart 1 is the only `embassy_time` user, `Timer::after` never
+completes; when hart 0 also schedules, both harts' timers work.
+
+Measured with temporary counters inside the driver plus `wlink dump` of
+`0xE000F000`:
+
+| Check | Value |
+|---|---|
+| hart 1 → `schedule_next` entries | 1 |
+| `set_alarm` returned "armed" | 1 |
+| `SysTick` ISR entries | **0** |
+| `set_alarm` "deadline already passed" | 0 |
+| `SYSTICK.CMP(0)` after arming | `0x80000000` (still `init`'s half-period value) |
+| raw hart-1 store `0x12345678` to `CMP0` | does not stick |
+| hart 1 read of `CNT0` | live (6.64 M while the register read 8.22 M a moment later) |
+
+So **the V5F can read counter 0 but writes to counter 0's control/compare
+registers are dropped**. `set_alarm` from hart 1 arms nothing; the comparator
+stays at the half-period maintenance value, and hart-0 timers work only because
+hart 0's own `schedule_wake` programs the comparator.
+
+The fix, in order of importance:
+
+1. **Counter 0 is hart-0-only.** `schedule_next()`/`set_alarm()` must run on
+   hart 0. From hart 1, `schedule_wake` only inserts into the shared queue.
+   It must also not touch `SR`: that register *is* shared, and clearing
+   `CNTIF0` from hart 1 would eat hart 0's pending compare.
+2. **Short re-arm tick.** `init` arms the maintenance alarm at ~1 ms instead
+   of half a wrap, and the `SysTick` ISR calls `schedule_next()` on every
+   tick. A wake inserted by hart 1 is then picked up within one tick (worst
+   case added latency = tick period; once re-armed, the deadline is exact).
+   Cost: ~1 kHz idle interrupt on hart 0; tunable (250 µs – 2 ms).
+3. **`Driver::now()` stays as it is**: hart-1 reads of `CNT0` are valid.
+4. **Regression test**: an example where *only* hart 1 schedules a `Timer`
+   (hart 0 just yields) and the counter must advance; plus a check that
+   `CMP0` changes when the alarm is armed from hart 0.
+
+Rejected alternatives:
+
+- **Cross-core doorbell** (hart 1 pokes hart 0 instead of a tick): PFIC
+  enable/pending is core-local (`pend_interrupt` from hart 1 delivers to
+  hart 1), and `SEV` only wakes `WFI`/`WFE` without running driver code. No
+  usable primitive today.
+- **Per-hart driver on counter 1 / `SysTick1`**: needs `qingke-rt` vector 13
+  and two global `embassy-time` drivers, which the `embassy-time-driver` API
+  does not support. Not the fix for `embassy_time`.
+- **Move the timebase to hart 1**: mirrors the same problem for hart 0.
+
+Blocking `Delay` is unaffected: it uses the calling hart's own counter (0 on
+hart 0, 1 on hart 1), so it never writes across the domains.
+
 ## Blockers, in the order they will bite
 
 1. **`Peripherals` is a single-image singleton — partly solved.**
@@ -282,10 +335,9 @@ Measured (default clock recipe unless noted):
   hart 1's `Timer::after(500 ms)` counters advance in lockstep (6 → 47 in 5 s,
   the 4×-fast default HSI recipe), i.e. hart 1 tasks are woken by hart 0's
   SysTick ISR. **But** in two runs where hart 1 was the *only* user of
-  `embassy_time`, `h1_timer_ticks` stayed 0: the alarm never fired. So the
-  driver's re-arm path is not yet proven for a hart-1-only timer; this is the
-  next thing to debug (start from `schedule_next`/`set_alarm` in
-  `src/embassy/time_driver_systick_h4.rs`).
+  `embassy_time`, `h1_timer_ticks` stayed 0: the alarm never fired. Root cause
+  and fix are below ("Cross-core `embassy_time`: root cause and fix"): the V5F
+  cannot program counter 0's comparator.
 
 Constraints the implementation has to encode:
 
@@ -337,8 +389,6 @@ Constraints the implementation has to encode:
    on the same hart" nesting path is covered by the depth counter; it has not
    been stress-tested with a real IRQ storm yet — that is worth adding when
    the API grows interrupt-driven drivers.
-3. **Next — time on hart 1.** First debug the hart-1-only `Timer` failure
-   above (a shared driver served by hart 0's SysTick is enough in principle,
-   and already works when hart 0 schedules too). Only if that proves
-   structural is a per-hart driver needed: `SysTick1` (vector 13) in
-   `qingke-rt` plus per-hart `embassy-time` state, or one TIM per core.
+3. **Next — implement the cross-core time fix** specified above (hart-0-only
+   arming + ~1 ms re-arm tick + hart-1-only regression test). No qingke-rt
+   change and no per-hart driver are needed for `embassy_time`.
