@@ -343,8 +343,12 @@ fn configure_mac_dma<T: Instance>(
     e.macmiiar().write(|w| w.set_cr(clock_range));
 
     // 5. Configure MAC
+    //
+    // IPv4 checksum offload stays off: nothing reads the per-frame checksum
+    // status, and while it is on the DMA drops frames whose header fails the
+    // check unless `DMAOMR.DTCEFD` is set. WCH's reference driver leaves it
+    // off too.
     e.maccr().write(|w| {
-        w.set_ipco(true); // IPv4 checksum offload
         w.set_dm(full_duplex);
 
         if phy_interface == PhyInterface::Internal10M {
@@ -384,7 +388,13 @@ fn configure_mac_dma<T: Instance>(
     // 10. DMA bus mode: 32-beat burst length
     e.dmabmr().write(|w| w.set_pbl(32));
 
-    // 11. DMA operation mode: store-and-forward for both TX and RX
+    // 11. DMA operation mode
+    //
+    // Store-and-forward in both directions: a frame only reaches memory once it
+    // is complete, so a receive overrun truncates at a frame boundary and the
+    // recovery below sees whole frames. Unlike WCH's reference driver, error
+    // frames are not forwarded (`FEF`/`FUGF` clear): they cost descriptors and
+    // the stack would drop them anyway.
     e.dmaomr().write(|w| {
         w.set_rsf(true);
         w.set_tsf(true);
