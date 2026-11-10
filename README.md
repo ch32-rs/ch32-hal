@@ -49,6 +49,7 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 | USBD       | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | N/A  |
 | USB/OTG FS | ✅\*  | N/A | N/A  | N/A  | ✅\* | ✅\* | N/A   | N/A   | ✅\*  |
 | USB HS     | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ❓\*  |
+| USB SS     | N/A   | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ✅\*  |
 | USB PD     | N/A   | N/A | N/A  | N/A  | ✅\* | ✅\* | ❓    | ❓    | ❌    |
 | ETH\*      | ✅†   | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ✅†   |
 | CAN\*      | ✅    | N/A | N/A  | N/A  | N/A  | ✅   | N/A   | N/A   | ✅    |
@@ -62,9 +63,9 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
   H4 RGMII/Gigabit path is not board-tested.
 - `‡` H4 is the dual-core CH32H417 (QingKe V3F + V5F). USB FS is the OTG-v2
   device block (`usbfs_h4`, reusing the `otg_fs` driver); USB HS reuses the
-  V4x7 driver (`usbhs_h4`) and has not been validated at High Speed. USB 3.0
-  (`usbss`) has an experimental link-layer framework only, not a validated
-  device stack. USB PD is compiled out because the H4 register layout
+  V4x7 driver (`usbhs_h4`) and has not been validated at High Speed. USB SS
+  (`usbss`) is a SuperSpeed device driver for `embassy-usb`; host mode only
+  brings the link up. USB PD is compiled out because the H4 register layout
   differs. I2C is flagged `version: v3` in the H4 metadata, so the V3 driver
   applies as-is. DMA is not in the table; the H4 DMAMUX is driven from
   request numbers in metadata. The H4 Embassy time driver is
@@ -82,7 +83,7 @@ mailbox, `xtask` for flash/report) live in [`examples/ch32h417`](examples/ch32h4
 
 ### Notes
 
-- For USB OTGFS and HS, look at the respective `mod.rs` to understand what is / is not tested.
+- For USB OTGFS, HS and SS, look at the respective `mod.rs` to understand what is / is not tested.
 
 ### Important: ROM/RAM Split Configuration (CH32V2/V3)
 

@@ -10,11 +10,11 @@ use core::sync::atomic::Ordering;
 
 use super::{init_clocks, init_host, Instance, LinkInterruptHandler, LinkState, LINK_STATE_UNKNOWN};
 use crate::interrupt::typelevel::Interrupt;
+use crate::pac::usbss::vals::PdMode;
 use crate::Peri;
 
 /// Root-port link status snapshot (`LINK_STATUS`, RM §27.2.6.5).
 #[derive(Clone, Copy)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct LinkStatus {
     pub state: LinkState,
     /// `LINK_STATUS.LINK_RX_TERM_PRES`: receiver termination detected.
@@ -25,8 +25,8 @@ pub struct LinkStatus {
     pub ready: bool,
     /// `LINK_STATUS.LINK_BUSY`: a `PD_MODE` change is still in progress.
     pub busy: bool,
-    /// `LINK_STATUS.LINK_PD_MODE_MASK`: PHY power state, 0 = P0 .. 3 = P3.
-    pub pd_mode: u8,
+    /// `LINK_STATUS.LINK_PD_MODE_MASK`: PHY power state.
+    pub pd_mode: PdMode,
 }
 
 /// SuperSpeed host driver.
@@ -49,7 +49,7 @@ impl<'d, T: Instance> HostDriver<'d, T> {
             T::LinkInterrupt::enable();
         }
 
-        let state = T::host().link_status().read().link_state();
+        let state = T::host().link_status().read().link_state().to_bits();
         T::state().link_state.store(state, Ordering::Relaxed);
         T::state()
             .host_reported_state
@@ -60,14 +60,14 @@ impl<'d, T: Instance> HostDriver<'d, T> {
 
     /// Current link state.
     pub fn link_state(&self) -> LinkState {
-        LinkState::from_raw(T::host().link_status().read().link_state())
+        T::host().link_status().read().link_state()
     }
 
     /// Link status snapshot, including termination detection and PHY state.
     pub fn status(&self) -> LinkStatus {
         let status = T::host().link_status().read();
         LinkStatus {
-            state: LinkState::from_raw(status.link_state()),
+            state: status.link_state(),
             term_present: status.link_rx_term_pres(),
             rx_detect: status.link_rx_detect(),
             ready: status.link_ready(),
@@ -100,9 +100,8 @@ impl<'d, T: Instance> HostDriver<'d, T> {
             state.link_waker.register(cx.waker());
 
             let raw = state.link_state.load(Ordering::Relaxed);
-            if raw != state.host_reported_state.load(Ordering::Relaxed) {
-                state.host_reported_state.store(raw, Ordering::Relaxed);
-                core::task::Poll::Ready(LinkState::from_raw(raw))
+            if state.host_reported_state.swap(raw, Ordering::Relaxed) != raw {
+                core::task::Poll::Ready(LinkState::from_bits(raw))
             } else {
                 core::task::Poll::Pending
             }
