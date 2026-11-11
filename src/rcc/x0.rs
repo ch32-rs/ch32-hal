@@ -145,3 +145,12 @@ pub fn reset_resona() -> ResetReason {
         panic!("Unknown reset reason")
     }
 }
+
+/// Clear the reset flags (writes RMVF).
+///
+/// The flags in RCC_RSTSCKR accumulate across resets until cleared: read [`reset_resona`] once
+/// at boot, then call this, so that the next boot reads only its own cause. Until the next
+/// reset, [`reset_resona`] then finds no flag and panics.
+pub fn clear_reset_flags() {
+    RCC.rstsckr().modify(|w| w.set_rmvf(true));
+}
