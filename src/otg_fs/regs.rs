@@ -35,7 +35,6 @@ pub(crate) struct IntSt {
     pub token: UsbToken,
     pub ep: u8,
     /// `TOG_OK`: the received packet's data toggle matched the endpoint.
-    /// H4's register view has no such bit, so it always reads as `true`.
     pub tog_ok: bool,
 }
 
@@ -257,8 +256,7 @@ mod imp {
         IntSt {
             token: v.mask_uis_token(),
             ep: v.mask_uis_endp(),
-            // H4's USBFS register view has no TOG_OK field.
-            tog_ok: true,
+            tog_ok: v.uis_tog_ok(),
         }
     }
 
