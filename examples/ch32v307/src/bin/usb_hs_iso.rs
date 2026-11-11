@@ -20,7 +20,6 @@
 
 use core::cell::Cell;
 
-use ch32_hal::usb::EndpointDataBuffer64;
 use ch32_hal::usbhs::{
     self, endpoint_enabled, iso_in_fill, iso_out_overruns, microframe, Driver, InterruptHandler, WakeupInterruptHandler,
 };
@@ -45,7 +44,10 @@ const PID: u16 = 0xca51;
 const EP_NUM: usize = 1;
 const EP_SIZE: u16 = 64;
 /// One buffer for EP0, `ISO_OUT_SLOTS` for the OUT ring and `ISO_IN_SLOTS` for the IN ring.
-const NR_EP: usize = 1 + usbhs::ISO_OUT_SLOTS + usbhs::ISO_IN_SLOTS;
+const MEMORY: usize = 64 + (usbhs::ISO_OUT_SLOTS + usbhs::ISO_IN_SLOTS) * (4 + EP_SIZE as usize);
+
+#[repr(align(4))]
+struct EndpointMemory([u8; MEMORY]);
 
 /// State shared between the SOF callback and the OUT task. The V307 has no atomic
 /// read-modify-write, so counters live behind a critical section.
@@ -68,17 +70,17 @@ static STATS: Mutex<Cell<Stats>> = Mutex::new(Cell::new(Stats {
 /// Runs from the USB interrupt on every SOF (125 us at high speed): queue one IN packet
 /// for the microframe, when the host has selected the streaming alt setting.
 fn on_sof() {
-    if !endpoint_enabled(EP_NUM, Direction::In) {
+    if !endpoint_enabled::<peripherals::USBHS>(EP_NUM, Direction::In) {
         return;
     }
     let stats = critical_section::with(|cs| STATS.borrow(cs).get());
-    let microframe = microframe();
+    let microframe = microframe::<peripherals::USBHS>();
     let out_packets = stats.out_packets as u16;
     let last_out = stats.last_out;
-    let overruns = iso_out_overruns(EP_NUM);
+    let overruns = iso_out_overruns::<peripherals::USBHS>(EP_NUM);
     // `iso_in_fill` does not run the closure (and the sequence does not advance) when the
     // ring is full, so no sequence number is ever skipped.
-    let _ = iso_in_fill(EP_NUM, |buf| {
+    let _ = iso_in_fill::<peripherals::USBHS>(EP_NUM, |buf| {
         let seq = critical_section::with(|cs| {
             let stats = STATS.borrow(cs).get();
             STATS.borrow(cs).set(Stats {
@@ -108,10 +110,10 @@ async fn main(_spawner: Spawner) {
     let p = hal::init(cfg);
 
     // Before `Driver::new`, so the SOF interrupt is enabled from the start.
-    usbhs::set_sof_callback(on_sof);
+    usbhs::set_sof_callback::<peripherals::USBHS>(on_sof);
 
-    let mut buffer: [EndpointDataBuffer64; NR_EP] = core::array::from_fn(|_| EndpointDataBuffer64::default());
-    let driver = Driver::new(p.USBHS, Irq, p.PB7, p.PB6, &mut buffer);
+    let mut memory = EndpointMemory([0; MEMORY]);
+    let driver = Driver::new(p.USBHS, p.PB7, p.PB6, Irq, &mut memory.0, Default::default()).unwrap();
 
     let mut config = embassy_usb::Config::new(VID, PID);
     config.manufacturer = Some("ch32-hal");

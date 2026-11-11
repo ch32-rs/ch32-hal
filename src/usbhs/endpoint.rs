@@ -1,186 +1,205 @@
 use core::future::poll_fn;
 use core::marker::PhantomData;
-use core::sync::atomic::Ordering;
 use core::task::Poll;
 
-use ch32_metapac::usbhs::vals::{EpRxResponse, EpTxResponse};
-use embassy_usb_driver::{Direction, EndpointError, EndpointIn, EndpointInfo, EndpointOut, EndpointType};
+use embassy_hal_internal::drop::OnDrop;
+use embassy_usb_driver::{EndpointError, EndpointInfo, EndpointType};
 
-use super::{iso_in_enqueue, state, EpState, Instance};
-use crate::usb::{Dir, EndpointData, In, Out};
+use super::{iso, regs, slot, EndpointState, Inner, Instance, Res};
 
-pub struct Endpoint<'d, T: Instance, D: Dir, const SIZE: usize> {
-    _phantom: PhantomData<(&'d mut T, D)>,
+pub struct Endpoint<'d, T: Instance, const IN: bool> {
     info: EndpointInfo,
-    pub(crate) data: EndpointData<'d, SIZE>,
+    _lifetime: PhantomData<&'d mut T>,
 }
 
-impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
-    pub(crate) fn new(info: EndpointInfo, data: EndpointData<'d, SIZE>) -> Self {
-        let index = info.addr.index();
-        T::dregs().ep_max_len(index).write(|v| v.set_len(info.max_packet_size));
-        if info.ep_type != EndpointType::Control {
-            match info.addr.direction() {
-                Direction::Out => {
-                    T::dregs().ep_rx_dma(index - 1).write_value(data.buffer.addr() as u32);
-                }
-                Direction::In => {
-                    T::dregs().ep_tx_dma(index - 1).write_value(data.buffer.addr() as u32);
-                }
-            }
-        }
+impl<'d, T: Instance, const IN: bool> Endpoint<'d, T, IN> {
+    pub(super) fn new(info: EndpointInfo) -> Self {
         Self {
-            _phantom: PhantomData,
             info,
-            data,
+            _lifetime: PhantomData,
         }
     }
 
-    fn state(&self) -> &'static EpState {
-        state(self.info.addr)
+    fn isochronous(&self) -> bool {
+        self.info.ep_type == EndpointType::Isochronous
     }
 
-    async fn wait_enabled_internal(&mut self) {
-        poll_fn(|ctx| {
-            self.state().waker.register(ctx.waker());
-            if self.is_enabled() {
-                Poll::Ready(())
-            } else {
-                Poll::Pending
-            }
-        })
-        .await;
-    }
-
-    fn is_enabled(&self) -> bool {
-        match self.info.addr.direction() {
-            Direction::Out => T::dregs().ep_config().read().r_en(self.info.addr.index() - 1),
-            Direction::In => T::dregs().ep_config().read().t_en(self.info.addr.index() - 1),
+    async fn transfer(&self, address: usize, size: usize, zlp: bool) -> Result<usize, EndpointError> {
+        let index = self.info.addr.index();
+        let packet = self.info.max_packet_size;
+        if size != 0 {
+            assert!(
+                address % 4 == 0 && (size <= usize::from(packet) || packet % 4 == 0),
+                "USBHS transfers need 4-byte aligned buffers"
+            );
+            #[cfg(target_arch = "riscv32")]
+            assert!(
+                regs::memory_valid(address, size),
+                "USBHS transfers need buffers in DMA-reachable RAM"
+            );
         }
+        let limit = if regs::BURST && index != 0 {
+            u16::MAX / packet * packet
+        } else {
+            packet
+        };
+        let mut generation = None;
+        T::state().inner.lock(|inner| {
+            let mut inner = inner.borrow_mut();
+            let endpoint = usable::<T>(&mut inner, index, IN, &mut generation)?;
+            let next = endpoint.start(address, size, limit, zlp);
+            regs::arm(T::REGS, index, IN, next);
+            Ok(())
+        })?;
+        let abort = OnDrop::new(move || abort::<T>(index, IN, generation));
+        let done = wait::<T>(index, IN, generation).await?;
+        abort.defuse();
+        Ok(done)
     }
 }
 
-impl<'d, T: Instance, D: Dir, const SIZE: usize> embassy_usb_driver::Endpoint for Endpoint<'d, T, D, SIZE> {
+impl<T: Instance, const IN: bool> embassy_usb_driver::Endpoint for Endpoint<'_, T, IN> {
     fn info(&self) -> &EndpointInfo {
         &self.info
     }
 
     async fn wait_enabled(&mut self) {
-        self.wait_enabled_internal().await
-    }
-}
-
-impl<'d, T: Instance, const SIZE: usize> EndpointOut for Endpoint<'d, T, Out, SIZE> {
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
-        if !self.is_enabled() {
-            return Err(EndpointError::Disabled);
-        }
-        // The buffer must be at least as large as the endpoint's max_packet_size
-        // to avoid potential buffer overflow when receiving data
-        if buf.len() < self.data.max_packet_size as usize {
-            return Err(EndpointError::BufferOverflow);
-        }
-
-        let s = self.state();
-        let index = self.info.addr.index();
-
-        if s.iso.load(Ordering::Relaxed) {
-            // drain the ring the interrupt fills
-            return poll_fn(|ctx| {
-                s.waker.register(ctx.waker());
-                if !self.is_enabled() {
-                    return Poll::Ready(Err(EndpointError::Disabled));
-                }
-                match super::iso_out_take(index, |p| {
-                    let len = p.len().min(buf.len());
-                    buf[..len].copy_from_slice(&p[..len]);
-                    len
-                }) {
-                    Some(len) => Poll::Ready(Ok(len)),
-                    None => Poll::Pending,
-                }
-            })
-            .await;
-        }
-
-        // arm: ACK until the interrupt has one packet, then NAK until the next read
-        critical_section::with(|_| {
-            if !s.ready.load(Ordering::Acquire) {
-                s.armed.store(true, Ordering::Relaxed);
-                T::dregs()
-                    .ep_rx_ctrl(index)
-                    .modify(|v| v.set_mask_uep_r_res(EpRxResponse::ACK));
-            }
-        });
-
-        poll_fn(|ctx| {
-            s.waker.register(ctx.waker());
-            if s.ready.load(Ordering::Acquire) {
-                s.ready.store(false, Ordering::Relaxed);
-                let len = s.len.load(Ordering::Relaxed) as usize;
-                if len > buf.len() {
-                    return Poll::Ready(Err(EndpointError::BufferOverflow));
-                }
-                self.data.buffer.read_volatile(&mut buf[..len]);
-                Poll::Ready(Ok(len))
-            } else if !self.is_enabled() {
-                Poll::Ready(Err(EndpointError::Disabled))
-            } else {
-                Poll::Pending
-            }
-        })
-        .await
-    }
-}
-
-impl<'d, T: Instance, const SIZE: usize> EndpointIn for Endpoint<'d, T, In, SIZE> {
-    async fn write(&mut self, buf: &[u8]) -> Result<(), EndpointError> {
-        if !self.is_enabled() {
-            return Err(EndpointError::Disabled);
-        }
-        if buf.len() > self.data.max_packet_size as usize {
-            return Err(EndpointError::BufferOverflow);
-        }
-
-        let s = self.state();
-        let index = self.info.addr.index();
-
-        if s.iso.load(Ordering::Relaxed) {
-            // queue it; wait while the ring is full
-            return poll_fn(|ctx| {
-                s.waker.register(ctx.waker());
-                if !self.is_enabled() {
-                    return Poll::Ready(Err(EndpointError::Disabled));
-                }
-                if iso_in_enqueue(index, buf) {
-                    Poll::Ready(Ok(()))
+        let index = slot(self.info.addr.index(), IN);
+        poll_fn(|context| {
+            T::state().endpoint_wakers[index].register(context.waker());
+            T::state().inner.lock(|inner| {
+                let inner = inner.borrow();
+                if inner.powered && inner.endpoints[index].enabled {
+                    Poll::Ready(())
                 } else {
                     Poll::Pending
                 }
             })
-            .await;
-        }
-
-        s.ready.store(false, Ordering::Relaxed);
-        self.data.buffer.write_volatile(buf);
-        let d = T::dregs();
-        critical_section::with(|_| {
-            s.armed.store(true, Ordering::Relaxed);
-            d.ep_t_len(index).write(|v| v.set_len(buf.len() as u16));
-            d.ep_tx_ctrl(index).modify(|v| v.set_mask_uep_t_res(EpTxResponse::ACK));
-        });
-
-        poll_fn(|ctx| {
-            s.waker.register(ctx.waker());
-            if s.ready.load(Ordering::Acquire) {
-                s.ready.store(false, Ordering::Relaxed);
-                Poll::Ready(Ok(()))
-            } else if !self.is_enabled() {
-                Poll::Ready(Err(EndpointError::Disabled))
-            } else {
-                Poll::Pending
-            }
         })
         .await
+    }
+}
+
+impl<T: Instance> embassy_usb_driver::EndpointOut for Endpoint<'_, T, false> {
+    async fn read(&mut self, buffer: &mut [u8]) -> Result<usize, EndpointError> {
+        if self.isochronous() {
+            return iso::read::<T>(self.info.addr.index(), buffer).await;
+        }
+        let packet = usize::from(self.info.max_packet_size);
+        if buffer.len() < packet {
+            return Err(EndpointError::BufferOverflow);
+        }
+        self.transfer(buffer.as_mut_ptr() as usize, packet, false).await
+    }
+
+    async fn read_transfer(&mut self, buffer: &mut [u8]) -> Result<usize, EndpointError> {
+        let packet = usize::from(self.info.max_packet_size);
+        if self.isochronous() {
+            let mut n = 0;
+            loop {
+                let i = self.read(&mut buffer[n..]).await?;
+                n += i;
+                if i < packet {
+                    return Ok(n);
+                }
+            }
+        }
+        let size = buffer.len() / packet * packet;
+        if size == 0 {
+            return Err(EndpointError::BufferOverflow);
+        }
+        self.transfer(buffer.as_mut_ptr() as usize, size, false).await
+    }
+}
+
+impl<T: Instance> embassy_usb_driver::EndpointIn for Endpoint<'_, T, true> {
+    async fn write(&mut self, buffer: &[u8]) -> Result<(), EndpointError> {
+        if buffer.len() > usize::from(self.info.max_packet_size) {
+            return Err(EndpointError::BufferOverflow);
+        }
+        if self.isochronous() {
+            return iso::write::<T>(self.info.addr.index(), buffer).await;
+        }
+        self.transfer(buffer.as_ptr() as usize, buffer.len(), false).await?;
+        Ok(())
+    }
+
+    async fn write_transfer(&mut self, buffer: &[u8], needs_zlp: bool) -> Result<(), EndpointError> {
+        let packet = usize::from(self.info.max_packet_size);
+        if self.isochronous() {
+            for chunk in buffer.chunks(packet) {
+                self.write(chunk).await?;
+            }
+            if needs_zlp && buffer.len() % packet == 0 {
+                self.write(&[]).await?;
+            }
+            return Ok(());
+        }
+        if buffer.is_empty() && !needs_zlp {
+            return Ok(());
+        }
+        let zlp = needs_zlp && !buffer.is_empty() && buffer.len() % packet == 0;
+        self.transfer(buffer.as_ptr() as usize, buffer.len(), zlp).await?;
+        Ok(())
+    }
+}
+
+pub(super) fn usable<'a, T: Instance>(
+    inner: &'a mut Inner,
+    index: usize,
+    incoming: bool,
+    generation: &mut Option<u32>,
+) -> Result<&'a mut EndpointState, EndpointError> {
+    if !inner.powered {
+        return Err(EndpointError::Disabled);
+    }
+    let endpoint = &mut inner.endpoints[slot(index, incoming)];
+    let expected = *generation.get_or_insert(endpoint.generation);
+    if !endpoint.enabled || endpoint.stalled || expected != endpoint.generation {
+        return Err(EndpointError::Disabled);
+    }
+    if index == 0 && regs::setup_pending(T::REGS) {
+        return Err(EndpointError::Disabled);
+    }
+    if endpoint.overflow {
+        endpoint.overflow = false;
+        return Err(EndpointError::BufferOverflow);
+    }
+    Ok(endpoint)
+}
+
+pub(super) async fn wait<T: Instance>(
+    index: usize,
+    incoming: bool,
+    generation: Option<u32>,
+) -> Result<usize, EndpointError> {
+    poll_fn(|context| {
+        T::state().endpoint_wakers[slot(index, incoming)].register(context.waker());
+        T::state().inner.lock(|inner| {
+            let mut inner = inner.borrow_mut();
+            let endpoint = usable::<T>(&mut inner, index, incoming, &mut { generation })?;
+            if endpoint.busy {
+                Poll::Pending
+            } else {
+                Poll::Ready(Ok(endpoint.done))
+            }
+        })
+    })
+    .await
+}
+
+fn abort<T: Instance>(index: usize, incoming: bool, generation: Option<u32>) {
+    let powered = T::state().inner.lock(|inner| {
+        let mut inner = inner.borrow_mut();
+        let powered = inner.powered;
+        let endpoint = &mut inner.endpoints[slot(index, incoming)];
+        if powered && endpoint.busy && Some(endpoint.generation) == generation {
+            endpoint.busy = false;
+            regs::set_res(T::REGS, index, incoming, Res::Nak);
+        }
+        powered
+    });
+    if powered {
+        regs::wait_sie(T::REGS);
     }
 }

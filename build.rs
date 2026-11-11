@@ -486,7 +486,6 @@ fn main() {
         (("spi", "NSS"), quote!(crate::spi::CsPin)),
         (("can", "TX"), quote!(crate::can::TxPin)),
         (("can", "RX"), quote!(crate::can::RxPin)),
-        // H4's `usbhs_h4` block keeps the V4x7 layout and reuses that driver.
         (("usbhs", "DP"), quote!(crate::usbhs::DpPin)),
         (("usbhs", "DM"), quote!(crate::usbhs::DmPin)),
         // H4 gigabit Ethernet. FV3x also uses the `emac` kind, so these rows

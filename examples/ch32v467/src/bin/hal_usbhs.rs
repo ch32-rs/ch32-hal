@@ -34,7 +34,10 @@ pub static mut USBHS_ECHO_BYTES: u32 = 0;
 pub static mut USBHS_ERRORS: u32 = 0;
 
 #[repr(align(4))]
-struct EndpointMemory([u8; 512]);
+struct EndpointMemory([u8; 64]);
+
+#[repr(align(4))]
+struct Packet([u8; 512]);
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
@@ -56,7 +59,7 @@ async fn main(_spawner: Spawner) {
         config.rcc.ahb_pre = rcc::AHBPrescaler::DIV2;
     }
     let peripherals = ch32_hal::init(config);
-    let mut memory = EndpointMemory([0; 512]);
+    let mut memory = EndpointMemory([0; 64]);
     #[cfg(not(feature = "usbhs2"))]
     let driver = Driver::new(
         peripherals.USBHS1,
@@ -99,11 +102,11 @@ async fn main(_spawner: Spawner) {
         &mut msos_descriptor,
         &mut control,
     );
-    let mut class = CdcAcmClass::new(&mut builder, &mut state, 64);
+    let mut class = CdcAcmClass::new(&mut builder, &mut state, 512);
     let mut usb = builder.build();
     report_set!(USBHS_STAGE, 2);
     defmt::info!(
-        "USBHS CDC ready: instance={} full-speed",
+        "USBHS CDC ready: instance={} high-speed",
         if cfg!(feature = "usbhs2") { 2 } else { 1 }
     );
     let echo = async {
@@ -111,12 +114,12 @@ async fn main(_spawner: Spawner) {
             class.wait_connection().await;
             report_set!(USBHS_STAGE, 3);
             defmt::info!("USBHS CDC connected");
-            let mut packet = [0; 64];
+            let mut packet = Packet([0; 512]);
             loop {
                 let result = async {
-                    let length = class.read_packet(&mut packet).await?;
-                    class.write_packet(&packet[..length]).await?;
-                    if length == packet.len() {
+                    let length = class.read_packet(&mut packet.0).await?;
+                    class.write_packet(&packet.0[..length]).await?;
+                    if length == packet.0.len() {
                         class.write_packet(&[]).await?;
                     }
                     Ok::<_, EndpointError>(length)

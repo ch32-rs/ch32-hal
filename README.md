@@ -48,7 +48,7 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 | CRC        | ✅    | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ❓    |
 | USBD       | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | N/A  |
 | USB/OTG FS | ✅\*  | N/A | N/A  | N/A  | ✅\* | ✅\* | N/A   | N/A   | ✅\*  |
-| USB HS     | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ❓\*  |
+| USB HS     | ✅\*  | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ✅\*  |
 | USB PD     | N/A   | N/A | N/A  | N/A  | ✅\* | ✅\* | ❓    | ❓    | ❌    |
 | ETH\*      | ✅†   | N/A | N/A  | N/A  | N/A  | N/A  | N/A   | N/A   | ✅†   |
 | CAN\*      | ✅    | N/A | N/A  | N/A  | N/A  | ✅   | N/A   | N/A   | ✅    |
@@ -61,8 +61,8 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
   validated; the V305/V307 Synopsys DWC MAC is in progress (PR #157), and the
   H4 RGMII/Gigabit path is not board-tested.
 - `‡` H4 is the dual-core CH32H417 (QingKe V3F + V5F). USB FS is the OTG-v2
-  device block (`usbfs_h4`, reusing the `otg_fs` driver); USB HS reuses the
-  V4x7 driver (`usbhs_h4`) and has not been validated at High Speed. USB 3.0
+  device block (`usbfs_h4`, reusing the `otg_fs` driver); USB HS (`usbhs_h4`)
+  shares the V30x/V4x7 driver and is validated at High and Full Speed. USB 3.0
   (`usbss`) has an experimental link-layer framework only, not a validated
   device stack. USB PD is compiled out because the H4 register layout
   differs. I2C is flagged `version: v3` in the H4 metadata, so the V3 driver
