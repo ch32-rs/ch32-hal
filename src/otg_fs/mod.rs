@@ -29,11 +29,14 @@
 //! - [ ] Remote wakeup
 //!
 
+use core::cell::RefCell;
 use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
 use bitmaps::Bitmap;
+use critical_section::Mutex;
+use double_buffer::{RxQueue, TxQueue};
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_usb_driver::{Direction, EndpointAddress, EndpointInfo, EndpointType, Event};
 use endpoint::{ControlPipe, Endpoint};
@@ -47,6 +50,7 @@ use crate::interrupt::typelevel::Interrupt;
 use crate::usb::{Dir, EndpointBufferAllocator, EndpointDataBuffer, In, Out};
 use crate::{interrupt, peripherals, Peri, PeripheralType, RccPeripheral};
 
+mod double_buffer;
 pub mod endpoint;
 mod regs;
 
@@ -57,6 +61,57 @@ const EP_MAX_PACKET_SIZE: u16 = 64;
 const NEW_AW: AtomicWaker = AtomicWaker::new();
 static BUS_WAKER: AtomicWaker = NEW_AW;
 static EP_WAKERS: [AtomicWaker; MAX_NR_EP] = [NEW_AW; MAX_NR_EP];
+
+enum DoubleState {
+    In(TxQueue),
+    Out(RxQueue),
+}
+
+// Shared by allocation, Bus, endpoints and the interrupt handler.
+static DOUBLE_BUFFERED: Mutex<RefCell<[Option<DoubleState>; MAX_NR_EP]>> =
+    Mutex::new(RefCell::new([const { None }; MAX_NR_EP]));
+
+/// Completes a transfer on a double-buffered endpoint and starts the next packet, so
+/// the endpoint doesn't wait for its task. Returns false for any other transfer.
+fn double_buffered_transfer(regs: Regs, status: regs::IntSt) -> bool {
+    let ep = status.ep as usize;
+    if ep == 0 || ep >= MAX_NR_EP {
+        return false;
+    }
+    critical_section::with(|cs| {
+        let mut states = DOUBLE_BUFFERED.borrow_ref_mut(cs);
+        match (states[ep].as_mut(), status.token) {
+            (Some(DoubleState::In(queue)), UsbToken::IN) => {
+                if queue.complete() {
+                    match queue.sending() {
+                        Some((addr, len)) => {
+                            regs::set_ep_dma(regs, ep, addr);
+                            regs::set_ep_t_len(regs, ep, len);
+                            regs::ep_tx_ctrl_flip_tog(regs, ep, EpTxResponse::ACK);
+                        }
+                        None => regs::ep_tx_ctrl_flip_tog(regs, ep, EpTxResponse::NAK),
+                    }
+                }
+            }
+            (Some(DoubleState::Out(queue)), UsbToken::OUT) => {
+                // A retransmitted packet leaves the endpoint armed.
+                if status.tog_ok && queue.receiving() {
+                    match queue.complete(regs::rx_len(regs)) {
+                        Some(addr) => {
+                            regs::set_ep_dma(regs, ep, addr);
+                            regs::ep_rx_ctrl_flip_tog(regs, ep, EpRxResponse::ACK);
+                        }
+                        None => regs::ep_rx_ctrl_flip_tog(regs, ep, EpRxResponse::NAK),
+                    }
+                }
+            }
+            _ => return false,
+        }
+        regs::clear_transfer(regs);
+        EP_WAKERS[ep].wake();
+        true
+    })
+}
 
 /// USB PHY configuration (X035 only).
 #[derive(Clone, Copy, Debug)]
@@ -94,8 +149,10 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             panic!("overflow");
         }
 
+        let transfer = int_fg.transfer && !double_buffered_transfer(regs, regs::int_st(regs));
+
         // All the interrupt we handle
-        if int_fg.suspend || int_fg.transfer || int_fg.bus_rst {
+        if int_fg.suspend || transfer || int_fg.bus_rst {
             T::Interrupt::disable();
 
             // Bus stuff we wakup bus
@@ -103,7 +160,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 BUS_WAKER.wake();
             }
 
-            if int_fg.transfer {
+            if transfer {
                 let status = regs::int_st(regs);
 
                 let token = status.token;
@@ -276,6 +333,26 @@ where
             data,
         ))
     }
+
+    /// A bulk endpoint with a second buffer from `ep_buffer`, so the next packet can be
+    /// prepared (IN) or received (OUT) while the other buffer is in use.
+    fn alloc_double_buffered<D: Dir>(
+        &mut self,
+        ep_addr: Option<EndpointAddress>,
+        max_packet_size: u16,
+        dir: Direction,
+    ) -> Result<Endpoint<'d, T, D, SIZE>, embassy_usb_driver::EndpointAllocError> {
+        let mut ep = self.alloc_endpoint(EndpointType::Bulk, ep_addr, max_packet_size, 0, dir)?;
+        let second = self.allocator.alloc_endpoint(max_packet_size)?;
+        let addr = ep.set_double_buffer(second);
+        let state = match dir {
+            Direction::In => DoubleState::In(TxQueue::new(addr)),
+            Direction::Out => DoubleState::Out(RxQueue::new(addr)),
+        };
+        let index = embassy_usb_driver::Endpoint::info(&ep).addr.index();
+        critical_section::with(|cs| DOUBLE_BUFFERED.borrow_ref_mut(cs)[index] = Some(state));
+        Ok(ep)
+    }
 }
 
 impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver::Driver<'d>
@@ -307,6 +384,22 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
         interval_ms: u8,
     ) -> Result<Self::EndpointIn, embassy_usb_driver::EndpointAllocError> {
         self.alloc_endpoint(ep_type, ep_addr, max_packet_size, interval_ms, Direction::In)
+    }
+
+    fn alloc_endpoint_bulk_out_double_buffered(
+        &mut self,
+        ep_addr: Option<EndpointAddress>,
+        max_packet_size: u16,
+    ) -> Result<Self::EndpointOut, embassy_usb_driver::EndpointAllocError> {
+        self.alloc_double_buffered(ep_addr, max_packet_size, Direction::Out)
+    }
+
+    fn alloc_endpoint_bulk_in_double_buffered(
+        &mut self,
+        ep_addr: Option<EndpointAddress>,
+        max_packet_size: u16,
+    ) -> Result<Self::EndpointIn, embassy_usb_driver::EndpointAllocError> {
+        self.alloc_double_buffered(ep_addr, max_packet_size, Direction::In)
     }
 
     fn start(mut self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
@@ -453,6 +546,23 @@ where
             Direction::In => regs::ep_tx_ctrl_set_tog(regs, ep_addr.index(), false),
             Direction::Out => regs::ep_rx_ctrl_set_tog(regs, ep_addr.index(), false),
         }
+
+        let index = ep_addr.index();
+        critical_section::with(|cs| {
+            let mut states = DOUBLE_BUFFERED.borrow_ref_mut(cs);
+            match (ep_addr.direction(), states[index].as_mut()) {
+                (Direction::In, Some(DoubleState::In(queue))) => {
+                    queue.reset();
+                    regs::ep_tx_ctrl_set_res(regs, index, EpTxResponse::NAK);
+                }
+                (Direction::Out, Some(DoubleState::Out(queue))) => {
+                    regs::set_ep_dma(regs, index, queue.reset());
+                    let res = if enabled { EpRxResponse::ACK } else { EpRxResponse::NAK };
+                    regs::ep_rx_ctrl_set_res(regs, index, res);
+                }
+                _ => {}
+            }
+        });
 
         regs::ep_set_enabled(regs, ep_addr.index(), ep_addr.direction(), enabled);
         EP_WAKERS[ep_addr.index() as usize].wake();
