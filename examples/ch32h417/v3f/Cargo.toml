@@ -25,8 +25,6 @@ ch32-hal = { path = "../../../", default-features = false, features = [
 ch32h417-ipc = { path = "../ipc", features = ["define"] }
 
 qingke = { version = "0.8.4", features = ["unsafe-trust-wch-atomics", "dual-core"] }
-# Only used by the `dual-core-critical-section` feature below.
-critical-section = { version = "1.2.0", optional = true }
 # `highcode`: the startup copies `.highcode` from flash to RAM and `mtvec` is
 # taken from there. `link.x` in this crate folds all of `.text`/`.rodata` into
 # that section, so the boot core executes from the zero-wait shared SRAM.
@@ -65,14 +63,6 @@ embassy-usb = { version = "0.6.0", optional = true, default-features = false }
 # Pulls in the H4 SysTick time driver. Other bins keep the blocking delay, which
 # owns the same counter, so this stays off unless the example asks for it.
 embassy = ["ch32-hal/embassy", "dep:embassy-executor", "dep:embassy-time"]
-
-# `multicore`: also exercise `critical_section::with` across the two harts.
-# This switch only turns on the example half; the exclusion itself needs qingke
-# built with its own `dual-core-critical-section` feature (not released yet —
-# use the `dual-core-critical-section` branch of the qingke checkout). Enabling
-# this without that feature makes `cs_value` deliberately come out wrong,
-# because the default `SingleHartCriticalSection` cannot serialise two harts.
-dual-core-critical-section = ["dep:critical-section"]
 
 # `usbhs_cdc` / `usbfs_cdc`: Embassy plus the USB device stack.
 usb = ["embassy", "dep:embassy-usb"]
@@ -126,12 +116,6 @@ required-features = ["embassy"]
 [[bin]]
 name = "usbss_host_link_check"
 path = "src/bin/usbss_host_link_check.rs"
-required-features = ["embassy"]
-
-# One image, an Embassy executor on each hart. No time driver on hart 1 yet.
-[[bin]]
-name = "multicore_embassy"
-path = "src/bin/multicore_embassy.rs"
 required-features = ["embassy"]
 
 [profile.release]

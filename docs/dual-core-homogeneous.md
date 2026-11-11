@@ -6,9 +6,16 @@ is implemented on a qingke branch, and cross-core `embassy_time` is fixed —
 all verified on the bench board. Remaining gaps: checked peripheral ownership
 and getting the qingke change released.**
 Worktree branch: `dual-core-homogeneous`. Examples:
-`examples/ch32h417/v3f/src/bin/homogeneous.rs` (mechanism),
+`examples/ch32h417/homogeneous/src/bin/homogeneous.rs` (mechanism),
 `.../multicore.rs` (API + lock litmus), `.../multicore_embassy.rs` (one
 executor per hart + hart-1 interrupt).
+
+The single-image examples live in their own crate, `examples/ch32h417/homogeneous/`
+(`ch32h417-homogeneous`), not under `v3f/`: they are not a boot-core half of a
+two-image pair, and the crate's `memory.x` gives them the whole 960 KiB of flash
+instead of the 64 KiB slot `v3f/memory.x` reserves for it. `xtask` picks the
+crate automatically when the example exists there; the default layout writes
+the whole image to the boot slot and `--dual-core` is rejected for these.
 
 Question: can CH32H417 run one image on both harts, the way
 `embassy_rp::multicore::spawn_core1` runs RP2040 core 1 — same `.text`, same
@@ -24,8 +31,8 @@ registers, and a released qingke with the new feature.
 
 ## What the spike does
 
-`v3f/src/bin/homogeneous.rs`, built as the **only** image (`cargo xtask flash
---example homogeneous`, default `--v3f-only` layout):
+`homogeneous/src/bin/homogeneous.rs`, built as the **only** image (`cargo
+xtask flash --example homogeneous`, default layout):
 
 1. Hart 0 runs `_start` as usual: copies `.highcode` (all of `.text`/`.rodata`)
    into the zero-wait shared block at `0x2010_0000`, clears `.bss`, takes
@@ -121,7 +128,7 @@ depth counter, and releases in reverse order. Mechanism notes:
 
 To reproduce: check out that qingke branch, add
 `[patch.crates-io] qingke = { path = "~/Repos/qingke" }` to
-`examples/ch32h417/v3f/Cargo.toml`, add
+`examples/ch32h417/homogeneous/Cargo.toml`, add
 
 ```toml
 qingke = { version = "0.8.4", features = [..., "dual-core-critical-section"] }

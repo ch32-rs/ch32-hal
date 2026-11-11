@@ -126,7 +126,7 @@ unsafe extern "C" {
 }
 
 // The wake entry. `PFIC_WAKEIP[1]` only keeps bits [31:10], so the linker
-// puts this section on a 1 KiB boundary (see `v3f/link.x`).
+// puts this section on a 1 KiB boundary (see `homogeneous/link.x`).
 //
 // It must not touch the stack before it has set `sp`, and it must set `gp`
 // before calling any Rust code: the two harts share `.data`, therefore the
