@@ -121,7 +121,8 @@ pub enum ResetReason {
     PowerOn,
     ResetPin,
     OPA,
-    USBPD,
+    /// No reset flag is set (e.g. after [`clear_reset_flags`]).
+    Unknown,
 }
 
 pub fn reset_resona() -> ResetReason {
@@ -142,7 +143,7 @@ pub fn reset_resona() -> ResetReason {
     } else if csr.oparstf() {
         ResetReason::OPA
     } else {
-        panic!("Unknown reset reason")
+        ResetReason::Unknown
     }
 }
 
@@ -150,7 +151,7 @@ pub fn reset_resona() -> ResetReason {
 ///
 /// The flags in RCC_RSTSCKR accumulate across resets until cleared: read [`reset_resona`] once
 /// at boot, then call this, so that the next boot reads only its own cause. Until the next
-/// reset, [`reset_resona`] then finds no flag and panics.
+/// reset, [`reset_resona`] then returns [`ResetReason::Unknown`].
 pub fn clear_reset_flags() {
     RCC.rstsckr().modify(|w| w.set_rmvf(true));
 }
