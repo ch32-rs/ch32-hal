@@ -28,6 +28,20 @@ pub struct InterruptHandler<T: Instance> {
     _phantom: PhantomData<T>,
 }
 
+/// High-priority interrupt handler.
+///
+/// Transfers on double-buffered bulk endpoints only raise the high-priority interrupt,
+/// not the low-priority one the reference manual describes for all events.
+pub struct HpInterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> interrupt::typelevel::Handler<T::HpInterrupt> for HpInterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        <InterruptHandler<T> as interrupt::typelevel::Handler<T::Interrupt>>::on_interrupt();
+    }
+}
+
 impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
     unsafe fn on_interrupt() {
         let regs = T::regs();
@@ -235,7 +249,9 @@ impl<'d, T: Instance> Driver<'d, T> {
     /// Create a new USB driver.
     pub fn new(
         _usb: Peri<'d, T>,
-        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>
+            + interrupt::typelevel::Binding<T::HpInterrupt, HpInterruptHandler<T>>
+            + 'd,
         dp: Peri<'d, impl DpPin<T, 0>>,
         dm: Peri<'d, impl DmPin<T, 0>>,
     ) -> Self {
@@ -444,6 +460,8 @@ impl<'d, T: Instance> driver::Driver<'d> for Driver<'d, T> {
         unsafe {
             T::Interrupt::unpend();
             T::Interrupt::enable();
+            T::HpInterrupt::unpend();
+            T::HpInterrupt::enable();
         }
 
         let mut ep_types = [EpType::BULK; EP_COUNT - 1];
@@ -1018,6 +1036,8 @@ trait SealedInstance {
 pub trait Instance: SealedInstance + RccPeripheral + PeripheralType + 'static {
     /// Interrupt for this USB instance.
     type Interrupt: interrupt::typelevel::Interrupt;
+    /// High-priority interrupt for this USB instance.
+    type HpInterrupt: interrupt::typelevel::Interrupt;
 }
 
 // Internal PHY pins
@@ -1034,6 +1054,7 @@ foreach_interrupt!(
 
         impl Instance for crate::peripherals::$inst {
             type Interrupt = crate::interrupt::typelevel::$irq;
+            type HpInterrupt = crate::_generated::peripheral_interrupts::$inst::HP;
         }
     };
 );
