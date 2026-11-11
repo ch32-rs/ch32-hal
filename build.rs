@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::{env, fs};
@@ -275,6 +275,41 @@ fn main() {
             )*
         );
     });
+
+    // The time driver listens to the selected timer's update (`UP`) and
+    // capture/compare (`CC`) events. On some families those are separate
+    // vectors, on others (V1/V2/V3, H4's `GLOBAL`) they share one, so collect
+    // the distinct interrupt names instead of binding one handler per signal.
+    if !time_driver_singleton.is_empty() {
+        let p = METADATA
+            .peripherals
+            .iter()
+            .find(|p| p.name == time_driver_singleton)
+            .unwrap_or_else(|| panic!("{} is not a peripheral on this chip", time_driver_singleton));
+
+        let irqs: BTreeSet<_> = p
+            .interrupts
+            .iter()
+            .filter(|irq| matches!(irq.signal, "UP" | "CC" | "GLOBAL"))
+            .map(|irq| irq.interrupt.to_ascii_uppercase())
+            .collect();
+        assert!(
+            !irqs.is_empty(),
+            "{} has no time driver interrupts",
+            time_driver_singleton
+        );
+
+        g.extend(irqs.iter().map(|irq| {
+            let irq = format_ident!("{}", irq);
+            quote! {
+                #[cfg(all(feature = "rt", feature = "embassy"))]
+                #[qingke_rt::interrupt]
+                fn #irq() {
+                    crate::embassy::time_driver_impl::on_interrupt()
+                }
+            }
+        }));
+    }
 
     // ========
     // Extract the rcc registers

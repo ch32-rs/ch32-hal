@@ -15,7 +15,6 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_time_driver::{Driver, TICK_HZ};
 use embassy_time_queue_utils::Queue;
-use qingke_rt::interrupt;
 
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::timer::{regs, vals, Gptm};
@@ -41,73 +40,11 @@ type T = peripherals::TIM9;
 #[cfg(time_driver_tim10)]
 type T = peripherals::TIM10;
 
-foreach_interrupt! {
-    (TIM1, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim1)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM2, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim2)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM3, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim3)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM4, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim4)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM5, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim5)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM8, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim8)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM9, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim9)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM10, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim10)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-
-}
+// The interrupt handlers are generated in `build.rs`, one per IRQ the
+// selected timer delivers its events on. Some families route the update
+// (`UP`) and capture/compare (`CC`) events to separate vectors, others
+// (V1/V2/V3 and H4's `GLOBAL`) share one; the generator dedupes by IRQ name,
+// which a fixed macro arm per signal cannot do.
 
 fn regs_gp16() -> Gptm {
     unsafe { Gptm::from_ptr(T::regs()) }
@@ -196,8 +133,20 @@ impl RtcDriver {
             w.set_ccie(0, true); // Capture/Compare 1 interrupt enable
         });
 
+        // Both events must reach the driver: the update flag marks the wrap,
+        // the CC1 flag the half-way point. On X0/V0-style timers they are
+        // separate vectors, so enabling only CC would leave the wrap
+        // unobserved until the next half-period (up to 32.768 ms), during
+        // which `now()` sits a whole 65.536 ms behind. An alarm armed in that
+        // window misses its CCR match and then waits another wrap. Where the
+        // two events share one vector this enables it twice, which is a no-op.
+        <T as CoreInstance>::UpdateInterrupt::unpend();
         <T as GeneralInstance16bit>::CaptureCompareInterrupt::unpend();
-        unsafe { <T as GeneralInstance16bit>::CaptureCompareInterrupt::enable() };
+
+        unsafe {
+            <T as CoreInstance>::UpdateInterrupt::enable();
+            <T as GeneralInstance16bit>::CaptureCompareInterrupt::enable();
+        }
 
         r.ctlr1().modify(|w| w.set_cen(true));//Counter enable
     }
@@ -328,4 +277,10 @@ impl Driver for RtcDriver {
 
 pub(crate) fn init(cs: CriticalSection) {
     DRIVER.init(cs)
+}
+
+/// Entry point for the interrupt handlers generated in `build.rs`.
+#[cfg(feature = "rt")]
+pub(crate) fn on_interrupt() {
+    DRIVER.on_interrupt()
 }
