@@ -1,8 +1,7 @@
 //! `usbhs_v4x7` (CH32V4x7) and `usbhs_h4` (CH32H417) describe the same device
 //! block: every endpoint control register carries its own completion flag.
 //! `usbhs_v3` (CH32V30x) reports one transaction at a time through the shared
-//! `INT_ST`/`RX_LEN` registers, encodes handshakes differently and toggles bulk
-//! endpoints in hardware.
+//! `INT_ST`/`RX_LEN` registers and encodes handshakes differently.
 
 use super::Inner;
 
@@ -183,6 +182,25 @@ mod imp {
         })
     }
 
+    fn tog_auto(regs: Regs, incoming: bool) -> Reg<u16, RW> {
+        let dev = dev(regs);
+        reg(if incoming {
+            dev.uep_t_tog_auto().as_ptr().cast()
+        } else {
+            dev.uep_r_tog_auto().as_ptr().cast()
+        })
+    }
+
+    fn set_tog_auto(regs: Regs, index: usize, incoming: bool, on: bool) {
+        tog_auto(regs, incoming).modify(|value| {
+            *value = if on {
+                *value | 1 << index
+            } else {
+                *value & !(1 << index)
+            }
+        });
+    }
+
     fn iso(regs: Regs, incoming: bool) -> Reg<u16, RW> {
         let dev = dev(regs);
         let ptr: *mut u16 = if incoming {
@@ -248,6 +266,8 @@ mod imp {
     pub(crate) fn reset_endpoints(regs: Regs) {
         enables(regs, true).write_value(1);
         enables(regs, false).write_value(1);
+        tog_auto(regs, true).write_value(0);
+        tog_auto(regs, false).write_value(0);
         regs.usb_dev_ad().write_value(UsbDevAd(0));
         for index in 0..ENDPOINTS {
             for incoming in [false, true] {
@@ -257,16 +277,26 @@ mod imp {
         }
     }
 
-    pub(crate) fn enable(regs: Regs, index: usize, incoming: bool, enabled: bool, _kind: EndpointType, res: Res) {
+    pub(crate) fn enable(regs: Regs, index: usize, incoming: bool, enabled: bool, kind: EndpointType, res: Res) {
         enables(regs, incoming).modify(|value| *value &= !(1 << index));
+        set_tog_auto(regs, index, incoming, false);
         control(regs, index, incoming).write_value(code(res));
         if enabled {
             enables(regs, incoming).modify(|value| *value |= 1 << index);
+            set_tog_auto(regs, index, incoming, kind != EndpointType::Isochronous);
         }
     }
 
+    /// The toggle bits only take a write with the hardware toggle off.
     pub(crate) fn restart(regs: Regs, index: usize, incoming: bool, res: Res) {
+        let auto = tog_auto(regs, incoming).read() & (1 << index) != 0;
+        if auto {
+            set_tog_auto(regs, index, incoming, false);
+        }
         control(regs, index, incoming).write_value(code(res));
+        if auto {
+            set_tog_auto(regs, index, incoming, true);
+        }
     }
 
     pub(crate) fn iso_start(regs: Regs, index: usize, incoming: bool, endpoint: &mut EndpointState) {
@@ -349,6 +379,14 @@ mod imp {
         true
     }
 
+    fn flip(index: usize) -> u8 {
+        if index == 0 {
+            4
+        } else {
+            0
+        }
+    }
+
     pub(crate) fn interrupt(regs: Regs, inner: &mut Inner) -> Wake {
         let mut wake = Wake::default();
         let flags = regs.usb_int_fg().read().0;
@@ -424,7 +462,7 @@ mod imp {
                     control(regs, index, true).write_value(ACK);
                 } else if incoming {
                     inner.in_done(index);
-                    control(regs, index, true).write_value(((control_value ^ 4) & 0x0c) | NAK);
+                    control(regs, index, true).write_value(((control_value ^ flip(index)) & 0x0c) | NAK);
                 } else if isochronous {
                     let endpoint = &mut inner.endpoints[slot(index, false)];
                     if let Some(config) = endpoint.config {
@@ -434,7 +472,7 @@ mod imp {
                     control(regs, index, false).write_value(ACK);
                 } else if control_value & 0x10 != 0 {
                     inner.out_done(index, rx_length(regs, index).read());
-                    control(regs, index, false).write_value(((control_value ^ 4) & 0x0c) | NAK);
+                    control(regs, index, false).write_value(((control_value ^ flip(index)) & 0x0c) | NAK);
                 } else {
                     control(regs, index, false).write_value((control_value & 0x0c) | ACK);
                 }
