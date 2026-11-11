@@ -34,7 +34,7 @@ pub static mut USBHS_ECHO_BYTES: u32 = 0;
 pub static mut USBHS_ERRORS: u32 = 0;
 
 #[repr(align(4))]
-struct EndpointMemory([u8; 512]);
+struct EndpointMemory([u8; 1152]);
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
@@ -56,7 +56,7 @@ async fn main(_spawner: Spawner) {
         config.rcc.ahb_pre = rcc::AHBPrescaler::DIV2;
     }
     let peripherals = ch32_hal::init(config);
-    let mut memory = EndpointMemory([0; 512]);
+    let mut memory = EndpointMemory([0; 1152]);
     #[cfg(not(feature = "usbhs2"))]
     let driver = Driver::new(
         peripherals.USBHS1,
@@ -99,11 +99,11 @@ async fn main(_spawner: Spawner) {
         &mut msos_descriptor,
         &mut control,
     );
-    let mut class = CdcAcmClass::new(&mut builder, &mut state, 64);
+    let mut class = CdcAcmClass::new(&mut builder, &mut state, 512);
     let mut usb = builder.build();
     report_set!(USBHS_STAGE, 2);
     defmt::info!(
-        "USBHS CDC ready: instance={} full-speed",
+        "USBHS CDC ready: instance={} high-speed",
         if cfg!(feature = "usbhs2") { 2 } else { 1 }
     );
     let echo = async {
@@ -111,7 +111,7 @@ async fn main(_spawner: Spawner) {
             class.wait_connection().await;
             report_set!(USBHS_STAGE, 3);
             defmt::info!("USBHS CDC connected");
-            let mut packet = [0; 64];
+            let mut packet = [0; 512];
             loop {
                 let result = async {
                     let length = class.read_packet(&mut packet).await?;

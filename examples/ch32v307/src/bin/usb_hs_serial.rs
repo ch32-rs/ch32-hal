@@ -4,10 +4,8 @@
 use panic_halt as _;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use ch32_hal::usb::EndpointDataBuffer512;
-use ch32_hal::usbhs::{Driver};
+use ch32_hal::usbhs::{Driver, Instance, InterruptHandler, WakeupInterruptHandler};
 use ch32_hal::{self as hal, bind_interrupts, peripherals, Config};
-use ch32_hal::usbhs::{InterruptHandler, WakeupInterruptHandler, Instance};
 use embassy_usb::Builder;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
@@ -16,6 +14,9 @@ bind_interrupts!(struct Irq {
     USBHS => InterruptHandler<peripherals::USBHS>;
     USBHS_WKUP => WakeupInterruptHandler<peripherals::USBHS>;
 });
+
+#[repr(align(4))]
+struct EndpointMemory([u8; 1152]);
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
@@ -27,8 +28,8 @@ async fn main(_spawner: Spawner) {
 
 
     // Create the driver, from the HAL.
-    let mut buffer: [EndpointDataBuffer512; 4] = core::array::from_fn(|_| EndpointDataBuffer512::default());
-    let driver = Driver::new(p.USBHS, Irq,  p.PB7, p.PB6, &mut buffer);
+    let mut memory = EndpointMemory([0; 1152]);
+    let driver = Driver::new(p.USBHS, p.PB7, p.PB6, Irq, &mut memory.0, Default::default()).unwrap();
 
     // Create embassy-usb Config
     let mut config = embassy_usb::Config::new(0xc0de, 0xcafe);
@@ -87,11 +88,14 @@ impl From<EndpointError> for Disconnected {
     }
 }
 
-async fn echo<'d, T: Instance + 'd, const NR_EP: usize, const SIZE: usize>(class: &mut CdcAcmClass<'d, Driver<'d, T, NR_EP, SIZE>>) -> Result<(), Disconnected> {
+async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) -> Result<(), Disconnected> {
     let mut buf = [0; 512];
     loop {
         let n = class.read_packet(&mut buf).await?;
         let data = &buf[..n];
         class.write_packet(data).await?;
+        if n == buf.len() {
+            class.write_packet(&[]).await?;
+        }
     }
 }

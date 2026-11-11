@@ -181,12 +181,7 @@ pub mod usbd;
 
 /// USB high-speed (`kind: usbhs`). H4 shares the `v4x7` register map; `v3`
 /// is its own layout.
-#[cfg(usbhs_v3)]
-pub mod usbhs;
-// H4's USBHS keeps the V4x7 device-block layout (same offsets, fieldsets and
-// endpoint arrays), so the V4x7 driver serves both.
-#[cfg(any(usbhs_v4x7, usbhs_h4))]
-#[path = "usbhs/v4x7/mod.rs"]
+#[cfg(any(usbhs_v3, usbhs_v4x7, usbhs_h4))]
 pub mod usbhs;
 
 /// USB 3.0 SuperSpeed device (`kind: usbss`, CH32H417) — RM §27.

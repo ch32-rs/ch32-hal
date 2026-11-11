@@ -1,10 +1,10 @@
-//! USBHS full-speed CDC-ACM echo on the V3F core.
+//! USBHS high-speed CDC-ACM echo on the V3F core.
 //!
 //! The H4 USBHS block keeps the V4x7 device layout, so this exercises the
 //! `ch32_hal::usbhs` driver that the V4x7 parts already use. Nothing configures
 //! PB8/PB9: once the USBHS block is clocked the muxed pins connect to the
 //! internal 480 MHz PHY by themselves (RM table 9-11). The USBHS PLL runs from
-//! HSI, the default `hal::init` clock tree, so no crystal is needed.
+//! the 25 MHz HSE crystal.
 //!
 //! ```text
 //! cargo xtask run --example usbhs_cdc
@@ -23,6 +23,7 @@ use ch32_hal::{bind_interrupts, peripherals, rcc};
 use defmt::info;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
+use embassy_time::Timer;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::Builder;
 use panic_halt as _;
@@ -33,14 +34,14 @@ bind_interrupts!(struct Irqs {
 
 type UsbDriver = Driver<'static, peripherals::USBHS>;
 
-/// Endpoint memory: 64 bytes for EP0 plus one 64-byte packet per class
-/// endpoint. The driver only requires 4-byte alignment and RAM residence.
+/// Endpoint memory: 64 bytes for EP0 plus one packet per class endpoint. The
+/// driver only requires 4-byte alignment and RAM residence.
 #[repr(align(4))]
-struct EndpointMemory([u8; 256]);
+struct EndpointMemory([u8; 1152]);
 
 // The USB device and its echo task run concurrently, so everything they share
 // has to outlive `main`.
-static mut ENDPOINT_MEMORY: EndpointMemory = EndpointMemory([0; 256]);
+static mut ENDPOINT_MEMORY: EndpointMemory = EndpointMemory([0; 1152]);
 static mut CONFIG_DESCRIPTOR: [u8; 128] = [0; 128];
 static mut BOS_DESCRIPTOR: [u8; 32] = [0; 32];
 static mut MSOS_DESCRIPTOR: [u8; 32] = [0; 32];
@@ -49,7 +50,7 @@ static mut CDC_STATE: State = State::new();
 
 #[embassy_executor::task]
 async fn echo(mut class: CdcAcmClass<'static, UsbDriver>) {
-    let mut packet = [0; 64];
+    let mut packet = [0; 512];
     loop {
         class.wait_connection().await;
         info!("USBHS CDC connected");
@@ -75,8 +76,9 @@ async fn echo(mut class: CdcAcmClass<'static, UsbDriver>) {
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(spawner: Spawner) -> ! {
     let mut config = hal::Config::default();
+    config.rcc = rcc::Config::with_sysclk_400m_v5f_400m_v3f_100m_hse();
     config.rcc.aux_plls.usbhs = Some(UsbhsPll {
-        src: Usbhspllsrc::HSI,
+        src: Usbhspllsrc::HSE,
         refsel: UsbhspllRefsel::F25MHZ,
     });
     let p = hal::init(config);
@@ -85,6 +87,8 @@ async fn main(spawner: Spawner) -> ! {
         rcc::clocks().sysclk.0,
         hal::pac::RCC.ctlr().read().usbhs_pllrdy()
     );
+
+    Timer::after_secs(5).await;
 
     let memory = unsafe { &mut *core::ptr::addr_of_mut!(ENDPOINT_MEMORY) };
     let driver = Driver::new(p.USBHS, p.PB8, p.PB9, Irqs, &mut memory.0, Default::default()).unwrap();
@@ -102,7 +106,7 @@ async fn main(spawner: Spawner) -> ! {
         unsafe { &mut *core::ptr::addr_of_mut!(MSOS_DESCRIPTOR) },
         unsafe { &mut *core::ptr::addr_of_mut!(CONTROL_BUFFER) },
     );
-    let class = CdcAcmClass::new(&mut builder, unsafe { &mut *core::ptr::addr_of_mut!(CDC_STATE) }, 64);
+    let class = CdcAcmClass::new(&mut builder, unsafe { &mut *core::ptr::addr_of_mut!(CDC_STATE) }, 512);
     let mut usb = builder.build();
     info!("USBHS CDC ready");
 

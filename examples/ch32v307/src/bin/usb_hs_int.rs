@@ -12,7 +12,6 @@
 #![no_std]
 #![no_main]
 
-use ch32_hal::usb::EndpointDataBuffer64;
 use ch32_hal::usbhs::{Driver, InterruptHandler, WakeupInterruptHandler};
 use ch32_hal::{self as hal, bind_interrupts, peripherals, Config};
 use embassy_executor::Spawner;
@@ -27,8 +26,10 @@ bind_interrupts!(struct Irq {
 });
 
 const EP_SIZE: u16 = 64;
+
 /// One buffer for EP0, one for the interrupt OUT and one for the interrupt IN endpoint.
-const NR_EP: usize = 3;
+#[repr(align(4))]
+struct EndpointMemory([u8; 192]);
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
@@ -38,8 +39,8 @@ async fn main(_spawner: Spawner) {
     };
     let p = hal::init(cfg);
 
-    let mut buffer: [EndpointDataBuffer64; NR_EP] = core::array::from_fn(|_| EndpointDataBuffer64::default());
-    let driver = Driver::new(p.USBHS, Irq, p.PB7, p.PB6, &mut buffer);
+    let mut memory = EndpointMemory([0; 192]);
+    let driver = Driver::new(p.USBHS, p.PB7, p.PB6, Irq, &mut memory.0, Default::default()).unwrap();
 
     let mut config = embassy_usb::Config::new(0xc0de, 0xca53);
     config.manufacturer = Some("ch32-hal");
