@@ -34,14 +34,17 @@ bind_interrupts!(struct Irqs {
 
 type UsbDriver = Driver<'static, peripherals::USBHS>;
 
-/// Endpoint memory: 64 bytes for EP0 plus one packet per class endpoint. The
-/// driver only requires 4-byte alignment and RAM residence.
+/// Endpoint memory: 64 bytes for EP0. The driver only requires 4-byte
+/// alignment and RAM residence.
 #[repr(align(4))]
-struct EndpointMemory([u8; 1152]);
+struct EndpointMemory([u8; 64]);
+
+#[repr(align(4))]
+struct Packet([u8; 512]);
 
 // The USB device and its echo task run concurrently, so everything they share
 // has to outlive `main`.
-static mut ENDPOINT_MEMORY: EndpointMemory = EndpointMemory([0; 1152]);
+static mut ENDPOINT_MEMORY: EndpointMemory = EndpointMemory([0; 64]);
 static mut CONFIG_DESCRIPTOR: [u8; 128] = [0; 128];
 static mut BOS_DESCRIPTOR: [u8; 32] = [0; 32];
 static mut MSOS_DESCRIPTOR: [u8; 32] = [0; 32];
@@ -50,19 +53,19 @@ static mut CDC_STATE: State = State::new();
 
 #[embassy_executor::task]
 async fn echo(mut class: CdcAcmClass<'static, UsbDriver>) {
-    let mut packet = [0; 512];
+    let mut packet = Packet([0; 512]);
     loop {
         class.wait_connection().await;
         info!("USBHS CDC connected");
         loop {
-            match class.read_packet(&mut packet).await {
+            match class.read_packet(&mut packet.0).await {
                 Ok(length) => {
-                    if class.write_packet(&packet[..length]).await.is_err() {
+                    if class.write_packet(&packet.0[..length]).await.is_err() {
                         break;
                     }
                     // A full packet must be followed by a short one, or the
                     // host keeps waiting for the rest of the transfer.
-                    if length == packet.len() && class.write_packet(&[]).await.is_err() {
+                    if length == packet.0.len() && class.write_packet(&[]).await.is_err() {
                         break;
                     }
                 }

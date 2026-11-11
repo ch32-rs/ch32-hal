@@ -54,6 +54,7 @@ mod imp {
     type Device = pac::usbhs::UsbhsDevice;
 
     pub(crate) const ENDPOINTS: usize = 8;
+    pub(crate) const BURST: bool = cfg!(usbhs_h4);
 
     const NAK: u8 = 0;
     const STALL: u8 = 1;
@@ -62,6 +63,7 @@ mod imp {
     const PRESERVE_FLAGS: u8 = 0xc0;
     const INTERRUPTS: u8 = 0xd7;
     const SOF: u8 = 0x20;
+    const SIE_WAIT: u32 = 2000;
 
     fn code(res: Res) -> u8 {
         match res {
@@ -182,6 +184,10 @@ mod imp {
         })
     }
 
+    fn rx_size(regs: Regs, index: usize) -> Reg<u16, RW> {
+        reg(dev(regs).uep_r_size(index - 1).as_ptr().cast())
+    }
+
     fn tog_auto(regs: Regs, incoming: bool) -> Reg<u16, RW> {
         let dev = dev(regs);
         reg(if incoming {
@@ -201,6 +207,29 @@ mod imp {
         });
     }
 
+    fn bursts(regs: Regs) -> [Reg<u8, RW>; 3] {
+        let dev = dev(regs);
+        [
+            reg(dev.uep_t_burst().as_ptr().cast()),
+            reg(dev.uep_t_burst_mode().as_ptr().cast()),
+            reg(dev.uep_r_burst().as_ptr().cast()),
+        ]
+    }
+
+    fn set_burst(regs: Regs, index: usize, incoming: bool, on: bool) {
+        let bursts = bursts(regs);
+        let bursts = if incoming { &bursts[..2] } else { &bursts[2..] };
+        for burst in bursts {
+            burst.modify(|value| {
+                *value = if on {
+                    *value | 1 << index
+                } else {
+                    *value & !(1 << index)
+                }
+            });
+        }
+    }
+
     fn iso(regs: Regs, incoming: bool) -> Reg<u16, RW> {
         let dev = dev(regs);
         let ptr: *mut u16 = if incoming {
@@ -218,9 +247,9 @@ mod imp {
         enables(regs, false).write_value(0);
         reg(dev.uep_t_tog_auto().as_ptr().cast::<u16>()).write_value(0);
         reg(dev.uep_r_tog_auto().as_ptr().cast::<u16>()).write_value(0);
-        reg(dev.uep_t_burst().as_ptr().cast::<u8>()).write_value(0);
-        reg(dev.uep_t_burst_mode().as_ptr().cast::<u8>()).write_value(0);
-        reg(dev.uep_r_burst().as_ptr().cast::<u8>()).write_value(0);
+        for burst in bursts(regs) {
+            burst.write_value(0);
+        }
         reg(dev.uep_r_res_mode().as_ptr().cast::<u8>()).write_value(0);
         reg(dev.uep_af_mode().as_ptr().cast::<u32>()).write_value(0);
         iso(regs, true).write_value(0);
@@ -268,6 +297,9 @@ mod imp {
         enables(regs, false).write_value(1);
         tog_auto(regs, true).write_value(0);
         tog_auto(regs, false).write_value(0);
+        for burst in bursts(regs) {
+            burst.write_value(0);
+        }
         regs.usb_dev_ad().write_value(UsbDevAd(0));
         for index in 0..ENDPOINTS {
             for incoming in [false, true] {
@@ -280,10 +312,12 @@ mod imp {
     pub(crate) fn enable(regs: Regs, index: usize, incoming: bool, enabled: bool, kind: EndpointType, res: Res) {
         enables(regs, incoming).modify(|value| *value &= !(1 << index));
         set_tog_auto(regs, index, incoming, false);
+        set_burst(regs, index, incoming, false);
         control(regs, index, incoming).write_value(code(res));
         if enabled {
             enables(regs, incoming).modify(|value| *value |= 1 << index);
             set_tog_auto(regs, index, incoming, kind != EndpointType::Isochronous);
+            set_burst(regs, index, incoming, BURST && kind != EndpointType::Isochronous);
         }
     }
 
@@ -360,13 +394,33 @@ mod imp {
         control(regs, 0, false).read() & 0x88 == 0x88
     }
 
-    pub(crate) fn arm_out(regs: Regs, index: usize) {
-        set_res(regs, index, false, Res::Ack);
+    fn load_out(regs: Regs, index: usize, address: usize, size: u16) {
+        if BURST && index != 0 {
+            rx_length(regs, index).write_value(0);
+            rx_size(regs, index).write_value(size);
+        }
+        dma(regs, index, false).write_value(address as u32);
     }
 
-    pub(crate) fn arm_in(regs: Regs, index: usize, length: u16) {
+    fn load_in(regs: Regs, index: usize, address: usize, length: u16) {
+        dma(regs, index, true).write_value(address as u32);
         tx_length(regs, index).write_value(length);
-        set_res(regs, index, true, Res::Ack);
+    }
+
+    pub(crate) fn arm(regs: Regs, index: usize, incoming: bool, (address, length): (usize, u16)) {
+        if incoming {
+            load_in(regs, index, address, length);
+        } else {
+            load_out(regs, index, address, length);
+        }
+        set_res(regs, index, incoming, Res::Ack);
+    }
+
+    pub(crate) fn wait_sie(regs: Regs) {
+        let mut n = 0;
+        while !regs.usb_mis_st().read().udms_sie_free() && n < SIE_WAIT {
+            n += 1;
+        }
     }
 
     pub(crate) fn set_address(regs: Regs, address: u8) {
@@ -461,8 +515,12 @@ mod imp {
                     }
                     control(regs, index, true).write_value(ACK);
                 } else if incoming {
-                    inner.in_done(index);
-                    control(regs, index, true).write_value(((control_value ^ flip(index)) & 0x0c) | NAK);
+                    let next = inner.endpoints[slot(index, true)].in_done();
+                    if let Some((address, length)) = next {
+                        load_in(regs, index, address, length);
+                    }
+                    let res = if next.is_some() { ACK } else { NAK };
+                    control(regs, index, true).write_value(((control_value ^ flip(index)) & 0x0c) | res);
                 } else if isochronous {
                     let endpoint = &mut inner.endpoints[slot(index, false)];
                     if let Some(config) = endpoint.config {
@@ -471,10 +529,19 @@ mod imp {
                     }
                     control(regs, index, false).write_value(ACK);
                 } else if control_value & 0x10 != 0 {
-                    inner.out_done(index, rx_length(regs, index).read());
-                    control(regs, index, false).write_value(((control_value ^ flip(index)) & 0x0c) | NAK);
+                    let next = inner.endpoints[slot(index, false)].out_done(rx_length(regs, index).read());
+                    if let Some((address, size)) = next {
+                        load_out(regs, index, address, size);
+                    }
+                    let res = if next.is_some() { ACK } else { NAK };
+                    control(regs, index, false).write_value(((control_value ^ flip(index)) & 0x0c) | res);
                 } else {
-                    control(regs, index, false).write_value((control_value & 0x0c) | ACK);
+                    let res = if index == 0 || inner.endpoints[slot(index, false)].busy {
+                        ACK
+                    } else {
+                        NAK
+                    };
+                    control(regs, index, false).write_value((control_value & 0x0c) | res);
                 }
                 wake.endpoints |= 1 << slot(index, incoming);
             }
@@ -506,6 +573,7 @@ mod imp {
     pub(crate) type Regs = pac::usbhs::Usb;
 
     pub(crate) const ENDPOINTS: usize = 16;
+    pub(crate) const BURST: bool = false;
 
     /// Polls of MIS_ST to wait for an iso OUT to finish: longer than a 1024-byte packet
     const SIE_WAIT: u32 = 2000;
@@ -784,13 +852,17 @@ mod imp {
         regs.int_fg().read().setup_act()
     }
 
-    pub(crate) fn arm_out(regs: Regs, index: usize) {
-        set_res(regs, index, false, Res::Ack);
-    }
-
-    pub(crate) fn arm_in(regs: Regs, index: usize, length: u16) {
-        dev(regs).ep_t_len(index).write(|w| w.set_len(length));
-        set_res(regs, index, true, Res::Ack);
+    pub(crate) fn arm(regs: Regs, index: usize, incoming: bool, (address, length): (usize, u16)) {
+        let d = dev(regs);
+        match (index, incoming) {
+            (0, _) => d.ep0_dma().write_value(address as u32),
+            (n, true) => d.ep_tx_dma(n - 1).write_value(address as u32),
+            (n, false) => d.ep_rx_dma(n - 1).write_value(address as u32),
+        }
+        if incoming {
+            d.ep_t_len(index).write(|w| w.set_len(length));
+        }
+        set_res(regs, index, incoming, Res::Ack);
     }
 
     pub(crate) fn set_address(regs: Regs, address: u8) {
@@ -920,7 +992,9 @@ mod imp {
                         d.ep_rx_ctrl(0)
                             .modify(|w| w.set_mask_uep_r_tog(flip(w.mask_uep_r_tog())));
                     }
-                    inner.out_done(ep, len);
+                    if let Some(next) = inner.endpoints[slot(ep, false)].out_done(len) {
+                        arm(regs, ep, false, next);
+                    }
                     wake.endpoints |= 1 << slot(ep, false);
                 }
                 // iso IN: see iso_in_sent
@@ -931,7 +1005,9 @@ mod imp {
                         d.ep_tx_ctrl(0)
                             .modify(|w| w.set_mask_uep_t_tog(flip(w.mask_uep_t_tog())));
                     }
-                    inner.in_done(ep);
+                    if let Some(next) = inner.endpoints[slot(ep, true)].in_done() {
+                        arm(regs, ep, true, next);
+                    }
                     wake.endpoints |= 1 << slot(ep, true);
                 }
                 UsbToken::SETUP => {}
@@ -1080,7 +1156,7 @@ mod imp {
         d.ep_rx_dma(ep - 1).write_value(address as u32);
     }
 
-    fn wait_sie(regs: Regs) {
+    pub(crate) fn wait_sie(regs: Regs) {
         let mut n = 0;
         while !regs.mis_st().read().sie_free() && n < SIE_WAIT {
             n += 1;
@@ -1125,12 +1201,7 @@ mod imp {
         let last = TOG.load(Ordering::Relaxed);
         if (last & bit != 0) == tog {
             let endpoint = &inner.endpoints[slot(ep, incoming)];
-            let armed = if incoming {
-                endpoint.queued() != 0
-            } else {
-                endpoint.armed
-            };
-            if endpoint.enabled && !endpoint.stalled && armed {
+            if endpoint.enabled && !endpoint.stalled && endpoint.busy {
                 set_res(regs, ep, incoming, Res::Ack);
             }
             return false;
@@ -1146,25 +1217,21 @@ mod imp {
     /// last gets resent with the same toggle, which the host drops, and completes then.)
     fn ep0_moved_on(d: pac::usbhs::Usbd, inner: &mut Inner, token: UsbToken, wake: &mut Wake) {
         match token {
-            UsbToken::OUT if inner.endpoints[slot(0, true)].queued() != 0 => {
+            UsbToken::OUT if inner.endpoints[slot(0, true)].busy => {
                 d.ep_tx_ctrl(0).modify(|w| {
                     w.set_mask_uep_t_res(EpTxResponse::NAK);
                     w.set_mask_uep_t_tog(flip(w.mask_uep_t_tog()));
                 });
-                inner.in_done(0);
+                inner.endpoints[slot(0, true)].in_done();
                 wake.endpoints |= 1 << slot(0, true);
             }
-            UsbToken::IN
-                if inner.endpoints[0].enabled
-                    && inner.endpoints[0].queued() == 0
-                    && inner.endpoints[0].rx_wanted > 0 =>
-            {
+            UsbToken::IN if inner.endpoints[0].enabled && inner.endpoints[0].busy && inner.endpoints[0].size > 0 => {
                 d.ep_rx_ctrl(0).modify(|w| {
                     w.set_mask_uep_r_res(EpRxResponse::NAK);
                     w.set_mask_uep_r_tog(flip(w.mask_uep_r_tog()));
                 });
-                let len = inner.endpoints[0].rx_wanted;
-                inner.out_done(0, len);
+                let len = inner.endpoints[0].size as u16;
+                inner.endpoints[0].out_done(len);
                 wake.endpoints |= 1;
             }
             _ => {}

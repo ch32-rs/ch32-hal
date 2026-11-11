@@ -4,7 +4,7 @@ use core::task::Poll;
 
 use embassy_usb_driver::EndpointError;
 
-use super::endpoint::{read_packet, write_packet};
+use super::endpoint::{usable, wait};
 use super::{regs, Instance, Res};
 
 pub struct ControlPipe<'d, T: Instance> {
@@ -22,28 +22,55 @@ impl<T: Instance> ControlPipe<'_, T> {
         }
     }
 
-    fn prepare(&self, incoming: bool, first: bool, wanted: u16) -> Result<(), EndpointError> {
+    fn prepare(&self, incoming: bool, first: bool, wanted: usize) -> Result<(), EndpointError> {
         T::state().inner.lock(|inner| {
             let mut inner = inner.borrow_mut();
-            let powered = inner.powered;
-            let endpoint = &mut inner.endpoints[incoming as usize];
-            if !powered || !endpoint.enabled || endpoint.generation != self.generation {
-                return Err(EndpointError::Disabled);
-            }
-            if regs::setup_pending(T::REGS) {
-                return Err(EndpointError::Disabled);
-            }
+            let endpoint = usable::<T>(&mut inner, 0, incoming, &mut Some(self.generation))?;
             if !incoming {
-                endpoint.rx_wanted = wanted;
+                let address = endpoint.config.unwrap().buffer.address;
+                endpoint.start(address, wanted, self.max_packet_size, false);
             }
             regs::ep0_prepare(T::REGS, incoming, first);
             Ok(())
         })
     }
 
+    async fn send(&mut self, data: &[u8]) -> Result<(), EndpointError> {
+        T::state().inner.lock(|inner| {
+            let mut inner = inner.borrow_mut();
+            let endpoint = usable::<T>(&mut inner, 0, true, &mut Some(self.generation))?;
+            let buffer = endpoint.config.unwrap().buffer;
+            unsafe { buffer.write(data) };
+            let next = endpoint.start(buffer.address, data.len(), self.max_packet_size, false);
+            regs::arm(T::REGS, 0, true, next);
+            Ok(())
+        })?;
+        wait::<T>(0, true, Some(self.generation)).await?;
+        Ok(())
+    }
+
+    async fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, EndpointError> {
+        poll_fn(|context| {
+            T::state().endpoint_wakers[0].register(context.waker());
+            T::state().inner.lock(|inner| {
+                let mut inner = inner.borrow_mut();
+                match usable::<T>(&mut inner, 0, false, &mut Some(self.generation)) {
+                    Ok(endpoint) if endpoint.busy => Poll::Pending,
+                    Ok(endpoint) => {
+                        let length = endpoint.done;
+                        unsafe { endpoint.config.unwrap().buffer.read(&mut buffer[..length]) };
+                        Poll::Ready(Ok(length))
+                    }
+                    Err(error) => Poll::Ready(Err(error)),
+                }
+            })
+        })
+        .await
+    }
+
     async fn status_in(&mut self) -> Result<(), EndpointError> {
         self.prepare(true, true, 0)?;
-        write_packet::<T>(0, &[], &mut Some(self.generation)).await
+        self.send(&[]).await
     }
 }
 
@@ -71,8 +98,8 @@ impl<T: Instance> embassy_usb_driver::ControlPipe for ControlPipe<'_, T> {
     }
 
     async fn data_out(&mut self, buffer: &mut [u8], first: bool, _last: bool) -> Result<usize, EndpointError> {
-        self.prepare(false, first, buffer.len() as u16)?;
-        read_packet::<T>(0, buffer, &mut Some(self.generation)).await
+        self.prepare(false, first, buffer.len())?;
+        self.receive(buffer).await
     }
 
     async fn data_in(&mut self, data: &[u8], first: bool, last: bool) -> Result<(), EndpointError> {
@@ -83,9 +110,9 @@ impl<T: Instance> embassy_usb_driver::ControlPipe for ControlPipe<'_, T> {
         if last {
             self.prepare(false, true, 0)?;
         }
-        write_packet::<T>(0, data, &mut Some(self.generation)).await?;
+        self.send(data).await?;
         if last {
-            read_packet::<T>(0, &mut [], &mut Some(self.generation)).await?;
+            self.receive(&mut []).await?;
         }
         Ok(())
     }

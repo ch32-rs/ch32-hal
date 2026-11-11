@@ -6,10 +6,11 @@
 //! packet size. On V30x isochronous and bulk / interrupt endpoints must use
 //! different numbers: a PING to a bulk OUT whose number is isochronous on the
 //! IN side hangs the SIE.
-//! Endpoint memory stays borrowed for the lifetime of the bus and endpoints;
-//! DMA never accesses a caller's temporary read/write slice. Canceling an IN
-//! write may leave its owned packet queued until the host consumes it or the
-//! endpoint is disabled. A subsequent write drains that packet before reuse.
+//! Endpoint memory (EP0 and the isochronous rings) stays borrowed for the
+//! lifetime of the bus and endpoints. Bulk and interrupt transfers DMA straight
+//! to and from the caller's read/write slice, which must be 4-byte aligned in
+//! RAM; a read slice holds at least one max-size packet. Canceling a transfer
+//! NAKs the endpoint and waits for the bus before the slice is released.
 //!
 //! Configure the shared 480 MHz USBHS PLL through RCC before constructing the
 //! driver. High speed is the default; full-speed descriptors and fallback must
@@ -99,7 +100,6 @@ pub enum Error {
 #[derive(Clone, Copy)]
 struct Buffer {
     address: usize,
-    size: u16,
 }
 
 impl Buffer {
@@ -126,12 +126,15 @@ struct EndpointState {
     enabled: bool,
     stalled: bool,
     generation: u32,
-    rx_wanted: u16,
     overflow: bool,
+    busy: bool,
+    address: usize,
+    size: usize,
+    done: usize,
+    limit: u16,
+    zlp: bool,
     head: u8,
     tail: u8,
-    length: u16,
-    armed: bool,
     /// IN: slot `tail` is loaded in the endpoint (else a zero-length packet is)
     loaded: bool,
     /// OUT: packets dropped on a full ring
@@ -148,12 +151,15 @@ impl EndpointState {
             enabled: false,
             stalled: false,
             generation: 0,
-            rx_wanted: 0,
             overflow: false,
+            busy: false,
+            address: 0,
+            size: 0,
+            done: 0,
+            limit: 0,
+            zlp: false,
             head: 0,
             tail: 0,
-            length: 0,
-            armed: false,
             loaded: false,
             overruns: 0,
             #[cfg(usbhs_v3)]
@@ -176,17 +182,45 @@ impl EndpointState {
             .is_some_and(|config| config.info.ep_type == EndpointType::Isochronous)
     }
 
-    fn clear(&mut self) {
-        self.head = 0;
-        self.tail = 0;
-        self.armed = false;
+    fn start(&mut self, address: usize, size: usize, limit: u16, zlp: bool) -> (usize, u16) {
+        self.busy = true;
+        self.address = address;
+        self.size = size;
+        self.done = 0;
+        self.limit = limit;
+        self.zlp = zlp;
+        self.next()
     }
 
-    fn arm_out(&mut self, regs: regs::Regs, index: usize) {
-        if !self.armed && self.queued() == 0 {
-            self.armed = true;
-            regs::arm_out(regs, index);
+    fn next(&self) -> (usize, u16) {
+        let length = (self.size - self.done).min(usize::from(self.limit));
+        (self.address + self.done, length as u16)
+    }
+
+    fn in_done(&mut self) -> Option<(usize, u16)> {
+        if !self.busy {
+            return None;
         }
+        self.done += usize::from(self.next().1);
+        if self.done < self.size || core::mem::take(&mut self.zlp) {
+            return Some(self.next());
+        }
+        self.busy = false;
+        None
+    }
+
+    fn out_done(&mut self, length: u16) -> Option<(usize, u16)> {
+        if !self.busy {
+            return None;
+        }
+        let armed = self.next().1;
+        self.done += usize::from(length.min(armed));
+        self.overflow |= length > armed;
+        if length == armed && self.done < self.size {
+            return Some(self.next());
+        }
+        self.busy = false;
+        None
     }
 }
 
@@ -251,21 +285,6 @@ impl Inner {
                 endpoint.overflow = true;
             }
         }
-    }
-
-    fn in_done(&mut self, index: usize) {
-        let endpoint = &mut self.endpoints[slot(index, true)];
-        if endpoint.queued() != 0 {
-            endpoint.tail = endpoint.tail.wrapping_add(1);
-        }
-    }
-
-    fn out_done(&mut self, index: usize, length: u16) {
-        let endpoint = &mut self.endpoints[slot(index, false)];
-        endpoint.rx_wanted = 0;
-        endpoint.length = length;
-        endpoint.head = endpoint.head.wrapping_add(1);
-        endpoint.armed = false;
     }
 
     fn set_suspended(&mut self, suspended: bool) -> bool {
@@ -387,7 +406,12 @@ impl<'d, T: Instance> Driver<'d, T> {
                         .is_none_or(|other| regs::can_pair(&other.info, ep_type, max_packet_size))
             })
             .ok_or(EndpointAllocError)?;
-        let end = self.used + buffer_size(ep_type, IN, max_packet_size);
+        let end = self.used
+            + if ep_type == EndpointType::Isochronous {
+                iso::ring_size(IN, max_packet_size)
+            } else {
+                0
+            };
         if end > self.capacity {
             return Err(EndpointAllocError);
         }
@@ -403,23 +427,11 @@ impl<'d, T: Instance> Driver<'d, T> {
         }
         self.endpoints[slot(index, IN)] = Some(EndpointConfig {
             info,
-            buffer: Buffer {
-                address,
-                size: max_packet_size,
-            },
+            buffer: Buffer { address },
         });
         self.used = end;
         Ok(Endpoint::new(info))
     }
-}
-
-fn buffer_size(kind: EndpointType, incoming: bool, max_packet_size: u16) -> usize {
-    let size = if kind == EndpointType::Isochronous {
-        iso::ring_size(incoming, max_packet_size)
-    } else {
-        usize::from(max_packet_size)
-    };
-    (size + 3) & !3
 }
 
 impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
@@ -461,10 +473,7 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
                     max_packet_size: control_max_packet_size,
                     interval_ms: 0,
                 },
-                buffer: Buffer {
-                    address: self.memory,
-                    size: control_max_packet_size,
-                },
+                buffer: Buffer { address: self.memory },
             });
         }
         T::state().inner.lock(|inner| {
@@ -658,7 +667,7 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
             }
             endpoint.generation = endpoint.generation.wrapping_add(1);
             endpoint.stalled = stalled;
-            endpoint.rx_wanted = 0;
+            endpoint.busy = false;
             endpoint.overflow = false;
             if endpoint.isochronous() {
                 if stalled {
@@ -667,11 +676,7 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
                     regs::iso_resume(T::REGS, index, incoming);
                 }
             } else {
-                endpoint.clear();
                 regs::restart(T::REGS, index, incoming, if stalled { Res::Stall } else { Res::Nak });
-                if !stalled && !incoming {
-                    endpoint.arm_out(T::REGS, index);
-                }
             }
         });
         T::state().endpoint_wakers[slot(index, incoming)].wake();
@@ -722,8 +727,6 @@ fn change_endpoint<T: Instance>(address: EndpointAddress, enabled: bool, stalled
         regs::enable(T::REGS, index, incoming, enabled, config.info.ep_type, Res::Nak);
         if enabled && endpoint.isochronous() {
             regs::iso_start(T::REGS, index, incoming, endpoint);
-        } else if enabled && !incoming {
-            endpoint.arm_out(T::REGS, index);
         }
     });
     T::state().endpoint_wakers[slot(index, incoming)].wake();

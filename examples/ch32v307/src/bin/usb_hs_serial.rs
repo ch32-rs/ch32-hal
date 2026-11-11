@@ -16,7 +16,10 @@ bind_interrupts!(struct Irq {
 });
 
 #[repr(align(4))]
-struct EndpointMemory([u8; 1152]);
+struct EndpointMemory([u8; 64]);
+
+#[repr(align(4))]
+struct Packet([u8; 512]);
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
@@ -28,7 +31,7 @@ async fn main(_spawner: Spawner) {
 
 
     // Create the driver, from the HAL.
-    let mut memory = EndpointMemory([0; 1152]);
+    let mut memory = EndpointMemory([0; 64]);
     let driver = Driver::new(p.USBHS, p.PB7, p.PB6, Irq, &mut memory.0, Default::default()).unwrap();
 
     // Create embassy-usb Config
@@ -89,12 +92,12 @@ impl From<EndpointError> for Disconnected {
 }
 
 async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) -> Result<(), Disconnected> {
-    let mut buf = [0; 512];
+    let mut buf = Packet([0; 512]);
     loop {
-        let n = class.read_packet(&mut buf).await?;
-        let data = &buf[..n];
+        let n = class.read_packet(&mut buf.0).await?;
+        let data = &buf.0[..n];
         class.write_packet(data).await?;
-        if n == buf.len() {
+        if n == buf.0.len() {
             class.write_packet(&[]).await?;
         }
     }

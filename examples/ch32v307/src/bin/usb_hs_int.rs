@@ -27,9 +27,11 @@ bind_interrupts!(struct Irq {
 
 const EP_SIZE: u16 = 64;
 
-/// One buffer for EP0, one for the interrupt OUT and one for the interrupt IN endpoint.
 #[repr(align(4))]
-struct EndpointMemory([u8; 192]);
+struct EndpointMemory([u8; 64]);
+
+#[repr(align(4))]
+struct Packet([u8; EP_SIZE as usize]);
 
 #[embassy_executor::main(entry = "qingke_rt::entry")]
 async fn main(_spawner: Spawner) {
@@ -39,7 +41,7 @@ async fn main(_spawner: Spawner) {
     };
     let p = hal::init(cfg);
 
-    let mut memory = EndpointMemory([0; 192]);
+    let mut memory = EndpointMemory([0; 64]);
     let driver = Driver::new(p.USBHS, p.PB7, p.PB6, Irq, &mut memory.0, Default::default()).unwrap();
 
     let mut config = embassy_usb::Config::new(0xc0de, 0xca53);
@@ -91,12 +93,12 @@ async fn main(_spawner: Spawner) {
 
 /// Read one packet from the OUT endpoint and send it back on the IN endpoint.
 async fn echo<O: EndpointOut, I: EndpointIn>(mut out: O, mut in_: I) {
-    let mut buf = [0u8; EP_SIZE as usize];
+    let mut buf = Packet([0; EP_SIZE as usize]);
     loop {
         out.wait_enabled().await;
-        match out.read(&mut buf).await {
+        match out.read(&mut buf.0).await {
             Ok(n) => {
-                let _ = in_.write(&buf[..n]).await;
+                let _ = in_.write(&buf.0[..n]).await;
             }
             // disabled by a bus reset or a configuration change: wait for the host
             Err(EndpointError::Disabled) => {}
