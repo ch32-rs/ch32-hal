@@ -119,8 +119,6 @@ pub mod dac;
 #[cfg(dac_h4)]
 #[path = "dac/h4.rs"]
 pub mod dac;
-// The AWU is a wakeup timer, not a time source; see the module docs for why it
-// is kept out of the Embassy time driver.
 #[cfg(awu)]
 pub mod awu;
 #[cfg(crc)]
