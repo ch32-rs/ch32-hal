@@ -119,6 +119,8 @@ pub mod dac;
 #[cfg(dac_h4)]
 #[path = "dac/h4.rs"]
 pub mod dac;
+#[cfg(awu)]
+pub mod awu;
 #[cfg(crc)]
 pub mod crc;
 pub mod exti;
