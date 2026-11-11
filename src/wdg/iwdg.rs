@@ -14,6 +14,15 @@ use crate::{pac, peripherals, Peri, PeripheralType};
 /// The counter is 12 bits wide, so the reload value tops out at 0x0fff.
 const MAX_RELOAD: u16 = 0x0fff;
 
+/// IWDG counter clock before the prescaler.
+///
+/// The CH32X0 family has no LSI: its IWDG runs on HSI / 1024 = 46.875 kHz (CH32X035 datasheet
+/// V2.2, §1.3 clock tree and the IWDG paragraph). Elsewhere it is the LSI.
+#[cfg(ch32x0)]
+const CLOCK_HZ: u32 = 48_000_000 / 1024;
+#[cfg(not(ch32x0))]
+const CLOCK_HZ: u32 = crate::rcc::LSI_FREQ.0;
+
 /// Independent watchdog (IWDG) driver.
 ///
 /// [`new`](Self::new) configures the timeout but leaves the watchdog stopped,
@@ -26,8 +35,8 @@ pub struct IndependentWatchdog<'d, T: Instance> {
 impl<'d, T: Instance> IndependentWatchdog<'d, T> {
     /// Configure the watchdog for a `timeout_us` microsecond period.
     ///
-    /// The period is `(reload + 1) * prescaler / LSI`. LSI is an RC
-    /// oscillator with a wide tolerance, so leave margin and pet well before
+    /// The period is `(reload + 1) * prescaler / clock`; the clock is the LSI, or HSI / 1024 on
+    /// CH32X0. Both are RC oscillators with a tolerance, so leave margin and pet well before
     /// the nominal deadline. Panics if the timeout does not fit the 12-bit
     /// counter with the largest prescaler (32 s at 32.768 kHz, 26 s at
     /// 40 kHz).
@@ -61,11 +70,11 @@ impl<'d, T: Instance> IndependentWatchdog<'d, T> {
 
 /// Pick the smallest prescaler that can express `timeout_us` in 12 bits.
 fn prescaler_and_reload(timeout_us: u32) -> (u8, u16) {
-    let lsi = u64::from(crate::rcc::LSI_FREQ.0);
+    let clock = u64::from(CLOCK_HZ);
 
     for prescaler_power in 2u8..=8u8 {
         let prescaler = 1u32 << prescaler_power;
-        let ticks = (u64::from(timeout_us) * lsi).div_ceil(u64::from(prescaler) * 1_000_000);
+        let ticks = (u64::from(timeout_us) * clock).div_ceil(u64::from(prescaler) * 1_000_000);
         if ticks <= u64::from(MAX_RELOAD) + 1 {
             let ticks = ticks.max(1) as u16;
             return (prescaler_power - 2, ticks - 1);
