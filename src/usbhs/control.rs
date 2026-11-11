@@ -27,7 +27,7 @@ impl<T: Instance> ControlPipe<'_, T> {
             let mut inner = inner.borrow_mut();
             let endpoint = usable::<T>(&mut inner, 0, incoming, &mut Some(self.generation))?;
             if !incoming {
-                let address = endpoint.config.unwrap().buffer.address;
+                let address = endpoint.config.unwrap().address;
                 endpoint.start(address, wanted, self.max_packet_size, false);
             }
             regs::ep0_prepare(T::REGS, incoming, first);
@@ -39,9 +39,9 @@ impl<T: Instance> ControlPipe<'_, T> {
         T::state().inner.lock(|inner| {
             let mut inner = inner.borrow_mut();
             let endpoint = usable::<T>(&mut inner, 0, true, &mut Some(self.generation))?;
-            let buffer = endpoint.config.unwrap().buffer;
-            unsafe { buffer.write(data) };
-            let next = endpoint.start(buffer.address, data.len(), self.max_packet_size, false);
+            let config = endpoint.config.unwrap();
+            unsafe { config.write(data) };
+            let next = endpoint.start(config.address, data.len(), self.max_packet_size, false);
             regs::arm(T::REGS, 0, true, next);
             Ok(())
         })?;
@@ -54,15 +54,12 @@ impl<T: Instance> ControlPipe<'_, T> {
             T::state().endpoint_wakers[0].register(context.waker());
             T::state().inner.lock(|inner| {
                 let mut inner = inner.borrow_mut();
-                match usable::<T>(&mut inner, 0, false, &mut Some(self.generation)) {
-                    Ok(endpoint) if endpoint.busy => Poll::Pending,
-                    Ok(endpoint) => {
-                        let length = endpoint.done;
-                        unsafe { endpoint.config.unwrap().buffer.read(&mut buffer[..length]) };
-                        Poll::Ready(Ok(length))
-                    }
-                    Err(error) => Poll::Ready(Err(error)),
+                let endpoint = usable::<T>(&mut inner, 0, false, &mut Some(self.generation))?;
+                if endpoint.busy {
+                    return Poll::Pending;
                 }
+                unsafe { endpoint.config.unwrap().read(&mut buffer[..endpoint.done]) };
+                Poll::Ready(Ok(endpoint.done))
             })
         })
         .await

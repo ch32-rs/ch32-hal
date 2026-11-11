@@ -26,7 +26,7 @@ pub(crate) const fn ring_size(incoming: bool, max_packet_size: u16) -> usize {
 }
 
 const fn stride(max_packet_size: u16) -> usize {
-    4 + ((max_packet_size as usize + 3) & !3)
+    4 + (max_packet_size as usize).next_multiple_of(4)
 }
 
 pub(crate) fn microframe_index(frame: u16) -> u16 {
@@ -36,7 +36,7 @@ pub(crate) fn microframe_index(frame: u16) -> u16 {
 impl EndpointConfig {
     pub(crate) fn packet(&self, i: u8) -> usize {
         let n = slots(self.info.addr.is_in());
-        self.buffer.address + usize::from(i & (n - 1)) * stride(self.info.max_packet_size)
+        self.address + usize::from(i & (n - 1)) * stride(self.info.max_packet_size)
     }
 
     pub(crate) fn length(&self, i: u8) -> u16 {
@@ -169,16 +169,12 @@ pub(super) async fn read<T: Instance>(index: usize, buffer: &mut [u8]) -> Result
     let mut generation = None;
     poll_fn(|context| {
         T::state().endpoint_wakers[slot(index, false)].register(context.waker());
-        let taken = take::<T, _>(index, &mut generation, |packet| {
+        take::<T, _>(index, &mut generation, |packet| {
             let target = buffer.get_mut(..packet.len()).ok_or(EndpointError::BufferOverflow)?;
             target.copy_from_slice(packet);
             Ok(packet.len())
-        });
-        match taken {
-            Ok(Some(result)) => Poll::Ready(result),
-            Ok(None) => Poll::Pending,
-            Err(error) => Poll::Ready(Err(error)),
-        }
+        })?
+        .map_or(Poll::Pending, Poll::Ready)
     })
     .await
 }
@@ -190,11 +186,11 @@ pub(super) async fn write<T: Instance>(index: usize, data: &[u8]) -> Result<(), 
         let queued = fill::<T>(index, &mut generation, |packet| {
             packet[..data.len()].copy_from_slice(data);
             Some(data.len())
-        });
-        match queued {
-            Ok(true) => Poll::Ready(Ok(())),
-            Ok(false) => Poll::Pending,
-            Err(error) => Poll::Ready(Err(error)),
+        })?;
+        if queued {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
         }
     })
     .await

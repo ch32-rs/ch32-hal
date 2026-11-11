@@ -26,10 +26,10 @@ impl<'d, T: Instance, const IN: bool> Endpoint<'d, T, IN> {
 
     async fn transfer(&self, address: usize, size: usize, zlp: bool) -> Result<usize, EndpointError> {
         let index = self.info.addr.index();
-        let packet = usize::from(self.info.max_packet_size);
+        let packet = self.info.max_packet_size;
         if size != 0 {
             assert!(
-                address % 4 == 0 && (size <= packet || packet % 4 == 0),
+                address % 4 == 0 && (size <= usize::from(packet) || packet % 4 == 0),
                 "USBHS transfers need 4-byte aligned buffers"
             );
             #[cfg(target_arch = "riscv32")]
@@ -39,7 +39,7 @@ impl<'d, T: Instance, const IN: bool> Endpoint<'d, T, IN> {
             );
         }
         let limit = if regs::BURST && index != 0 {
-            usize::from(u16::MAX) / packet * packet
+            u16::MAX / packet * packet
         } else {
             packet
         };
@@ -47,16 +47,14 @@ impl<'d, T: Instance, const IN: bool> Endpoint<'d, T, IN> {
         T::state().inner.lock(|inner| {
             let mut inner = inner.borrow_mut();
             let endpoint = usable::<T>(&mut inner, index, IN, &mut generation)?;
-            let next = endpoint.start(address, size, limit as u16, zlp);
+            let next = endpoint.start(address, size, limit, zlp);
             regs::arm(T::REGS, index, IN, next);
             Ok(())
         })?;
         let abort = OnDrop::new(move || abort::<T>(index, IN, generation));
-        let result = wait::<T>(index, IN, generation).await;
-        if result.is_ok() {
-            abort.defuse();
-        }
-        result
+        let done = wait::<T>(index, IN, generation).await?;
+        abort.defuse();
+        Ok(done)
     }
 }
 
@@ -179,10 +177,11 @@ pub(super) async fn wait<T: Instance>(
         T::state().endpoint_wakers[slot(index, incoming)].register(context.waker());
         T::state().inner.lock(|inner| {
             let mut inner = inner.borrow_mut();
-            match usable::<T>(&mut inner, index, incoming, &mut { generation }) {
-                Ok(endpoint) if endpoint.busy => Poll::Pending,
-                Ok(endpoint) => Poll::Ready(Ok(endpoint.done)),
-                Err(error) => Poll::Ready(Err(error)),
+            let endpoint = usable::<T>(&mut inner, index, incoming, &mut { generation })?;
+            if endpoint.busy {
+                Poll::Pending
+            } else {
+                Poll::Ready(Ok(endpoint.done))
             }
         })
     })

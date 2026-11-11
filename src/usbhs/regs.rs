@@ -3,8 +3,6 @@
 //! `usbhs_v3` (CH32V30x) reports one transaction at a time through the shared
 //! `INT_ST`/`RX_LEN` registers and encodes handshakes differently.
 
-use super::Inner;
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Res {
     Nak,
@@ -28,15 +26,21 @@ impl Wake {
     }
 }
 
-fn isochronous(inner: &Inner, slot: usize) -> bool {
-    inner.endpoints[slot].isochronous()
+fn bits(mut mask: u32) -> impl Iterator<Item = usize> {
+    core::iter::from_fn(move || {
+        (mask != 0).then(|| {
+            let bit = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            bit
+        })
+    })
 }
 
 #[cfg(any(usbhs_v4x7, usbhs_h4))]
 mod imp {
     use embassy_usb_driver::{EndpointType, Speed};
 
-    use super::{isochronous, Res, Wake};
+    use super::{bits, Res, Wake};
     use crate::pac;
     use crate::pac::common::{Reg, RW};
     use crate::pac::usbhs::regs::{UsbCtrl, UsbDevAd, UsbIntEn, UsbIntFg};
@@ -128,12 +132,11 @@ mod imp {
 
     fn enables(regs: Regs, incoming: bool) -> Reg<u16, RW> {
         let dev = dev(regs);
-        let ptr: *mut u16 = if incoming {
+        reg(if incoming {
             dev.uep_tx_en().as_ptr().cast()
         } else {
             dev.uep_rx_en().as_ptr().cast()
-        };
-        reg(ptr)
+        })
     }
 
     // Endpoint 0 has its own narrower fieldsets, so it stays a single
@@ -198,13 +201,7 @@ mod imp {
     }
 
     fn set_tog_auto(regs: Regs, index: usize, incoming: bool, on: bool) {
-        tog_auto(regs, incoming).modify(|value| {
-            *value = if on {
-                *value | 1 << index
-            } else {
-                *value & !(1 << index)
-            }
-        });
+        tog_auto(regs, incoming).modify(|value| *value = *value & !(1 << index) | u16::from(on) << index);
     }
 
     fn bursts(regs: Regs) -> [Reg<u8, RW>; 3] {
@@ -220,24 +217,17 @@ mod imp {
         let bursts = bursts(regs);
         let bursts = if incoming { &bursts[..2] } else { &bursts[2..] };
         for burst in bursts {
-            burst.modify(|value| {
-                *value = if on {
-                    *value | 1 << index
-                } else {
-                    *value & !(1 << index)
-                }
-            });
+            burst.modify(|value| *value = *value & !(1 << index) | u8::from(on) << index);
         }
     }
 
     fn iso(regs: Regs, incoming: bool) -> Reg<u16, RW> {
         let dev = dev(regs);
-        let ptr: *mut u16 = if incoming {
+        reg(if incoming {
             dev.uep_t_iso().as_ptr().cast()
         } else {
             dev.uep_r_iso().as_ptr().cast()
-        };
-        reg(ptr)
+        })
     }
 
     pub(crate) fn power_on(regs: Regs, speed: Speed) {
@@ -245,8 +235,8 @@ mod imp {
         regs.usb_ctrl().write_value(UsbCtrl(9));
         enables(regs, true).write_value(0);
         enables(regs, false).write_value(0);
-        reg(dev.uep_t_tog_auto().as_ptr().cast::<u16>()).write_value(0);
-        reg(dev.uep_r_tog_auto().as_ptr().cast::<u16>()).write_value(0);
+        tog_auto(regs, true).write_value(0);
+        tog_auto(regs, false).write_value(0);
         for burst in bursts(regs) {
             burst.write_value(0);
         }
@@ -348,10 +338,8 @@ mod imp {
         control(regs, index, incoming).write_value(ACK);
     }
 
-    pub(crate) fn iso_reload(regs: Regs, inner: &mut Inner, mut slots: u32) {
-        while slots != 0 {
-            let s = slots.trailing_zeros() as usize;
-            slots &= slots - 1;
+    pub(crate) fn iso_reload(regs: Regs, inner: &mut Inner, slots: u32) {
+        for s in bits(slots) {
             let index = s / 2;
             if control(regs, index, true).read() & DONE != 0 {
                 continue;
@@ -416,11 +404,8 @@ mod imp {
         set_res(regs, index, incoming, Res::Ack);
     }
 
-    pub(crate) fn wait_sie(regs: Regs) {
-        let mut n = 0;
-        while !regs.usb_mis_st().read().udms_sie_free() && n < SIE_WAIT {
-            n += 1;
-        }
+    pub(crate) fn wait_sie(regs: Regs) -> bool {
+        (0..SIE_WAIT).any(|_| regs.usb_mis_st().read().udms_sie_free())
     }
 
     pub(crate) fn set_address(regs: Regs, address: u8) {
@@ -464,14 +449,10 @@ mod imp {
             let mut bytes = [0; 8];
             let length = rx_length(regs, 0).read();
             if let Some(config) = inner.endpoints[0].config {
-                unsafe { config.buffer.read(&mut bytes) };
+                unsafe { config.read(&mut bytes) };
             }
             for incoming in [false, true] {
-                control(regs, 0, incoming).write_value(4);
-            }
-            if length != 8 {
-                control(regs, 0, true).write_value(STALL);
-                control(regs, 0, false).write_value(STALL);
+                control(regs, 0, incoming).write_value(if length == 8 { 4 } else { STALL });
             }
             inner.setup((length == 8).then_some(bytes));
             wake.endpoints |= 3;
@@ -492,15 +473,13 @@ mod imp {
                     }
                     continue;
                 }
-                let isochronous = isochronous(inner, slot(index, incoming));
-                let endpoint = &inner.endpoints[slot(index, incoming)];
+                let endpoint = &mut inner.endpoints[slot(index, incoming)];
                 if !endpoint.enabled || endpoint.stalled {
                     control(regs, index, incoming)
                         .write_value((control_value & 0x0c) | if endpoint.stalled { STALL } else { NAK });
                     continue;
                 }
-                if incoming && isochronous {
-                    let endpoint = &mut inner.endpoints[slot(index, true)];
+                if incoming && endpoint.isochronous() {
                     if let Some(config) = endpoint.config {
                         match iso::in_next(endpoint, &config) {
                             Some((address, length)) => {
@@ -515,32 +494,31 @@ mod imp {
                     }
                     control(regs, index, true).write_value(ACK);
                 } else if incoming {
-                    let next = inner.endpoints[slot(index, true)].in_done();
-                    if let Some((address, length)) = next {
-                        load_in(regs, index, address, length);
-                    }
-                    let res = if next.is_some() { ACK } else { NAK };
+                    let res = match endpoint.in_done() {
+                        Some((address, length)) => {
+                            load_in(regs, index, address, length);
+                            ACK
+                        }
+                        None => NAK,
+                    };
                     control(regs, index, true).write_value(((control_value ^ flip(index)) & 0x0c) | res);
-                } else if isochronous {
-                    let endpoint = &mut inner.endpoints[slot(index, false)];
+                } else if endpoint.isochronous() {
                     if let Some(config) = endpoint.config {
                         iso::out_push(endpoint, &config, rx_length(regs, index).read());
                         dma(regs, index, false).write_value(config.packet(endpoint.head) as u32);
                     }
                     control(regs, index, false).write_value(ACK);
                 } else if control_value & 0x10 != 0 {
-                    let next = inner.endpoints[slot(index, false)].out_done(rx_length(regs, index).read());
-                    if let Some((address, size)) = next {
-                        load_out(regs, index, address, size);
-                    }
-                    let res = if next.is_some() { ACK } else { NAK };
+                    let res = match endpoint.out_done(rx_length(regs, index).read()) {
+                        Some((address, size)) => {
+                            load_out(regs, index, address, size);
+                            ACK
+                        }
+                        None => NAK,
+                    };
                     control(regs, index, false).write_value(((control_value ^ flip(index)) & 0x0c) | res);
                 } else {
-                    let res = if index == 0 || inner.endpoints[slot(index, false)].busy {
-                        ACK
-                    } else {
-                        NAK
-                    };
+                    let res = if index == 0 || endpoint.busy { ACK } else { NAK };
                     control(regs, index, false).write_value((control_value & 0x0c) | res);
                 }
                 wake.endpoints |= 1 << slot(index, incoming);
@@ -564,7 +542,7 @@ mod imp {
 
     use embassy_usb_driver::{EndpointType, Speed};
 
-    use super::{isochronous, Res, Wake};
+    use super::{bits, Res, Wake};
     use crate::pac;
     use crate::pac::usbhs::regs::{EpBufMod, EpConfig, EpType, IntSt};
     use crate::pac::usbhs::vals::{EndpointType as Kind, EpRxResponse, EpTog, EpTxResponse, SpeedType, UsbToken};
@@ -904,7 +882,7 @@ mod imp {
             d.ep_tx_ctrl(0).write(|w| w.set_mask_uep_t_res(EpTxResponse::NAK));
             let mut bytes = [0; 8];
             if let Some(config) = inner.endpoints[0].config {
-                unsafe { config.buffer.read(&mut bytes) };
+                unsafe { config.read(&mut bytes) };
             }
             inner.setup(Some(bytes));
             regs.int_fg().write(|w| w.set_setup_act(true));
@@ -935,7 +913,7 @@ mod imp {
         // microframe's OUT may land on it first. its completion after the release sets
         // RX_LEN (and the flag again: that entry finds it taken)
         let mut rx_len_ok = true;
-        if busy && st.token() == UsbToken::OUT && isochronous(inner, slot(st.endp() as usize, false)) {
+        if busy && st.token() == UsbToken::OUT && inner.endpoints[slot(st.endp() as usize, false)].isochronous() {
             wait_sie(regs);
             let now = regs.int_st().read();
             len = regs.rx_len().read();
@@ -966,8 +944,8 @@ mod imp {
         let ep = st.endp() as usize;
         let token = st.token();
         let iso = match token {
-            UsbToken::OUT => isochronous(inner, slot(ep, false)),
-            UsbToken::IN => isochronous(inner, slot(ep, true)),
+            UsbToken::OUT => inner.endpoints[slot(ep, false)].isochronous(),
+            UsbToken::IN => inner.endpoints[slot(ep, true)].isochronous(),
             _ => true,
         };
         let frame = frame(regs);
@@ -1046,10 +1024,7 @@ mod imp {
     /// one bit: its completion may show only as a later token). Not while an IN to the
     /// endpoint is on the bus: it is sending that packet again.
     fn iso_in_sent(regs: Regs, d: pac::usbhs::Usbd, inner: &mut Inner, wake: &mut Wake) {
-        let mut eps = inner.iso_in;
-        while eps != 0 {
-            let ep = eps.trailing_zeros() as usize;
-            eps &= eps - 1;
+        for ep in bits(inner.iso_in.into()) {
             let endpoint = &inner.endpoints[slot(ep, true)];
             if !endpoint.enabled || endpoint.stalled || d.ep_tx_ctrl(ep).read().mask_uep_t_tog() == EpTog::DATA0 {
                 continue;
@@ -1069,10 +1044,7 @@ mod imp {
     /// the flag one bit, a late entry may stand for an OUT and show the transaction after it.
     /// (a packet that starts with the mark is lost; zero-length ones aren't seen.)
     fn iso_out_check(regs: Regs, d: pac::usbhs::Usbd, inner: &mut Inner, entry: Option<(usize, u16)>, wake: &mut Wake) {
-        let mut eps = inner.iso_out;
-        while eps != 0 {
-            let ep = eps.trailing_zeros() as usize;
-            eps &= eps - 1;
+        for ep in bits(inner.iso_out.into()) {
             let endpoint = &mut inner.endpoints[slot(ep, false)];
             // a disabled endpoint's slot still holds its last packet: it is not an arrival
             let Some(config) = endpoint.config.filter(|_| endpoint.enabled) else {
@@ -1116,31 +1088,16 @@ mod imp {
     /// The length of a packet in a slot filled with `ISO_OUT_MARK` before it: up to its last
     /// byte that differs from the pattern.
     fn marked_len(slot: usize, max: usize) -> usize {
-        let mark = ISO_OUT_MARK.to_le_bytes();
-        let words = slot as *const u32;
         // SAFETY: the slot holds `max` bytes, rounded up to words when marked
-        let word = |i: usize| unsafe { core::ptr::read_volatile(words.add(i)) };
+        let words = unsafe { core::slice::from_raw_parts(slot as *const AtomicU32, max.div_ceil(4)) };
         // the first word of the marks after the packet (a packet word that matches the mark can
         // throw this off: 2^-32), then the last byte before them that differs
-        let (mut lo, mut hi) = (0, max.div_ceil(4));
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if word(mid) == ISO_OUT_MARK {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-        let w = lo;
-        if w == 0 {
+        let w = words.partition_point(|word| word.load(Ordering::Relaxed) != ISO_OUT_MARK);
+        let Some(last) = w.checked_sub(1) else {
             return 0;
-        }
-        let last = word(w - 1).to_le_bytes();
-        let mut b = 4;
-        while last[b - 1] == mark[b - 1] {
-            b -= 1;
-        }
-        ((w - 1) * 4 + b).min(max)
+        };
+        let differs = words[last].load(Ordering::Relaxed) ^ ISO_OUT_MARK;
+        (last * 4 + (u32::BITS - differs.leading_zeros()).div_ceil(8) as usize).min(max)
     }
 
     /// Point isochronous OUT endpoint `ep` at the slot at `address`, marked empty: its first
@@ -1156,11 +1113,8 @@ mod imp {
         d.ep_rx_dma(ep - 1).write_value(address as u32);
     }
 
-    pub(crate) fn wait_sie(regs: Regs) {
-        let mut n = 0;
-        while !regs.mis_st().read().sie_free() && n < SIE_WAIT {
-            n += 1;
-        }
+    pub(crate) fn wait_sie(regs: Regs) -> bool {
+        (0..SIE_WAIT).any(|_| regs.mis_st().read().sie_free())
     }
 
     /// Bulk / interrupt / control: NAK before releasing the flag, so the next transaction
@@ -1170,14 +1124,16 @@ mod imp {
         match st.token() {
             // bulk / interrupt: before knowing whether a packet went through (`toggled`), so the
             // next can't land on it
-            UsbToken::OUT if (ep == 0 && st.tog_ok()) || (ep != 0 && !isochronous(inner, slot(ep, false))) => {
+            UsbToken::OUT
+                if (ep == 0 && st.tog_ok()) || (ep != 0 && !inner.endpoints[slot(ep, false)].isochronous()) =>
+            {
                 d.ep_rx_ctrl(ep).modify(|w| {
                     if w.mask_uep_r_res() == EpRxResponse::ACK {
                         w.set_mask_uep_r_res(EpRxResponse::NAK)
                     }
                 })
             }
-            UsbToken::IN if !isochronous(inner, slot(ep, true)) => d.ep_tx_ctrl(ep).modify(|w| {
+            UsbToken::IN if !inner.endpoints[slot(ep, true)].isochronous() => d.ep_tx_ctrl(ep).modify(|w| {
                 if w.mask_uep_t_res() == EpTxResponse::ACK {
                     w.set_mask_uep_t_res(EpTxResponse::NAK)
                 }

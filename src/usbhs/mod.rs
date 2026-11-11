@@ -98,11 +98,12 @@ pub enum Error {
 }
 
 #[derive(Clone, Copy)]
-struct Buffer {
+struct EndpointConfig {
+    info: EndpointInfo,
     address: usize,
 }
 
-impl Buffer {
+impl EndpointConfig {
     unsafe fn read(self, target: &mut [u8]) {
         fence(Ordering::Acquire);
         core::ptr::copy_nonoverlapping(self.address as *const u8, target.as_mut_ptr(), target.len());
@@ -112,12 +113,6 @@ impl Buffer {
         core::ptr::copy_nonoverlapping(source.as_ptr(), self.address as *mut u8, source.len());
         fence(Ordering::Release);
     }
-}
-
-#[derive(Clone, Copy)]
-struct EndpointConfig {
-    info: EndpointInfo,
-    buffer: Buffer,
 }
 
 #[derive(Clone, Copy)]
@@ -168,13 +163,12 @@ impl EndpointState {
     }
 
     fn invalidate(&mut self) {
-        let config = self.config;
-        let generation = self.generation.wrapping_add(1);
-        let overruns = self.overruns;
-        *self = Self::new();
-        self.config = config;
-        self.generation = generation;
-        self.overruns = overruns;
+        *self = Self {
+            config: self.config,
+            generation: self.generation.wrapping_add(1),
+            overruns: self.overruns,
+            ..Self::new()
+        };
     }
 
     fn isochronous(&self) -> bool {
@@ -281,9 +275,7 @@ impl Inner {
     #[cfg(not(usbhs_v3))]
     fn overflow(&mut self) {
         for endpoint in &mut self.endpoints {
-            if endpoint.enabled {
-                endpoint.overflow = true;
-            }
+            endpoint.overflow |= endpoint.enabled;
         }
     }
 
@@ -363,14 +355,12 @@ impl<'d, T: Instance> Driver<'d, T> {
                 return Err(Error::InvalidMemory);
             }
         }
-        let aligned = address.checked_add(3).ok_or(Error::InvalidMemory)? & !3;
+        let aligned = address.checked_next_multiple_of(4).ok_or(Error::InvalidMemory)?;
         let capacity = endpoint_memory
             .len()
             .checked_sub(aligned - address)
+            .filter(|&capacity| capacity >= 64)
             .ok_or(Error::BufferTooSmall)?;
-        if capacity < 64 {
-            return Err(Error::BufferTooSmall);
-        }
         Ok(Self {
             peri,
             dp: dp.into(),
@@ -406,12 +396,11 @@ impl<'d, T: Instance> Driver<'d, T> {
                         .is_none_or(|other| regs::can_pair(&other.info, ep_type, max_packet_size))
             })
             .ok_or(EndpointAllocError)?;
-        let end = self.used
-            + if ep_type == EndpointType::Isochronous {
-                iso::ring_size(IN, max_packet_size)
-            } else {
-                0
-            };
+        let (offset, size) = match ep_type {
+            EndpointType::Isochronous => (4, iso::ring_size(IN, max_packet_size)),
+            _ => (0, 0),
+        };
+        let end = self.used + size;
         if end > self.capacity {
             return Err(EndpointAllocError);
         }
@@ -421,13 +410,9 @@ impl<'d, T: Instance> Driver<'d, T> {
             max_packet_size,
             interval_ms,
         };
-        let mut address = self.memory + self.used;
-        if ep_type == EndpointType::Isochronous {
-            address += 4;
-        }
         self.endpoints[slot(index, IN)] = Some(EndpointConfig {
             info,
-            buffer: Buffer { address },
+            address: self.memory + self.used + offset,
         });
         self.used = end;
         Ok(Endpoint::new(info))
@@ -473,7 +458,7 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
                     max_packet_size: control_max_packet_size,
                     interval_ms: 0,
                 },
-                buffer: Buffer { address: self.memory },
+                address: self.memory,
             });
         }
         T::state().inner.lock(|inner| {
@@ -561,7 +546,7 @@ impl<T: Instance> Bus<'_, T> {
                                 T::REGS,
                                 index,
                                 incoming,
-                                config.buffer.address as u32,
+                                config.address as u32,
                                 config.info.max_packet_size,
                                 config.info.ep_type,
                             );
