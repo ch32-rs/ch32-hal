@@ -22,27 +22,9 @@ impl<'d, T: Instance, const SIZE: usize> ControlPipe<'d, T, SIZE> {
             ep0,
         }
     }
-}
 
-/// Wait for the interrupt to complete an EP0 stage; a new setup packet aborts it.
-async fn complete(s: &EpState) -> Result<usize, EndpointError> {
-    poll_fn(|ctx| {
-        s.waker.register(ctx.waker());
-        if s.ready.load(Ordering::Acquire) {
-            s.ready.store(false, Ordering::Relaxed);
-            Poll::Ready(Ok(s.len.load(Ordering::Relaxed) as usize))
-        } else if setup_pending() {
-            Poll::Ready(Err(EndpointError::Disabled))
-        } else {
-            Poll::Pending
-        }
-    })
-    .await
-}
-
-impl<'d, T: Instance, const SIZE: usize> ControlPipe<'d, T, SIZE> {
-    /// The zero-length IN status stage; false if a new setup packet came instead.
-    async fn status_in(&mut self) -> bool {
+    /// Runs the zero-length IN status stage. Returns false if a new setup packet replaced it.
+    async fn status_in(&self) -> bool {
         let d = T::dregs();
 
         if setup_pending() {
@@ -60,6 +42,22 @@ impl<'d, T: Instance, const SIZE: usize> ControlPipe<'d, T, SIZE> {
 
         complete(&IN_STATE[0]).await.is_ok()
     }
+}
+
+/// Wait for the interrupt to complete an EP0 stage; a new setup packet aborts it.
+async fn complete(s: &EpState) -> Result<usize, EndpointError> {
+    poll_fn(|ctx| {
+        s.waker.register(ctx.waker());
+        if s.ready.load(Ordering::Acquire) {
+            s.ready.store(false, Ordering::Relaxed);
+            Poll::Ready(Ok(s.len.load(Ordering::Relaxed) as usize))
+        } else if setup_pending() {
+            Poll::Ready(Err(EndpointError::Disabled))
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
 }
 
 impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::ControlPipe for ControlPipe<'d, T, SIZE> {
@@ -163,7 +161,7 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::ControlPipe for Con
     }
 
     async fn accept(&mut self) {
-        // a new setup packet instead of the status stage: nothing left to do
+        // the host may send a new setup packet instead of the status stage: nothing left to do then
         let _ = self.status_in().await;
     }
 
