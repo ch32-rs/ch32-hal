@@ -27,7 +27,7 @@ use ch32_hal::{bind_interrupts, pac, peripherals, rcc};
 use defmt::info;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+use embassy_usb::class::cdc_acm::device::{CdcAcmClass, Config as CdcAcmConfig, State};
 use embassy_usb::Builder;
 use panic_halt as _;
 
@@ -107,7 +107,11 @@ async fn main(spawner: Spawner) -> ! {
         unsafe { &mut *core::ptr::addr_of_mut!(MSOS_DESCRIPTOR) },
         unsafe { &mut *core::ptr::addr_of_mut!(CONTROL_BUFFER) },
     );
-    let class = CdcAcmClass::new(&mut builder, unsafe { &mut *core::ptr::addr_of_mut!(CDC_STATE) }, 64);
+    let class = CdcAcmClass::new(
+        &mut builder,
+        unsafe { &mut *core::ptr::addr_of_mut!(CDC_STATE) },
+        CdcAcmConfig::new(),
+    );
     let mut usb = builder.build();
     info!("USBFS CDC ready");
 

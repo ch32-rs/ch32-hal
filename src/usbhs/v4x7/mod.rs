@@ -314,6 +314,7 @@ impl<'d, T: Instance> Driver<'d, T> {
             ep_type,
             max_packet_size,
             interval_ms,
+            max_burst: 0,
         };
         self.endpoints[slot(index, IN)] = Some(EndpointConfig {
             info,
@@ -335,22 +336,16 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
 
     fn alloc_endpoint_out(
         &mut self,
-        ep_type: EndpointType,
-        ep_addr: Option<EndpointAddress>,
-        max_packet_size: u16,
-        interval_ms: u8,
+        config: &embassy_usb_driver::EndpointConfig,
     ) -> Result<Self::EndpointOut, EndpointAllocError> {
-        self.allocate(ep_type, ep_addr, max_packet_size, interval_ms)
+        self.allocate(config.ep_type, config.addr, config.max_packet_size, config.interval_ms)
     }
 
     fn alloc_endpoint_in(
         &mut self,
-        ep_type: EndpointType,
-        ep_addr: Option<EndpointAddress>,
-        max_packet_size: u16,
-        interval_ms: u8,
+        config: &embassy_usb_driver::EndpointConfig,
     ) -> Result<Self::EndpointIn, EndpointAllocError> {
-        self.allocate(ep_type, ep_addr, max_packet_size, interval_ms)
+        self.allocate(config.ep_type, config.addr, config.max_packet_size, config.interval_ms)
     }
 
     fn start(mut self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
@@ -365,6 +360,7 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
                     ep_type: EndpointType::Control,
                     max_packet_size: control_max_packet_size,
                     interval_ms: 0,
+                    max_burst: 0,
                 },
                 buffer: Buffer {
                     address: self.memory,
@@ -530,42 +526,11 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
     }
 
     fn endpoint_set_stalled(&mut self, address: EndpointAddress, stalled: bool) {
-        let index = address.index();
-        if index >= ENDPOINTS {
-            return;
-        }
-        let incoming = address.is_in();
-        T::state().inner.lock(|inner| {
-            let mut inner = inner.borrow_mut();
-            if !inner.powered {
-                return;
-            }
-            let endpoint = &mut inner.endpoints[slot(index, incoming)];
-            if endpoint.config.is_none() || !endpoint.enabled {
-                return;
-            }
-            endpoint.generation = endpoint.generation.wrapping_add(1);
-            endpoint.stalled = stalled;
-            endpoint.rx_ready = false;
-            endpoint.tx_busy = false;
-            endpoint.tx_done = false;
-            endpoint.overflow = false;
-            Registers(T::REGS).control(index, incoming).write_value(if stalled {
-                STALL
-            } else if incoming {
-                NAK
-            } else {
-                ACK
-            });
-        });
-        T::state().endpoint_wakers[slot(index, incoming)].wake();
+        set_endpoint_stalled::<T>(address, stalled);
     }
 
     fn endpoint_is_stalled(&mut self, address: EndpointAddress) -> bool {
-        address.index() < ENDPOINTS
-            && T::state()
-                .inner
-                .lock(|inner| inner.borrow().endpoints[slot(address.index(), address.is_in())].stalled)
+        is_endpoint_stalled::<T>(address)
     }
 
     async fn remote_wakeup(&mut self) -> Result<(), Unsupported> {
@@ -584,6 +549,47 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
         #[cfg(not(feature = "embassy"))]
         Err(Unsupported)
     }
+}
+
+/// Sets or clears the STALL handshake of an endpoint, for the bus and the
+/// endpoint alike.
+fn set_endpoint_stalled<T: Instance>(address: EndpointAddress, stalled: bool) {
+    let index = address.index();
+    if index >= ENDPOINTS {
+        return;
+    }
+    let incoming = address.is_in();
+    T::state().inner.lock(|inner| {
+        let mut inner = inner.borrow_mut();
+        if !inner.powered {
+            return;
+        }
+        let endpoint = &mut inner.endpoints[slot(index, incoming)];
+        if endpoint.config.is_none() || !endpoint.enabled {
+            return;
+        }
+        endpoint.generation = endpoint.generation.wrapping_add(1);
+        endpoint.stalled = stalled;
+        endpoint.rx_ready = false;
+        endpoint.tx_busy = false;
+        endpoint.tx_done = false;
+        endpoint.overflow = false;
+        Registers(T::REGS).control(index, incoming).write_value(if stalled {
+            STALL
+        } else if incoming {
+            NAK
+        } else {
+            ACK
+        });
+    });
+    T::state().endpoint_wakers[slot(index, incoming)].wake();
+}
+
+fn is_endpoint_stalled<T: Instance>(address: EndpointAddress) -> bool {
+    address.index() < ENDPOINTS
+        && T::state()
+            .inner
+            .lock(|inner| inner.borrow().endpoints[slot(address.index(), address.is_in())].stalled)
 }
 
 fn change_endpoint<T: Instance>(address: EndpointAddress, enabled: bool, stalled: bool) {

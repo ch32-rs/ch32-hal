@@ -2,9 +2,9 @@ use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
-use embassy_usb_driver::{EndpointError, EndpointInfo};
+use embassy_usb_driver::{EndpointError, EndpointInfo, Unsupported};
 
-use super::{slot, Instance, Registers, ACK, NAK, PRESERVE_FLAGS};
+use super::{is_endpoint_stalled, set_endpoint_stalled, slot, Instance, Registers, ACK, NAK, PRESERVE_FLAGS};
 
 pub struct Endpoint<'d, T: Instance, const IN: bool> {
     info: EndpointInfo,
@@ -39,6 +39,15 @@ impl<T: Instance, const IN: bool> embassy_usb_driver::Endpoint for Endpoint<'_, 
             })
         })
         .await
+    }
+
+    fn set_stall(&mut self, stalled: bool) -> Result<(), Unsupported> {
+        set_endpoint_stalled::<T>(self.info.addr, stalled);
+        Ok(())
+    }
+
+    fn is_stalled(&self) -> Result<bool, Unsupported> {
+        Ok(is_endpoint_stalled::<T>(self.info.addr))
     }
 }
 

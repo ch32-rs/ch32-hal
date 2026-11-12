@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 use core::task::Poll;
 
-use embassy_usb_driver::{EndpointError, EndpointInfo};
+use embassy_usb_driver::{EndpointError, EndpointInfo, Unsupported};
 use futures::future::poll_fn;
 
 use super::regs::{self, EpRxResponse, EpTxResponse, UsbToken};
@@ -51,6 +51,14 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> embassy_usb_driver::Endpoint fo
 
     async fn wait_enabled(&mut self) {
         self.wait_enabled_internal().await
+    }
+
+    fn set_stall(&mut self, _stalled: bool) -> Result<(), Unsupported> {
+        Err(Unsupported)
+    }
+
+    fn is_stalled(&self) -> Result<bool, Unsupported> {
+        Err(Unsupported)
     }
 }
 

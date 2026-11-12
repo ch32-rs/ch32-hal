@@ -1036,6 +1036,7 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
                 ep_type,
                 max_packet_size,
                 interval_ms,
+                max_burst: 0,
             },
             data,
         ))
@@ -1049,6 +1050,63 @@ pub(crate) fn state(addr: EndpointAddress) -> &'static EpState {
     }
 }
 
+/// Sets or clears the STALL handshake of an endpoint, for the bus and the
+/// endpoint alike.
+fn set_endpoint_stalled<T: Instance>(ep_addr: EndpointAddress, stalled: bool) {
+    let index = ep_addr.index();
+    let d = T::dregs();
+    let s = state(ep_addr);
+    let iso = s.iso.load(Ordering::Relaxed);
+    critical_section::with(|_| match (ep_addr.direction(), stalled) {
+        (Direction::Out, true) => d
+            .ep_rx_ctrl(index)
+            .modify(|v| v.set_mask_uep_r_res(EpRxResponse::STALL)),
+        (Direction::In, true) => {
+            d.ep_t_len(index).write(|v| v.set_len(0));
+            d.ep_tx_ctrl(index)
+                .modify(|v| v.set_mask_uep_t_res(EpTxResponse::STALL));
+        }
+        (Direction::Out, false) => {
+            s.tog.store(false, Ordering::Relaxed);
+            d.ep_rx_ctrl(index).write(|v| {
+                // a read still waiting stays armed (or it would NAK forever)
+                v.set_mask_uep_r_res(if iso {
+                    EpRxResponse::NYET
+                } else if s.armed.load(Ordering::Relaxed) {
+                    EpRxResponse::ACK
+                } else {
+                    EpRxResponse::NAK
+                });
+                v.set_mask_uep_r_tog(EpTog::DATA0);
+                v.set_r_tog_auto(index != 0 && !iso);
+            })
+        }
+        (Direction::In, false) => {
+            s.tog.store(false, Ordering::Relaxed);
+            d.ep_tx_ctrl(index).write(|v| {
+                v.set_mask_uep_t_res(if iso { TX_RES_ISO } else { EpTxResponse::NAK });
+                v.set_mask_uep_t_tog(EpTog::DATA0);
+                v.set_t_tog_auto(index != 0 && !iso);
+            })
+        }
+    });
+    if !stalled && ep_addr.direction() == Direction::In && !iso {
+        // a write waiting on the stalled endpoint finishes (its data is dropped)
+        s.armed.store(false, Ordering::Relaxed);
+        s.ready.store(true, Ordering::Release);
+    }
+    s.waker.wake();
+}
+
+fn is_endpoint_stalled<T: Instance>(ep_addr: EndpointAddress) -> bool {
+    let index = ep_addr.index();
+    let d = T::dregs();
+    match ep_addr.direction() {
+        Direction::Out => d.ep_rx_ctrl(index).read().mask_uep_r_res() == EpRxResponse::STALL,
+        Direction::In => d.ep_tx_ctrl(index).read().mask_uep_t_res() == EpTxResponse::STALL,
+    }
+}
+
 impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver::Driver<'d>
     for Driver<'d, T, NR_EP, SIZE>
 {
@@ -1059,22 +1117,28 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
 
     fn alloc_endpoint_out(
         &mut self,
-        ep_type: EndpointType,
-        ep_addr: Option<EndpointAddress>,
-        max_packet_size: u16,
-        interval_ms: u8,
+        config: &embassy_usb_driver::EndpointConfig,
     ) -> Result<Self::EndpointOut, EndpointAllocError> {
-        self.alloc_endpoint(ep_type, ep_addr, max_packet_size, interval_ms, Direction::Out)
+        self.alloc_endpoint(
+            config.ep_type,
+            config.addr,
+            config.max_packet_size,
+            config.interval_ms,
+            Direction::Out,
+        )
     }
 
     fn alloc_endpoint_in(
         &mut self,
-        ep_type: EndpointType,
-        ep_addr: Option<EndpointAddress>,
-        max_packet_size: u16,
-        interval_ms: u8,
+        config: &embassy_usb_driver::EndpointConfig,
     ) -> Result<Self::EndpointIn, EndpointAllocError> {
-        self.alloc_endpoint(ep_type, ep_addr, max_packet_size, interval_ms, Direction::In)
+        self.alloc_endpoint(
+            config.ep_type,
+            config.addr,
+            config.max_packet_size,
+            config.interval_ms,
+            Direction::In,
+        )
     }
 
     fn start(mut self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
@@ -1094,6 +1158,7 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
                 ep_type: EndpointType::Control,
                 max_packet_size: EP_MAX_PACKET_SIZE,
                 interval_ms: 0,
+                max_burst: 0,
             },
             ep0_buf,
         );
@@ -1265,58 +1330,11 @@ impl<'d, T: Instance> embassy_usb_driver::Bus for Bus<'d, T> {
     }
 
     fn endpoint_set_stalled(&mut self, ep_addr: EndpointAddress, stalled: bool) {
-        let index = ep_addr.index();
-        let d = T::dregs();
-        let s = state(ep_addr);
-        let iso = s.iso.load(Ordering::Relaxed);
-        critical_section::with(|_| match (ep_addr.direction(), stalled) {
-            (Direction::Out, true) => d
-                .ep_rx_ctrl(index)
-                .modify(|v| v.set_mask_uep_r_res(EpRxResponse::STALL)),
-            (Direction::In, true) => {
-                d.ep_t_len(index).write(|v| v.set_len(0));
-                d.ep_tx_ctrl(index)
-                    .modify(|v| v.set_mask_uep_t_res(EpTxResponse::STALL));
-            }
-            (Direction::Out, false) => {
-                s.tog.store(false, Ordering::Relaxed);
-                d.ep_rx_ctrl(index).write(|v| {
-                    // a read still waiting stays armed (or it would NAK forever)
-                    v.set_mask_uep_r_res(if iso {
-                        EpRxResponse::NYET
-                    } else if s.armed.load(Ordering::Relaxed) {
-                        EpRxResponse::ACK
-                    } else {
-                        EpRxResponse::NAK
-                    });
-                    v.set_mask_uep_r_tog(EpTog::DATA0);
-                    v.set_r_tog_auto(index != 0 && !iso);
-                })
-            }
-            (Direction::In, false) => {
-                s.tog.store(false, Ordering::Relaxed);
-                d.ep_tx_ctrl(index).write(|v| {
-                    v.set_mask_uep_t_res(if iso { TX_RES_ISO } else { EpTxResponse::NAK });
-                    v.set_mask_uep_t_tog(EpTog::DATA0);
-                    v.set_t_tog_auto(index != 0 && !iso);
-                })
-            }
-        });
-        if !stalled && ep_addr.direction() == Direction::In && !iso {
-            // a write waiting on the stalled endpoint finishes (its data is dropped)
-            s.armed.store(false, Ordering::Relaxed);
-            s.ready.store(true, Ordering::Release);
-        }
-        s.waker.wake();
+        set_endpoint_stalled::<T>(ep_addr, stalled);
     }
 
     fn endpoint_is_stalled(&mut self, ep_addr: EndpointAddress) -> bool {
-        let index = ep_addr.index();
-        let d = T::dregs();
-        match ep_addr.direction() {
-            Direction::Out => d.ep_rx_ctrl(index).read().mask_uep_r_res() == EpRxResponse::STALL,
-            Direction::In => d.ep_tx_ctrl(index).read().mask_uep_t_res() == EpTxResponse::STALL,
-        }
+        is_endpoint_stalled::<T>(ep_addr)
     }
 
     async fn remote_wakeup(&mut self) -> Result<(), Unsupported> {

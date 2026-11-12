@@ -6,7 +6,7 @@ use ch32_hal::{bind_interrupts, peripherals, rcc};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+use embassy_usb::class::cdc_acm::device::{CdcAcmClass, Config as CdcAcmConfig, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::Builder;
 use panic_halt as _;
@@ -99,7 +99,7 @@ async fn main(_spawner: Spawner) {
         &mut msos_descriptor,
         &mut control,
     );
-    let mut class = CdcAcmClass::new(&mut builder, &mut state, 64);
+    let mut class = CdcAcmClass::new(&mut builder, &mut state, CdcAcmConfig::new());
     let mut usb = builder.build();
     report_set!(USBHS_STAGE, 2);
     defmt::info!(

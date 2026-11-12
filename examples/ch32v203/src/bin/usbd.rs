@@ -3,7 +3,7 @@
 
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+use embassy_usb::class::cdc_acm::device::{CdcAcmClass, Config as CdcAcmConfig, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::Builder;
 use hal::time::Hertz;
@@ -62,7 +62,7 @@ async fn main(_spawner: Spawner) {
     );
 
     // Create classes on the builder.
-    let mut class = CdcAcmClass::new(&mut builder, &mut state, 64);
+    let mut class = CdcAcmClass::new(&mut builder, &mut state, CdcAcmConfig::new());
 
     // Build the builder.
     let mut usb = builder.build();

@@ -30,7 +30,7 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_usb::descriptor::{SynchronizationType, UsageType};
 use embassy_usb::driver::{Direction, EndpointAddress, EndpointError, EndpointOut};
-use embassy_usb::Builder;
+use embassy_usb::{Builder, EndpointOptions};
 use panic_halt as _;
 
 bind_interrupts!(struct Irq {
@@ -149,6 +149,7 @@ async fn main(_spawner: Spawner) {
             SynchronizationType::NoSynchronization,
             UsageType::DataEndpoint,
             &[],
+            EndpointOptions::new(),
         );
         let _ep_in = alt.endpoint_isochronous_in(
             Some(EndpointAddress::from_parts(EP_NUM, Direction::In)),
@@ -157,6 +158,7 @@ async fn main(_spawner: Spawner) {
             SynchronizationType::NoSynchronization,
             UsageType::DataEndpoint,
             &[],
+            EndpointOptions::new(),
         );
     }
 

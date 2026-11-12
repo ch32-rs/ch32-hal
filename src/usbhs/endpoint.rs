@@ -4,9 +4,9 @@ use core::sync::atomic::Ordering;
 use core::task::Poll;
 
 use ch32_metapac::usbhs::vals::{EpRxResponse, EpTxResponse};
-use embassy_usb_driver::{Direction, EndpointError, EndpointIn, EndpointInfo, EndpointOut, EndpointType};
+use embassy_usb_driver::{Direction, EndpointError, EndpointIn, EndpointInfo, EndpointOut, EndpointType, Unsupported};
 
-use super::{iso_in_enqueue, state, EpState, Instance};
+use super::{is_endpoint_stalled, iso_in_enqueue, set_endpoint_stalled, state, EpState, Instance};
 use crate::usb::{Dir, EndpointData, In, Out};
 
 pub struct Endpoint<'d, T: Instance, D: Dir, const SIZE: usize> {
@@ -67,6 +67,15 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> embassy_usb_driver::Endpoint fo
 
     async fn wait_enabled(&mut self) {
         self.wait_enabled_internal().await
+    }
+
+    fn set_stall(&mut self, stalled: bool) -> Result<(), Unsupported> {
+        set_endpoint_stalled::<T>(self.info.addr, stalled);
+        Ok(())
+    }
+
+    fn is_stalled(&self) -> Result<bool, Unsupported> {
+        Ok(is_endpoint_stalled::<T>(self.info.addr))
     }
 }
 
