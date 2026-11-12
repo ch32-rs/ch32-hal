@@ -174,8 +174,8 @@ fn reciprocal(divisor: u32) -> u64 {
 fn mul_high(a: u64, b: u64) -> u64 {
     let (a1, a0) = (a >> 32, a & 0xffff_ffff);
     let (b1, b0) = (b >> 32, b & 0xffff_ffff);
-    let middle = (a0 * b0 >> 32) + (a1 * b0 & 0xffff_ffff) + (a0 * b1 & 0xffff_ffff);
-    a1 * b1 + (a1 * b0 >> 32) + (a0 * b1 >> 32) + (middle >> 32)
+    let middle = ((a0 * b0) >> 32) + ((a1 * b0) & 0xffff_ffff) + ((a0 * b1) & 0xffff_ffff);
+    a1 * b1 + ((a1 * b0) >> 32) + ((a0 * b1) >> 32) + (middle >> 32)
 }
 
 pub(crate) fn init(cs: CriticalSection) {
