@@ -18,8 +18,8 @@ embassy-executor = { version = "0.10.0", features = [
 ] }
 embassy-time = "0.5.1"
 embassy-futures = "0.1.2"
-embassy-usb = "0.6.0"
-embassy-usb-driver = "=0.2.2"
+embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "e867f1210417a95be666d965a3567b3b2bed3bb9", default-features = false, features = ["device", "class-cdc-acm"] }
+embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy", rev = "e867f1210417a95be666d965a3567b3b2bed3bb9" }
 
 qingke-rt = "0.8"
 qingke = "0.8"

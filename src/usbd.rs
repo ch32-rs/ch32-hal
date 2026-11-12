@@ -388,6 +388,7 @@ impl<'d, T: Instance> Driver<'d, T> {
                 ep_type,
                 max_packet_size,
                 interval_ms,
+                max_burst: 0,
             },
             buf,
         })
@@ -402,22 +403,16 @@ impl<'d, T: Instance> driver::Driver<'d> for Driver<'d, T> {
 
     fn alloc_endpoint_in(
         &mut self,
-        ep_type: EndpointType,
-        ep_addr: Option<EndpointAddress>,
-        max_packet_size: u16,
-        interval_ms: u8,
+        config: &driver::EndpointConfig,
     ) -> Result<Self::EndpointIn, driver::EndpointAllocError> {
-        self.alloc_endpoint(ep_type, ep_addr, max_packet_size, interval_ms)
+        self.alloc_endpoint(config.ep_type, config.addr, config.max_packet_size, config.interval_ms)
     }
 
     fn alloc_endpoint_out(
         &mut self,
-        ep_type: EndpointType,
-        ep_addr: Option<EndpointAddress>,
-        max_packet_size: u16,
-        interval_ms: u8,
+        config: &driver::EndpointConfig,
     ) -> Result<Self::EndpointOut, driver::EndpointAllocError> {
-        self.alloc_endpoint(ep_type, ep_addr, max_packet_size, interval_ms)
+        self.alloc_endpoint(config.ep_type, config.addr, config.max_packet_size, config.interval_ms)
     }
 
     fn start(mut self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
@@ -534,57 +529,11 @@ impl<'d, T: Instance> driver::Bus for Bus<'d, T> {
     }
 
     fn endpoint_set_stalled(&mut self, ep_addr: EndpointAddress, stalled: bool) {
-        // This can race, so do a retry loop.
-        let reg = T::regs().epr(ep_addr.index() as _);
-        match ep_addr.direction() {
-            Direction::In => {
-                loop {
-                    let r = reg.read();
-                    match r.stat_tx() {
-                        Stat::DISABLED => break, // if disabled, stall does nothing.
-                        Stat::STALL => break,    // done!
-                        _ => {
-                            let want_stat = match stalled {
-                                false => Stat::NAK,
-                                true => Stat::STALL,
-                            };
-                            let mut w = invariant(r);
-                            w.set_stat_tx(Stat::from_bits(r.stat_tx().to_bits() ^ want_stat.to_bits()));
-                            reg.write_value(w);
-                        }
-                    }
-                }
-                EP_IN_WAKERS[ep_addr.index()].wake();
-            }
-            Direction::Out => {
-                loop {
-                    let r = reg.read();
-                    match r.stat_rx() {
-                        Stat::DISABLED => break, // if disabled, stall does nothing.
-                        Stat::STALL => break,    // done!
-                        _ => {
-                            let want_stat = match stalled {
-                                false => Stat::VALID,
-                                true => Stat::STALL,
-                            };
-                            let mut w = invariant(r);
-                            w.set_stat_rx(Stat::from_bits(r.stat_rx().to_bits() ^ want_stat.to_bits()));
-                            reg.write_value(w);
-                        }
-                    }
-                }
-                EP_OUT_WAKERS[ep_addr.index()].wake();
-            }
-        }
+        set_endpoint_stalled::<T>(ep_addr, stalled);
     }
 
     fn endpoint_is_stalled(&mut self, ep_addr: EndpointAddress) -> bool {
-        let regs = T::regs();
-        let epr = regs.epr(ep_addr.index() as _).read();
-        match ep_addr.direction() {
-            Direction::In => epr.stat_tx() == Stat::STALL,
-            Direction::Out => epr.stat_rx() == Stat::STALL,
-        }
+        is_endpoint_stalled::<T>(ep_addr)
     }
 
     fn endpoint_set_enabled(&mut self, ep_addr: EndpointAddress, enabled: bool) {
@@ -631,6 +580,62 @@ impl<'d, T: Instance> driver::Bus for Bus<'d, T> {
 
     async fn remote_wakeup(&mut self) -> Result<(), Unsupported> {
         Err(Unsupported)
+    }
+}
+
+/// Sets or clears the STALL handshake of an endpoint, for the bus and the
+/// endpoint alike.
+fn set_endpoint_stalled<T: Instance>(ep_addr: EndpointAddress, stalled: bool) {
+    // This can race, so do a retry loop.
+    let reg = T::regs().epr(ep_addr.index() as _);
+    match ep_addr.direction() {
+        Direction::In => {
+            loop {
+                let r = reg.read();
+                match r.stat_tx() {
+                    Stat::DISABLED => break, // if disabled, stall does nothing.
+                    Stat::STALL => break,    // done!
+                    _ => {
+                        let want_stat = match stalled {
+                            false => Stat::NAK,
+                            true => Stat::STALL,
+                        };
+                        let mut w = invariant(r);
+                        w.set_stat_tx(Stat::from_bits(r.stat_tx().to_bits() ^ want_stat.to_bits()));
+                        reg.write_value(w);
+                    }
+                }
+            }
+            EP_IN_WAKERS[ep_addr.index()].wake();
+        }
+        Direction::Out => {
+            loop {
+                let r = reg.read();
+                match r.stat_rx() {
+                    Stat::DISABLED => break, // if disabled, stall does nothing.
+                    Stat::STALL => break,    // done!
+                    _ => {
+                        let want_stat = match stalled {
+                            false => Stat::VALID,
+                            true => Stat::STALL,
+                        };
+                        let mut w = invariant(r);
+                        w.set_stat_rx(Stat::from_bits(r.stat_rx().to_bits() ^ want_stat.to_bits()));
+                        reg.write_value(w);
+                    }
+                }
+            }
+            EP_OUT_WAKERS[ep_addr.index()].wake();
+        }
+    }
+}
+
+fn is_endpoint_stalled<T: Instance>(ep_addr: EndpointAddress) -> bool {
+    let regs = T::regs();
+    let epr = regs.epr(ep_addr.index() as _).read();
+    match ep_addr.direction() {
+        Direction::In => epr.stat_tx() == Stat::STALL,
+        Direction::Out => epr.stat_rx() == Stat::STALL,
     }
 }
 
@@ -697,6 +702,15 @@ impl<'d, T: Instance> driver::Endpoint for Endpoint<'d, T, In> {
         })
         .await;
     }
+
+    fn set_stall(&mut self, stalled: bool) -> Result<(), Unsupported> {
+        set_endpoint_stalled::<T>(self.info.addr, stalled);
+        Ok(())
+    }
+
+    fn is_stalled(&self) -> Result<bool, Unsupported> {
+        Ok(is_endpoint_stalled::<T>(self.info.addr))
+    }
 }
 
 impl<'d, T: Instance> driver::Endpoint for Endpoint<'d, T, Out> {
@@ -716,6 +730,15 @@ impl<'d, T: Instance> driver::Endpoint for Endpoint<'d, T, Out> {
             }
         })
         .await;
+    }
+
+    fn set_stall(&mut self, stalled: bool) -> Result<(), Unsupported> {
+        set_endpoint_stalled::<T>(self.info.addr, stalled);
+        Ok(())
+    }
+
+    fn is_stalled(&self) -> Result<bool, Unsupported> {
+        Ok(is_endpoint_stalled::<T>(self.info.addr))
     }
 }
 

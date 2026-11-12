@@ -18,7 +18,7 @@ nb = "1.1.0"
 embedded-storage = { version = "0.3.2", optional = true }
 embassy-executor = { version = "0.10.0", optional = true, features = ["platform-riscv32", "executor-thread"] }
 embassy-time = { version = "0.5.1", optional = true }
-embassy-usb = { version = "0.6.0", optional = true, default-features = false }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "e867f1210417a95be666d965a3567b3b2bed3bb9", optional = true, default-features = false, features = ["device", "class-cdc-acm"] }
 embassy-net-driver = { version = "0.2.0", optional = true }
 embassy-net = { version = "0.9.1", optional = true, default-features = false, features = ["tcp", "medium-ethernet", "proto-ipv4", "defmt"] }
 critical-section = { version = "1.2.0", optional = true }

@@ -8,8 +8,8 @@ use ch32_hal::usb::EndpointDataBuffer512;
 use ch32_hal::usbhs::{Driver};
 use ch32_hal::{self as hal, bind_interrupts, peripherals, Config};
 use ch32_hal::usbhs::{InterruptHandler, WakeupInterruptHandler, Instance};
-use embassy_usb::Builder;
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+use embassy_usb::{Builder, UsbDeviceSpeed};
+use embassy_usb::class::cdc_acm::device::{CdcAcmClass, Config as CdcAcmConfig, State};
 use embassy_usb::driver::EndpointError;
 
 bind_interrupts!(struct Irq {
@@ -35,6 +35,7 @@ async fn main(_spawner: Spawner) {
     config.manufacturer = Some("Embassy");
     config.product = Some("USB-serial example");
     config.serial_number = Some("12345678");
+    config.max_speed = UsbDeviceSpeed::High;
 
     // Create embassy-usb DeviceBuilder using the driver and config.
     // It needs some buffers for building the descriptors.
@@ -55,7 +56,7 @@ async fn main(_spawner: Spawner) {
     );
 
     // Create classes on the builder.
-    let mut class = CdcAcmClass::new(&mut builder, &mut state, 512);
+    let mut class = CdcAcmClass::new(&mut builder, &mut state, CdcAcmConfig::new());
 
     // Build the builder.
     let mut usb = builder.build();

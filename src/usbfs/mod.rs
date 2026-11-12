@@ -239,6 +239,7 @@ where
                 ep_type,
                 max_packet_size,
                 interval_ms,
+                max_burst: 0,
             },
             data,
         ))
@@ -255,22 +256,28 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
 
     fn alloc_endpoint_out(
         &mut self,
-        ep_type: embassy_usb_driver::EndpointType,
-        ep_addr: Option<EndpointAddress>,
-        max_packet_size: u16,
-        interval_ms: u8,
+        config: &embassy_usb_driver::EndpointConfig,
     ) -> Result<Self::EndpointOut, embassy_usb_driver::EndpointAllocError> {
-        self.alloc_endpoint(ep_type, ep_addr, max_packet_size, interval_ms, Direction::Out)
+        self.alloc_endpoint(
+            config.ep_type,
+            config.addr,
+            config.max_packet_size,
+            config.interval_ms,
+            Direction::Out,
+        )
     }
 
     fn alloc_endpoint_in(
         &mut self,
-        ep_type: embassy_usb_driver::EndpointType,
-        ep_addr: Option<EndpointAddress>,
-        max_packet_size: u16,
-        interval_ms: u8,
+        config: &embassy_usb_driver::EndpointConfig,
     ) -> Result<Self::EndpointIn, embassy_usb_driver::EndpointAllocError> {
-        self.alloc_endpoint(ep_type, ep_addr, max_packet_size, interval_ms, Direction::In)
+        self.alloc_endpoint(
+            config.ep_type,
+            config.addr,
+            config.max_packet_size,
+            config.interval_ms,
+            Direction::In,
+        )
     }
 
     fn start(mut self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
