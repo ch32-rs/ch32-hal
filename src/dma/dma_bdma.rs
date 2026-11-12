@@ -1087,8 +1087,9 @@ fn tcif(r: pac::dma::Dma, num: usize) -> bool {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct RingPosition {
     /// completed passes since the transfer was configured (wraps). the DMA interrupt counts
-    /// them: one held off (masked, or behind a handler at its level) for more than a pass
-    /// misses one
+    /// them off TCIF, a single sticky flag: an interrupt held off (masked, or behind a
+    /// handler at its level) for more than a pass counts the passes it missed as one, and
+    /// `laps` stays short by the rest from then on (`index` stays right)
     pub laps: u32,
     /// next element, `0..len`
     pub index: usize,
@@ -1096,15 +1097,17 @@ pub struct RingPosition {
 
 #[cfg(not(dma_v4x7))]
 /// Reads a circular transfer's [`RingPosition`] from anywhere, e.g. another interrupt
-/// handler, without owning the transfer.
+/// handler, without owning the transfer. It borrows the channel for as long as the transfer
+/// did, so no other driver can take the channel while a reader exists.
 #[derive(Copy, Clone)]
-pub struct RingPositionReader {
+pub struct RingPositionReader<'a> {
     id: u8,
     len: u16,
+    _channel: core::marker::PhantomData<&'a ()>,
 }
 
 #[cfg(not(dma_v4x7))]
-impl RingPositionReader {
+impl<'a> RingPositionReader<'a> {
     /// The transfer's current position. Consistent even when called from an interrupt
     /// that preempts the DMA interrupt, or while the DMA wraps around.
     pub fn read(&self) -> RingPosition {
@@ -1261,10 +1264,11 @@ impl<'a> CircularTransfer<'a> {
     }
 
     /// A handle for reading the position elsewhere.
-    pub fn reader(&self) -> RingPositionReader {
+    pub fn reader(&self) -> RingPositionReader<'a> {
         RingPositionReader {
             id: self.channel.id,
             len: self.len,
+            _channel: core::marker::PhantomData,
         }
     }
 

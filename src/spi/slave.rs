@@ -53,7 +53,9 @@ pub enum SlaveError {
     /// NSS stayed low: no pause between bursts to start in.
     NoPause,
     /// The RX position went backwards: the DMA interrupt was held off for more than a pass
-    /// and missed counting it, so the half index can't be trusted. Run the DMA interrupt
+    /// and counted the passes it missed as one, and [`SpiSlaveRing::next_half`] was polled
+    /// in between (by a wake-up from elsewhere, e.g. inside a `select`). Without such a poll
+    /// the same hold-off shows up only as a short [`Half::missed`]. Run the DMA interrupt
     /// above code that can take that long.
     LostLap,
 }
@@ -65,7 +67,9 @@ pub struct Half {
     /// 0 or 1: read [`SpiSlaveRing::rx_half`], refill [`SpiSlaveRing::tx_half_mut`]
     pub index: usize,
     /// halves completed since the last [`SpiSlaveRing::next_half`] that weren't returned (the
-    /// owner was late; their RX data is lost and their TX half went out again unchanged)
+    /// owner was late; their RX data is lost and their TX half went out again unchanged).
+    /// A lower bound: whole passes during which the DMA interrupt was held off aren't
+    /// counted (see [`SlaveError::LostLap`]); `index` is right either way.
     pub missed: u32,
 }
 
@@ -86,7 +90,10 @@ pub struct SpiSlaveRing<'d, T: Instance, W: Word> {
     tx_request: Request,
     rx_buf: *mut [W],
     tx_buf: *mut [W],
+    /// set by `set_half_len`, used from the next `start`
     half_len: usize,
+    /// what the DMA runs with
+    active_half_len: usize,
     delivered: u32,
     config: SlaveConfig,
     _phantom: PhantomData<&'d mut [W]>,
@@ -121,6 +128,9 @@ impl<'d, T: Instance, W: Word> SpiSlaveRing<'d, T, W> {
         set_as_af!(nss, AfType::input(Pull::Up));
         set_as_af!(miso, AfType::output(OutputType::PushPull, Speed::High));
 
+        // clocked from here on, so that `stop` (in drop) never writes an unclocked peripheral
+        T::enable_and_reset();
+
         let half_len = rx_buf.len() / 2;
         Self {
             _peri: peri,
@@ -135,22 +145,23 @@ impl<'d, T: Instance, W: Word> SpiSlaveRing<'d, T, W> {
             rx_buf,
             tx_buf,
             half_len,
+            active_half_len: half_len,
             delivered: 0,
             config,
             _phantom: PhantomData,
         }
     }
 
-    /// Words per half; takes effect at the next [`start`](Self::start) /
-    /// [`restart`](Self::restart).
+    /// Words per half. Safe to call while running: the halves keep their current length
+    /// until the next [`start`](Self::start) / [`restart`](Self::restart).
     pub fn set_half_len(&mut self, words: usize) {
         assert!(words > 0 && 2 * words <= self.rx_buf.len());
         self.half_len = words;
     }
 
-    /// Words per half in use.
+    /// Words per half in use (since the last [`start`](Self::start)).
     pub fn half_len(&self) -> usize {
-        self.half_len
+        self.active_half_len
     }
 
     /// Set up SPI and both DMA channels and enable the slave in a pause between bursts
@@ -168,7 +179,8 @@ impl<'d, T: Instance, W: Word> SpiSlaveRing<'d, T, W> {
             w.set_spe(false);
         });
 
-        let n = 2 * self.half_len;
+        self.active_half_len = self.half_len;
+        let n = 2 * self.active_half_len;
         let dr = regs.datar().as_ptr() as *mut W;
         // SAFETY: the buffers are ours for 'd; the DMA is stopped before they're reconfigured
         unsafe {
@@ -213,6 +225,8 @@ impl<'d, T: Instance, W: Word> SpiSlaveRing<'d, T, W> {
     pub async fn next_half(&mut self) -> Result<Half, SlaveError> {
         poll_fn(|cx| {
             self.rx.register_waker(cx.waker());
+            // the TX channel has no half / complete interrupts: this wakes only on its errors
+            self.tx.register_waker(cx.waker());
             if let Some(e) = self.error() {
                 return Poll::Ready(Err(e));
             }
@@ -220,7 +234,7 @@ impl<'d, T: Instance, W: Word> SpiSlaveRing<'d, T, W> {
             let done = pos
                 .laps
                 .wrapping_mul(2)
-                .wrapping_add((pos.index / self.half_len) as u32);
+                .wrapping_add((pos.index / self.active_half_len) as u32);
             let new = done.wrapping_sub(self.delivered);
             if new == 0 {
                 return Poll::Pending;
@@ -241,6 +255,8 @@ impl<'d, T: Instance, W: Word> SpiSlaveRing<'d, T, W> {
         if self.rx.take_error() | self.tx.take_error() {
             return Some(SlaveError::Dma);
         }
+        // with the DMA reading DATAR, this STATR read completes OVR's clear sequence, so an
+        // overrun is reported once; `restart` resets the peripheral either way
         if T::REGS.statr().read().ovr() {
             return Some(SlaveError::Overrun);
         }
@@ -252,14 +268,24 @@ impl<'d, T: Instance, W: Word> SpiSlaveRing<'d, T, W> {
     pub fn rx_half(&self, index: usize) -> &[W] {
         assert!(index < 2);
         // SAFETY: inside the buffer; the DMA is writing the other half
-        unsafe { core::slice::from_raw_parts((self.rx_buf as *const W).add(index * self.half_len), self.half_len) }
+        unsafe {
+            core::slice::from_raw_parts(
+                (self.rx_buf as *const W).add(index * self.active_half_len),
+                self.active_half_len,
+            )
+        }
     }
 
     /// TX half `index`, free to refill after [`next_half`](Self::next_half) returned it.
     pub fn tx_half_mut(&mut self, index: usize) -> &mut [W] {
         assert!(index < 2);
         // SAFETY: inside the buffer; the DMA is reading the other half
-        unsafe { core::slice::from_raw_parts_mut((self.tx_buf as *mut W).add(index * self.half_len), self.half_len) }
+        unsafe {
+            core::slice::from_raw_parts_mut(
+                (self.tx_buf as *mut W).add(index * self.active_half_len),
+                self.active_half_len,
+            )
+        }
     }
 
     /// [`rx_half`](Self::rx_half) and [`tx_half_mut`](Self::tx_half_mut) of the same half,
@@ -269,16 +295,23 @@ impl<'d, T: Instance, W: Word> SpiSlaveRing<'d, T, W> {
         // SAFETY: as in `rx_half` and `tx_half_mut`; RX and TX are separate buffers
         unsafe {
             (
-                core::slice::from_raw_parts((self.rx_buf as *const W).add(index * self.half_len), self.half_len),
-                core::slice::from_raw_parts_mut((self.tx_buf as *mut W).add(index * self.half_len), self.half_len),
+                core::slice::from_raw_parts(
+                    (self.rx_buf as *const W).add(index * self.active_half_len),
+                    self.active_half_len,
+                ),
+                core::slice::from_raw_parts_mut(
+                    (self.tx_buf as *mut W).add(index * self.active_half_len),
+                    self.active_half_len,
+                ),
             )
         }
     }
 
     /// Reads the RX position from anywhere (e.g. a USB SOF interrupt measuring the
-    /// master's clock). Valid until the next [`start`](Self::start) / [`restart`](Self::restart),
-    /// which reset it.
-    pub fn rx_position(&self) -> RingPositionReader {
+    /// master's clock). It borrows the RX channel for `'d`, so it can't outlive it, but
+    /// it reads the transfer set up by the last [`start`](Self::start) /
+    /// [`restart`](Self::restart): take a new one after each.
+    pub fn rx_position(&self) -> RingPositionReader<'d> {
         self.rx.reader()
     }
 
@@ -287,15 +320,29 @@ impl<'d, T: Instance, W: Word> SpiSlaveRing<'d, T, W> {
     }
 
     /// Set SPE right after NSS rises, so the slave starts at the next burst's first bit.
-    /// A bus that stays idle (NSS high) counts as a pause.
+    /// A bus that stays idle (NSS high) for `NSS_SPIN` counts as a pause.
+    ///
+    /// NSS merely reading high isn't enough: SPE set a few cycles after a read that came at
+    /// the very end of a pause lands inside the burst, and the stream starts mis-aligned.
+    /// Right after the rising edge the whole pause is margin. On an idle bus this costs
+    /// `NSS_SPIN` polls (a few ms) before enabling.
     fn enable_in_pause(&mut self) -> Result<(), SlaveError> {
         let regs = T::REGS;
         let mut n = 0;
         while self.nss_high() {
             n += 1;
             if n == NSS_SPIN {
-                regs.ctlr1().modify(|w| w.set_spe(true));
-                return Ok(());
+                let idle = critical_section::with(|_| {
+                    let high = self.nss_high();
+                    if high {
+                        regs.ctlr1().modify(|w| w.set_spe(true));
+                    }
+                    high
+                });
+                if idle {
+                    return Ok(());
+                }
+                break;
             }
         }
         // in a burst: catch its end with nothing in between (a burst is a few us)

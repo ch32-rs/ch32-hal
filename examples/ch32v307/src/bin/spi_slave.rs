@@ -127,7 +127,8 @@ async fn main(spawner: Spawner) -> ! {
     let mut tx_count = 0u16;
     fill(ring.tx_half_mut(0), &mut tx_count);
     fill(ring.tx_half_mut(1), &mut tx_count);
-    // NSS is high until the master runs, so this enables the slave at once
+    // NSS is high until the master runs: an idle bus, so this enables the slave after a
+    // few ms of watching NSS
     ring.start().unwrap();
     spawner.spawn(slave(ring, tx_count).unwrap());
 
