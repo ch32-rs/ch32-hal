@@ -78,6 +78,12 @@ SECTIONS
         KEEP(*(.vector_table.external_interrupts));
         KEEP(*(.vector_table.exceptions));
         *(.trap .trap.rust)
+        /* Hart 1's wake entry: `PFIC_WAKEIP[1]` only stores bits above the low
+           10, so the entry has to sit on a 1 KiB boundary. Keeping it inside
+           `.highcode` means it is copied to the zero-wait shared block with
+           the rest of the program and executes at full speed. */
+        . = ALIGN(1024);
+        KEEP(*(.hart1_entry))
         *(.highcode);
         *(.highcode.*);
         *(.text .text.*)

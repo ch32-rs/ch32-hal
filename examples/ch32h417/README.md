@@ -5,18 +5,24 @@ per chip rather than per core:
 
 ```
 ch32h417/
-├── v3f/     control core, hart 0 — riscv32imafc, flash 0x00000000…0x0000FFFF
-├── v5f/     second core,  hart 1 — riscv32imafbc, flash 0x00010000…
-├── ipc/     the shared mailbox, consumed by both crates
-├── xtask/   build / flash / run / merge / report driver
-└── out/     merged images (generated)
+├── v3f/          control core, hart 0 — riscv32imafc, flash 0x00000000…0x0000FFFF
+├── v5f/          second core,  hart 1 — riscv32imafbc, flash 0x00010000…
+├── homogeneous/  one image on both harts — riscv32imafc, flash 0x00000000…960K
+├── ipc/          the shared mailbox, consumed by both crates
+├── xtask/        build / flash / run / merge / report driver
+└── out/          merged images (generated)
 ```
 
 `v3f/` and `v5f/` are separate crates: different ISA (`imafc` vs `imafbc`),
 different ABI, different `memory.x`. They share one flash chip and one mailbox
 in shared RAM, which `xtask` handles.
 
-## Two kinds of example
+`homogeneous/` is the **single-image** model: one program, booted by the V3F,
+with hart 1 started from the same image by `ch32_hal::multicore` (the
+`embassy-rp` style `spawn_core1`). There is no V5F image, so it owns the whole
+960 KiB of flash and both harts share one `.data`/`.bss`.
+
+## Three kinds of example
 
 Reset only starts the **V3F**. The V5F stays put until the V3F writes its wake
 register (`PFIC_WAKEIP1`), so examples come in exactly two shapes, which
@@ -27,6 +33,12 @@ register (`PFIC_WAKEIP1`), so examples come in exactly two shapes, which
 |---|---|---|
 | **v3f-only** | `v3f/src/bin/NAME.rs` | `adc_check`, `blinky`, `bme280_blocking`, `bus_check`, `can_async_check`, `can_check`, `dac_check`, `delay_systick`, `dma2_check`, `dma_m2m`, `embassy_systick`, `esig_check`, `exti_check`, `flash_check`, `i2c_scan`, `launcher`, `rcc_delay_check`, `rng_check`, `rtc_check`, `rtc_hse_check`, `sdi_print`, `sdio_check`, `sdio_exfat`, `sdio_fat`, `spi_check`, `timer_check` |
 | **dual-core** | both `src/bin/NAME.rs` | `atomics`, `bme280`, `cpuid`, `dualcore`, `hello`, `pingpong`, `sdi_cpuid` |
+| **single-image** | `homogeneous/src/bin/NAME.rs` | `homogeneous`, `multicore`, `multicore_embassy` |
+
+In a single-image example `xtask` finds the source under `homogeneous/` and
+writes it to the boot slot; there is no second image and no `--dual-core`.
+The two harts share one `Peripherals` singleton, so peripherals are handed to
+hart 1 by moving them into the `spawn_core1` closure.
 
 In a dual-core example the V3F half brings the chip up (clocks, GPIO),
 hands over to hart 1, and reports. The V5F half depends on `ch32-hal` but never
@@ -59,9 +71,9 @@ cargo xtask merge  --example dualcore --dual-core  # out/dualcore.bin + .hex
 cargo xtask report --example dualcore              # decode that example's mailbox
 ```
 
-| Layout | Boot core (`v3f`) | Second core (`v5f`) |
+| Layout | Boot core (`v3f` / `homogeneous`) | Second core (`v5f`) |
 |---|---|---|
-| *(default)* | the named example's half | left exactly as it is |
+| *(default)* | the named example's half, or the whole single image | left exactly as it is |
 | `--dual-core` | the named example's half | the named example's half |
 | `--jump-v5f` | the generic jumper, `launcher` | the named example's half |
 

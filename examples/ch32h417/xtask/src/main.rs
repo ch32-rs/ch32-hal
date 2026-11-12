@@ -93,7 +93,11 @@ struct Core {
 
 /// In flash order: the V3F image is written first with `--no-run`, then the V5F
 /// image resets and runs the chip, by which time both images are in place.
-const CORES: [Core; 2] = [
+///
+/// `homogeneous` is the third crate: a single image that boots on the V3F and
+/// starts hart 1 from itself. It occupies the boot slot but has the whole chip's
+/// flash to itself (no V5F image to leave alone), hence its own limit.
+const CORES: [Core; 3] = [
     Core {
         name: "v3f",
         target: "riscv32imafc-unknown-none-elf",
@@ -105,6 +109,12 @@ const CORES: [Core; 2] = [
         target: "riscv32imafbc-unknown-none-elf",
         flash_base: 0x0001_0000,
         flash_limit: 960 * 1024 - 64 * 1024,
+    },
+    Core {
+        name: SINGLE_CORE,
+        target: "riscv32imafc-unknown-none-elf",
+        flash_base: 0x0000_0000,
+        flash_limit: 960 * 1024,
     },
 ];
 
@@ -212,6 +222,8 @@ impl Options {
         let boot = core_named(BOOT_CORE);
         let second = core_named(SECOND_CORE);
 
+        let single = core_named(SINGLE_CORE);
+
         match (self.example.as_deref(), self.layout) {
             (None, Layout::JumpV5f) => vec![job(boot, JUMP_FIRMWARE)],
             (None, _) => CORES
@@ -221,12 +233,24 @@ impl Options {
                     example: String::new(),
                 })
                 .collect(),
-            // The boot core alone; the V5F region keeps whatever it holds.
+            // The image reset starts. A single-image example lives in
+            // `homogeneous/` and owns the whole flash; otherwise this is the
+            // boot core of the two-image model, leaving the V5F region alone.
             (Some(example), Layout::V3fOnly) => {
-                require_source(boot, example);
-                vec![job(boot, example)]
+                if example_source(single, example).exists() {
+                    vec![job(single, example)]
+                } else {
+                    require_source(boot, example);
+                    vec![job(boot, example)]
+                }
             }
             (Some(example), Layout::DualCore) => {
+                if example_source(single, example).exists() {
+                    fail(&format!(
+                        "`{example}` is a single-image example (homogeneous/); \
+                         flash it without --dual-core"
+                    ));
+                }
                 require_source(boot, example);
                 require_source(second, example);
                 vec![job(boot, example), job(second, example)]
@@ -267,6 +291,9 @@ const SECOND_CORE: &str = "v5f";
 
 /// The V3F-only firmware whose whole job is to hand over to hart 1.
 const JUMP_FIRMWARE: &str = "launcher";
+
+/// The single-image crate: one program that runs on both harts.
+const SINGLE_CORE: &str = "homogeneous";
 
 /// The core with this directory name.
 fn core_named(name: &str) -> &'static Core {
@@ -442,7 +469,8 @@ fn build_core(job: &Job) {
     // Embassy plus the Ethernet stack, and the `usb*_cdc` examples need Embassy
     // plus the USB device stack.
     let feature = match job.example.as_str() {
-        "embassy_systick" | "can_async_check" | "usbss_link_check" | "usbss_host_link_check" => Some("embassy"),
+        "embassy_systick" | "can_async_check" | "usbss_link_check" | "usbss_host_link_check"
+        | "multicore_embassy" => Some("embassy"),
         "eth_internal" | "eth_bench" => Some("eth"),
         "usbhs_cdc" | "usbfs_cdc" => Some("usb"),
         _ => None,
