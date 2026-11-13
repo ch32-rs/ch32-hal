@@ -21,6 +21,11 @@ pub trait Phy {
     fn full_duplex(&mut self, _smi: &mut Smi) -> Result<bool, SmiError> {
         Ok(true)
     }
+    /// Speed of the established link (called on each link-up).
+    /// Returns true for 100 Mbit/s. The default keeps the MAC at 100 Mbit/s.
+    fn speed_100m(&mut self, _smi: &mut Smi) -> Result<bool, SmiError> {
+        Ok(true)
+    }
     /// Switch to the next receive-pair polarity and restart auto-negotiation.
     ///
     /// Called while the link is down, so a polarity that does not link is
@@ -135,6 +140,11 @@ impl Phy for InternalPhy {
         }
         let anlpar = smi.read(Self::PHY_ADDR, phy_regs::ANLPAR)?;
         Ok(anlpar & phy_regs::ANLPAR_SELECTOR != phy_regs::ANLPAR_SELECTOR_IEEE802_3)
+    }
+
+    fn speed_100m(&mut self, _smi: &mut Smi) -> Result<bool, SmiError> {
+        // The built-in PHY is 10BASE-T only.
+        Ok(false)
     }
 
     fn next_polarity(&mut self, smi: &mut Smi) -> Result<bool, SmiError> {
