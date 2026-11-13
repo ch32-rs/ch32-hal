@@ -3,7 +3,7 @@
 
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+use embassy_usb::class::cdc_acm::device::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::Builder;
 use hal::time::Hertz;
@@ -13,6 +13,7 @@ use {ch32_hal as hal, panic_halt as _};
 
 bind_interrupts!(struct Irqs {
     USB_LP_CAN1_RX0 => hal::usbd::InterruptHandler<hal::peripherals::USBD>;
+    USB_HP_CAN1_TX => hal::usbd::HpInterruptHandler<hal::peripherals::USBD>;
 });
 
 // If you are trying this and your USB device doesn't connect, the most

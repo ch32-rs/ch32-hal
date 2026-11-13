@@ -57,7 +57,7 @@ exfat-embedded = { version = "0.1.3", default-features = false }
 
 # `usbhs_cdc` / `usbfs_cdc`: the USB device stack over the HAL's USBHS and
 # USBFS drivers.
-embassy-usb = { version = "0.6.0", optional = true, default-features = false }
+embassy-usb = { version = "0.6.0", optional = true, default-features = false, features = ["device", "class-cdc-acm"] }
 
 [features]
 # Pulls in the H4 SysTick time driver. Other bins keep the blocking delay, which
@@ -129,3 +129,19 @@ strip = false
 # first, so re-check the load image after adding to it.
 lto = true
 opt-level = 3
+
+# Unreleased embassy main, for the double-buffered bulk endpoints in
+# embassy-usb-driver. embassy-sync and the network crates stay on crates.io:
+# main replaced embassy-net-driver with xarxa, and the released
+# embassy-net-driver-channel doesn't build against main's embassy-sync.
+[patch.crates-io]
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-executor-macros = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-executor-timer-queue = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }
+embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy", rev = "b2c49cceb6a3c600494347ebd5c0cdb6a163f04a" }

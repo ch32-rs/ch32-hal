@@ -4,7 +4,7 @@
 use ch32_hal as hal;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+use embassy_usb::class::cdc_acm::device::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::Builder;
 use hal::usb::EndpointDataBuffer512;

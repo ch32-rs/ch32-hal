@@ -9,7 +9,7 @@ use ch32_hal::usbhs::{Driver};
 use ch32_hal::{self as hal, bind_interrupts, peripherals, Config};
 use ch32_hal::usbhs::{InterruptHandler, WakeupInterruptHandler, Instance};
 use embassy_usb::Builder;
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+use embassy_usb::class::cdc_acm::device::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 
 bind_interrupts!(struct Irq {

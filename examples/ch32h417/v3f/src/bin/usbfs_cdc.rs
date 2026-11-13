@@ -27,7 +27,7 @@ use ch32_hal::{bind_interrupts, pac, peripherals, rcc};
 use defmt::info;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+use embassy_usb::class::cdc_acm::device::{CdcAcmClass, State};
 use embassy_usb::Builder;
 use panic_halt as _;
 

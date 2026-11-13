@@ -5,15 +5,17 @@ use embassy_usb_driver::{EndpointError, EndpointInfo};
 use futures::future::poll_fn;
 
 use super::regs::{self, EpRxResponse, EpTxResponse, UsbToken};
-use super::{Instance, EP_MAX_PACKET_SIZE, EP_WAKERS};
+use super::{DoubleState, Instance, DOUBLE_BUFFERED, EP_MAX_PACKET_SIZE, EP_WAKERS};
 use crate::interrupt::typelevel::Interrupt;
-use crate::usb::{Dir, EndpointData, In, Out};
+use crate::usb::{Dir, EndpointData, EndpointDataBuffer, In, Out};
 
 /// USB endpoint.
 pub struct Endpoint<'d, T, D, const SIZE: usize> {
     _phantom: PhantomData<&'d (T, D)>,
     info: EndpointInfo,
     data: EndpointData<'d, SIZE>,
+    /// The second buffer of a double-buffered bulk endpoint.
+    double_buffer: Option<EndpointData<'d, SIZE>>,
 }
 
 impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
@@ -23,6 +25,21 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> Endpoint<'d, T, D, SIZE> {
             _phantom: PhantomData,
             info,
             data,
+            double_buffer: None,
+        }
+    }
+
+    /// Makes this a double-buffered endpoint. Returns the DMA addresses of both buffers.
+    pub(crate) fn set_double_buffer(&mut self, second: EndpointData<'d, SIZE>) -> [u32; 2] {
+        let addr = [self.data.addr() as u32, second.addr() as u32];
+        self.double_buffer = Some(second);
+        addr
+    }
+
+    fn buffer(&mut self, index: usize) -> &mut EndpointDataBuffer<SIZE> {
+        match (index, &mut self.double_buffer) {
+            (1, Some(second)) => second.buffer,
+            _ => self.data.buffer,
         }
     }
 
@@ -54,12 +71,80 @@ impl<'d, T: Instance, D: Dir, const SIZE: usize> embassy_usb_driver::Endpoint fo
     }
 }
 
+impl<'d, T: Instance, const SIZE: usize> Endpoint<'d, T, In, SIZE> {
+    async fn write_double_buffered(&mut self, buf: &[u8]) -> Result<(), EndpointError> {
+        let ep = self.info.addr.index();
+        let regs = T::regs();
+        poll_fn(|ctx| {
+            EP_WAKERS[ep].register(ctx.waker());
+            if !self.is_enabled() {
+                return Poll::Ready(Err(EndpointError::Disabled));
+            }
+            critical_section::with(|cs| {
+                let mut states = DOUBLE_BUFFERED.borrow_ref_mut(cs);
+                let Some(DoubleState::In(queue)) = states[ep].as_mut() else {
+                    return Poll::Ready(Err(EndpointError::Disabled));
+                };
+                let Some(buffer) = queue.free_buffer() else {
+                    return Poll::Pending;
+                };
+                self.buffer(buffer).write_volatile(buf);
+                if queue.enqueue(buf.len() as u16) {
+                    if let Some((addr, len)) = queue.sending() {
+                        regs::set_ep_dma(regs, ep, addr);
+                        regs::set_ep_t_len(regs, ep, len);
+                        regs::ep_tx_ctrl_set_res(regs, ep, EpTxResponse::ACK);
+                    }
+                }
+                Poll::Ready(Ok(()))
+            })
+        })
+        .await
+    }
+}
+
+impl<'d, T: Instance, const SIZE: usize> Endpoint<'d, T, Out, SIZE> {
+    async fn read_double_buffered(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
+        let ep = self.info.addr.index();
+        let regs = T::regs();
+        poll_fn(|ctx| {
+            EP_WAKERS[ep].register(ctx.waker());
+            if !self.is_enabled() {
+                return Poll::Ready(Err(EndpointError::Disabled));
+            }
+            critical_section::with(|cs| {
+                let mut states = DOUBLE_BUFFERED.borrow_ref_mut(cs);
+                let Some(DoubleState::Out(queue)) = states[ep].as_mut() else {
+                    return Poll::Ready(Err(EndpointError::Disabled));
+                };
+                let Some((buffer, len)) = queue.next_packet() else {
+                    return Poll::Pending;
+                };
+                let len = len as usize;
+                if len > buf.len() {
+                    return Poll::Ready(Err(EndpointError::BufferOverflow));
+                }
+                self.buffer(buffer).read_volatile(&mut buf[..len]);
+                if let Some(addr) = queue.consume() {
+                    regs::set_ep_dma(regs, ep, addr);
+                    regs::ep_rx_ctrl_set_res(regs, ep, EpRxResponse::ACK);
+                }
+                Poll::Ready(Ok(len))
+            })
+        })
+        .await
+    }
+}
+
 impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointIn for Endpoint<'d, T, In, SIZE> {
     async fn write(&mut self, buf: &[u8]) -> Result<(), EndpointError> {
         trace!("endpoint {} IN", self.info.addr.index());
         if !self.is_enabled() {
             error!("write to disabled ep {}", self.info.addr.index());
             return Err(EndpointError::Disabled);
+        }
+        if self.double_buffer.is_some() {
+            return self.write_double_buffered(buf).await;
         }
 
         let ep = self.info.addr.index();
@@ -111,6 +196,9 @@ impl<'d, T: Instance, const SIZE: usize> embassy_usb_driver::EndpointOut for End
         if !self.is_enabled() {
             error!("OUT disabled EP");
             return Err(EndpointError::Disabled);
+        }
+        if self.double_buffer.is_some() {
+            return self.read_double_buffered(buf).await;
         }
 
         let ep = self.info.addr.index();
