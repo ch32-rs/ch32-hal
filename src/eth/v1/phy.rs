@@ -21,14 +21,12 @@ pub trait Phy {
     fn full_duplex(&mut self, _smi: &mut Smi) -> Result<bool, SmiError> {
         Ok(true)
     }
-    /// Swap the polarity of the receive pair and restart auto-negotiation.
+    /// Switch to the next receive-pair polarity and restart auto-negotiation.
     ///
-    /// Called when the MAC has seen frames that fail their FCS and not a
-    /// single one that passes, which is what a reversed pair looks like: the
-    /// link comes up and link pulses are polarity independent, but every frame
-    /// is inverted. Returns true if the PHY reconfigured itself. The default
-    /// leaves the PHY alone.
-    fn swap_polarity(&mut self, _smi: &mut Smi) -> Result<bool, SmiError> {
+    /// Called while the link is down, so a polarity that does not link is
+    /// retried on a later poll instead of leaving the link unusable. Returns
+    /// true if the PHY reconfigured itself. The default leaves the PHY alone.
+    fn next_polarity(&mut self, _smi: &mut Smi) -> Result<bool, SmiError> {
         Ok(false)
     }
 }
@@ -139,11 +137,10 @@ impl Phy for InternalPhy {
         Ok(anlpar & phy_regs::ANLPAR_SELECTOR != phy_regs::ANLPAR_SELECTOR_IEEE802_3)
     }
 
-    fn swap_polarity(&mut self, smi: &mut Smi) -> Result<bool, SmiError> {
-        // Step the automatic detection one way or the other, as WCH does in
-        // `WCHNET_PhyPNProcess`: auto and normal keep receiving inverted
-        // frames, so the first swap forces the reversed setting and the next
-        // one goes back to normal.
+    fn next_polarity(&mut self, smi: &mut Smi) -> Result<bool, SmiError> {
+        // Toggle between forced normal (00) and forced reversed (01), as WCH
+        // does in `WCHNET_PhyPNProcess`. Automatic detection (10) is treated
+        // as "try reversed next": if it failed, that is the other setting.
         let mdix = smi.read(Self::PHY_ADDR, Self::MDIX)?;
         let mdix = if mdix & Self::MDIX_PN_REVERSED != 0 {
             mdix & !Self::MDIX_PN_MASK
