@@ -328,7 +328,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
     ///
     /// Both descriptor lists restart at the descriptor the DMA would have used
     /// next, so the rings stay in sync. Frames in the FIFOs are lost.
-    fn recover_rx_overflow(&mut self) {
+    fn recover_rx_overflow(&mut self, cx: &mut Context) {
         // The CH32V307 does not set DMASR.ROS on an RX FIFO overflow; it only
         // counts the dropped frames in DMAMFBOCR (cleared on read).
         let e = T::regs();
@@ -337,8 +337,6 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             return;
         }
         self.rx_recovery_pending = false;
-        let rx_next = e.dmachrdr().read();
-        let tx_next = e.dmachtdr().read();
 
         // Stop TX DMA, then MAC TX/RX, then RX DMA.
         e.dmaomr().modify(|w| w.set_st(false));
@@ -348,16 +346,18 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         });
         e.dmaomr().modify(|w| w.set_sr(false));
 
-        if configure_mac_dma::<T>(
-            self.phy_interface,
-            self.mac_addr,
-            self.full_duplex,
-            self.speed_100m,
-        )
-        .is_err()
-        {
-            // The soft reset did not complete. Retry on the next poll.
+        // Read the cursors only now: the DMA updates them while it runs, and
+        // restarting on a stale descriptor can leave it waiting on an OWN=0
+        // descriptor for good.
+        let rx_next = e.dmachrdr().read();
+        let tx_next = e.dmachtdr().read();
+
+        if configure_mac_dma::<T>(self.phy_interface, self.mac_addr, self.full_duplex, self.speed_100m).is_err() {
+            // The soft reset did not complete. The DMA is stopped, so make
+            // sure the executor polls again instead of waiting for an
+            // interrupt that cannot come.
             self.rx_recovery_pending = true;
+            cx.waker().wake_by_ref();
             return;
         }
         e.dmardlar().write(|w| w.set_srl(rx_next.hrdap()));
@@ -618,7 +618,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driv
     fn receive(&mut self, cx: &mut Context) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let s = T::state();
         s.waker.register(cx.waker());
-        self.recover_rx_overflow();
+        self.recover_rx_overflow(cx);
         if self.rx.available().is_some() && self.tx.available().is_some() {
             // rx and tx are disjoint struct fields, Rust permits simultaneous &mut borrows.
             Some((RxToken { rx: &mut self.rx }, TxToken { tx: &mut self.tx }))
@@ -630,7 +630,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driv
     fn transmit(&mut self, cx: &mut Context) -> Option<Self::TxToken<'_>> {
         let s = T::state();
         s.waker.register(cx.waker());
-        self.recover_rx_overflow();
+        self.recover_rx_overflow(cx);
         if self.tx.available().is_some() {
             Some(TxToken { tx: &mut self.tx })
         } else {

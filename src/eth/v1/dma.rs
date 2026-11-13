@@ -245,6 +245,7 @@ impl<'d, T: Instance, const N: usize> RDesRing<'d, T, N> {
         let rdes0 = loop {
             let rdes0 = self.desc[self.index].rdes0();
             if rdes0 & RDES0_OWN != 0 {
+                self.release_stuck_descriptor();
                 return None;
             }
             let single = rdes0 & (RDES0_FS | RDES0_LS) == (RDES0_FS | RDES0_LS);
@@ -275,6 +276,29 @@ impl<'d, T: Instance, const N: usize> RDesRing<'d, T, N> {
         fence(Ordering::SeqCst);
         self.resume_rx();
         self.index = (self.index + 1) % N;
+    }
+
+    /// Recover the CH32V307 rev 0x10 RX stall after the DMA runs out of
+    /// descriptors (`RBUS`).
+    ///
+    /// On that silicon the DMA can stop with `DMACHRDR` on a descriptor it
+    /// owns while the next one stays with the CPU, and a demand poll does not
+    /// move it. Giving that next descriptor back to the DMA loses its frame
+    /// but lets reception continue. In a healthy ring a DMA-owned descriptor
+    /// is never followed by a CPU-owned one, so this cannot fire elsewhere.
+    fn release_stuck_descriptor(&mut self) {
+        let next = (self.index + 1) % N;
+        if next == self.index {
+            return;
+        }
+        let d = &mut self.desc[next];
+        if d.rdes0() & RDES0_OWN != 0 {
+            return;
+        }
+        fence(Ordering::Release);
+        d.set_rdes0(RDES0_OWN);
+        fence(Ordering::SeqCst);
+        self.demand_poll();
     }
 
     fn resume_rx(&self) {
