@@ -46,6 +46,16 @@ impl<const N_RX: usize, const N_TX: usize> State<N_RX, N_TX> {
 /// Using embassy_sync Channels instead of bare flags so the Runner
 /// can `.recv().await` without busy-polling.
 static RX_CH: Channel<CriticalSectionRawMutex, u16, 1> = Channel::new();
+/// Built-in PHY: MDIX register and its receive polarity bits (3:2):
+/// 00 positive (reset default), 01 negative.
+const PHY_REG_MDIX: u8 = 0x1E;
+const PHY_MDIX_PN_MASK: u16 = 3 << 2;
+const PHY_MDIX_PN_NEGATIVE: u16 = 1 << 2;
+const PHY_REG_BCR: u8 = 0x00;
+const PHY_REG_BCR_AN_RESTART: u16 = 1 << 9;
+/// Link polls (500 ms each) without link before switching the polarity.
+const POLARITY_SWITCH_POLLS: u32 = 4;
+
 /// Timer wake-up latency allowance for the TX completion check (measured
 /// ~20 us at 120 MHz: aiming 20 us early needs one re-check for ~3 % of frames).
 const TX_WAKE_EARLY_US: u64 = 20;
@@ -157,6 +167,7 @@ impl<'d, P: PHY> Runner<'d, P> {
         };
 
         let link_fut = async {
+            let mut down_polls = 0u32;
             loop {
                 let up = phy.link_up(&mut station_management);
                 state_chan.set_link_state(if up {
@@ -164,6 +175,26 @@ impl<'d, P: PHY> Runner<'d, P> {
                 } else {
                     LinkState::Down
                 });
+
+                // The built-in PHY does not detect a reversed receive pair by
+                // itself (its automatic polarity mode does not link either).
+                // Like WCH's driver, alternate between positive and negative
+                // polarity while the link stays down, and keep the one that
+                // links. Auto-negotiation takes about 1 s.
+                if up {
+                    down_polls = 0;
+                } else {
+                    down_polls += 1;
+                    if down_polls >= POLARITY_SWITCH_POLLS {
+                        down_polls = 0;
+                        let mdix = station_management.smi_read(0, PHY_REG_MDIX);
+                        let negative = mdix & PHY_MDIX_PN_MASK == PHY_MDIX_PN_NEGATIVE;
+                        let pn = if negative { 0 } else { PHY_MDIX_PN_NEGATIVE };
+                        station_management.smi_write(0, PHY_REG_MDIX, (mdix & !PHY_MDIX_PN_MASK) | pn);
+                        let bcr = station_management.smi_read(0, PHY_REG_BCR);
+                        station_management.smi_write(0, PHY_REG_BCR, bcr | PHY_REG_BCR_AN_RESTART);
+                    }
+                }
 
                 Timer::after_millis(500).await;
             }
