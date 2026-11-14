@@ -62,10 +62,14 @@ embedded-sdmmc = { version = "0.9.0", default-features = false }
 exfat-embedded = { version = "0.1.3", default-features = false }
 
 # `usbhs_cdc` / `usbfs_cdc` / `usbss_cdc` / `usbss_bench`: the USB device stack
-# over the HAL's USBHS, USBFS and USBSS drivers.
+# over the HAL's USBHS, USBFS and USBSS drivers. `usbss_host_msc`: the host
+# stack and its mass-storage class.
 embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "e867f1210417a95be666d965a3567b3b2bed3bb9", optional = true, default-features = false, features = [
     "device",
+    "host",
     "class-cdc-acm",
+    "class-msc",
+    "defmt",
 ] }
 
 [features]
@@ -73,8 +77,8 @@ embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "e867f12104
 # owns the same counter, so this stays off unless the example asks for it.
 embassy = ["ch32-hal/embassy", "dep:embassy-executor", "dep:embassy-time"]
 
-# `usbhs_cdc` / `usbfs_cdc` / `usbss_cdc` / `usbss_bench`: Embassy plus the USB
-# device stack.
+# `usbhs_cdc` / `usbfs_cdc` / `usbss_cdc` / `usbss_bench` / `usbss_host_msc`:
+# Embassy plus the USB stack.
 usb = ["embassy", "dep:embassy-usb"]
 
 # `eth_internal` / `eth_bench`: Embassy + the Ethernet stack. `ch32-hal/defmt`
@@ -134,6 +138,11 @@ required-features = ["usb"]
 [[bin]]
 name = "usbfs_cdc"
 path = "src/bin/usbfs_cdc.rs"
+required-features = ["usb"]
+
+[[bin]]
+name = "usbss_host_msc"
+path = "src/bin/usbss_host_msc.rs"
 required-features = ["usb"]
 
 [[bin]]

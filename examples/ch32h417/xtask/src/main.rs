@@ -453,7 +453,7 @@ fn build_core(job: &Job, extra_features: &[String]) {
         let default = match job.example.as_str() {
             "embassy_systick" | "can_async_check" | "pioc_ws2812" | "pioc_text" => Some("embassy"),
             "eth_internal" | "eth_bench" => Some("eth"),
-            "usbhs_cdc" | "usbfs_cdc" | "usbss_cdc" | "usbss_bench" => Some("usb"),
+            "usbhs_cdc" | "usbfs_cdc" | "usbss_cdc" | "usbss_bench" | "usbss_host_msc" => Some("usb"),
             _ => None,
         };
         // `--features` comes on top: `pioc_ws2812` needs it to pick the IO0
