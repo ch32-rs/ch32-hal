@@ -20,11 +20,9 @@ ch32-hal = { path = "../../../", default-features = false, features = [
     "pioc",
 ] }
 
-# Assembles the canonical RGB1W source at compile time. Local development
-# points at the `feat/vm-firmware-abi` worktree of https://github.com/andelf/pioc;
-# replace with a `git` rev before opening the PR.
-pioc-proc = { path = "../../../../../../../pioc/.claude/worktrees/vm-firmware-abi/pioc-proc" }
-pioc-programs = { path = "../../../../../../../pioc/.claude/worktrees/vm-firmware-abi/pioc-programs" }
+# Assembles the canonical RGB1W source at compile time.
+pioc-proc = "0.1.0"
+pioc-programs = "0.1.0"
 
 # The shared mailbox: `define` is on for the boot core only, because this image
 # owns the region (it places `MAILBOX` in `.shared`) and exports its address to

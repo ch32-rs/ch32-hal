@@ -37,6 +37,7 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 | Embassy    | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
 | RCC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
 | GPIO       | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
+| PIOC§      | N/A   | N/A | N/A  | N/A  | ✅   | N/A  | N/A   | ✅    | ✅   |
 | EXTI\*     | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
 | UART\*     | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ❓    | ❓    | ✅    |
 | SPI\*      | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | N/A   | ❓    | ✅\*  |
@@ -58,6 +59,8 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 - ❌ : Not implemented
 - ❓ : Not tested
 - `*` marks the async driver (EXTI is also opt-in via the `exti` Cargo feature)
+- `§` PIOC is behind the manual `pioc` Cargo feature and needs a firmware image;
+  X0 and H4 are board-tested, CH643 follows X0.
 - `†` ETH: the CH32V208 10M MAC+PHY and the H4 internal 10/100 PHY are
   validated; the V305/V307 Synopsys DWC MAC is in progress (PR #157), and the
   H4 RGMII/Gigabit path is not board-tested.

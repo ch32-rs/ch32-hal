@@ -73,12 +73,8 @@ const BENCH_PIXELS: [usize; 3] = [64, 300, 1024];
 /// Frames per benchmark point.
 const BENCH_FRAMES: u32 = 100;
 
-/// Results of the last benchmark: microseconds per frame, and frames per
-/// second. Kept in RAM so a debugger can read them without a console.
-#[no_mangle]
-pub static mut BENCH_US: [u32; BENCH_PIXELS.len()] = [0; BENCH_PIXELS.len()];
-#[no_mangle]
-pub static mut BENCH_FPS: [u32; BENCH_PIXELS.len()] = [0; BENCH_PIXELS.len()];
+/// Measured frames per second per [`BENCH_PIXELS`] entry.
+static mut BENCH_FPS: [u32; BENCH_PIXELS.len()] = [0; BENCH_PIXELS.len()];
 
 /// Frame buffer for the benchmark; the largest payload would not fit on the
 /// stack comfortably next to the executor.
@@ -158,20 +154,14 @@ async fn main(_spawner: Spawner) -> ! {
         let elapsed = start.elapsed();
         let us = (elapsed.as_micros() / u64::from(BENCH_FRAMES)) as u32;
         let fps = if us == 0 { 0 } else { 1_000_000 / us };
-        // Volatile: nothing in the program depends on these values, so a plain
-        // store would be forwarded to the display below and never reach memory,
-        // which is exactly where a debugger reads them from.
-        unsafe {
-            core::ptr::write_volatile(core::ptr::addr_of_mut!(BENCH_US[slot]), us);
-            core::ptr::write_volatile(core::ptr::addr_of_mut!(BENCH_FPS[slot]), fps);
-        }
+        unsafe { BENCH_FPS[slot] = fps };
     }
 
     // Show what was measured: one bar per payload size, one pixel per 10 fps,
     // 64 pixels covering up to 640 fps. The expected heights are 55 (64
     // pixels), 11 (300) and 3 (1024); see the module docs for the arithmetic.
     for slot in 0..BENCH_PIXELS.len() {
-        let fps = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(BENCH_FPS[slot])) };
+        let fps = unsafe { BENCH_FPS[slot] };
         let level = ((fps / 10) as usize).min(PIXELS);
         ws.write_rgb(&meter(level), ColorOrder::Grb)
             .await

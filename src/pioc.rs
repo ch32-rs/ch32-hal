@@ -25,19 +25,42 @@
 //!
 //! With the `embassy` feature the module owns the `PIOC` interrupt and wakes
 //! the waiting task; the handler reads `CTRL_RD` because that read is the
-//! acknowledge. Without Embassy only the blocking [`Pioc::wait_blocking`]
-//! exists.
+//! acknowledge. The transfer methods are also available without Embassy:
+//! [`Pioc::write_data`], [`Pioc::start_command`] and [`Pioc::wait_blocking`]
+//! form the synchronous command path.
+//!
+//! The interrupt has one global completion slot, so use one `Pioc` per
+//! program. [`Drop`] halts the core and releases the interrupt.
+//!
+//! # Program SRAM and the linker
+//!
+//! The image window is 4 KiB. CH32H4 places it in a separate block at
+//! `0x5004_0000`. CH32X0 and CH643 place it at the top of the main SRAM
+//! (`0x2000_4000..0x2000_5000`), so the CPU stack and heap have to stay below
+//! it. A project that enables PIOC on those parts must keep the stack and heap
+//! below the window in its linker script, as `examples/ch32x035/pioc.x` does by
+//! moving `_stack_start`; otherwise [`Pioc::load_image`] overwrites live
+//! memory. The HAL cannot enforce this at compile time.
+//!
+//! # Pin configuration
+//!
+//! The constructors put IO0/IO1 into alternate-function push-pull mode at high
+//! speed. The firmware owns the direction through `pins.dir`; a 1-Wire protocol
+//! has to switch to input to release the line before reading it. Only the
+//! WS2812 path is board-tested.
 //!
 //! # Family differences
 //!
 //! The register block is identical on CH32H4 and CH32X0/CH643; what differs is
-//! the program-SRAM window and how the peripheral clock is released. H4 goes
-//! through `RccPeripheral`; X0 has no RCC enable bit of its own and is gated by
-//! `SYS_CFG.MST_CLK_GATE` alone, so a later revision has to relax the
-//! [`Instance`] bound. CH32V205 uses a different payload ABI and is not wired
-//! up yet.
+//! the program-SRAM window and how the peripheral is released. H4 has an RCC
+//! clock-enable bit; X0 and CH643 have a reset bit only and gate the core with
+//! `SYS_CFG.MST_CLK_GATE`. CH32V205 uses a different payload ABI and is not
+//! wired up yet.
+
+pub use pioc_programs::PinMask;
 
 use crate::gpio::{AfType, AnyPin, OutputType, Speed};
+#[cfg(not(any(ch32x0, ch643)))]
 use crate::peripheral::{RccPeripheral, SealedRccPeripheral};
 use crate::{pac, Peri, PeripheralType};
 
@@ -49,12 +72,6 @@ const PROGRAM_RAM_BYTES: usize = PROGRAM_WORDS * 2;
 
 /// Shared register window `d0..d31`, in bytes.
 pub const SFR_BYTES: usize = 32;
-
-/// Payload bytes the RGB1W firmware ABI leaves after its `0x400` offset.
-///
-/// This is the value the protocol layer sees as
-/// `CommandPort::program_ram_capacity`; the rest of the window is the image.
-pub const PAYLOAD_CAPACITY: usize = PROGRAM_RAM_BYTES - 0x400;
 
 /// Program-SRAM window for the current family.
 ///
@@ -95,15 +112,18 @@ pub struct Pioc<'d, T: Instance> {
     halted: bool,
     host_config: bool,
     loaded: bool,
+    /// `SYS_CFG.MST_IO_EN0/1` for the current claim.
+    claimed: u8,
 }
 
 impl<'d, T: Instance> Pioc<'d, T> {
-    /// Take the peripheral, configure the pins and leave the core halted.
+    /// Take the peripheral with both pins claimed, and leave the core halted.
     ///
-    /// `io0` and `io1` are optional: a firmware image may use either, both or
-    /// neither. Passing `None` leaves the pin unclaimed, and a later transfer
-    /// that asks for it fails with [`Error::PinNotConfigured`] instead of
-    /// driving a pin nobody configured.
+    /// A firmware image may use either pin; an unclaimed pin makes a later
+    /// transfer that asks for it fail with [`Error::PinNotConfigured`] instead
+    /// of driving a pin nobody configured. This constructor is only usable
+    /// when both arguments are `Some`: a `None` cannot infer the opaque pin
+    /// type, so use [`Pioc::new_io0`] or [`Pioc::new_io1`] for one wire.
     pub fn new<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
         io0: Option<Peri<'d, if_remap!(impl Io0Pin<T, REMAP>)>>,
@@ -126,8 +146,8 @@ impl<'d, T: Instance> Pioc<'d, T> {
     /// Take the peripheral with only the IO0 pin claimed.
     ///
     /// A firmware image that drives one wire does not need the second pin, and
-    /// the generic [`Pioc::new`] forces the caller to name a type for the `None`
-    /// it passes for IO1.
+    /// the generic [`Pioc::new`] cannot infer a type for the `None` it would
+    /// pass for IO1.
     pub fn new_io0<#[cfg(not(afio_h4))] const REMAP: u8>(
         peri: Peri<'d, T>,
         io0: Peri<'d, if_remap!(impl Io0Pin<T, REMAP>)>,
@@ -137,16 +157,37 @@ impl<'d, T: Instance> Pioc<'d, T> {
         Self::new_inner(peri, io0, None)
     }
 
-    fn new_inner(peri: Peri<'d, T>, io0: Option<Peri<'d, AnyPin>>, io1: Option<Peri<'d, AnyPin>>) -> Self {
-        <T as SealedRccPeripheral>::enable_and_reset();
+    /// Take the peripheral with only the IO1 pin claimed.
+    ///
+    /// IO1 has no pin remap on any supported family, so there is no `REMAP`
+    /// parameter. This exists for the same reason as [`Pioc::new_io0`].
+    pub fn new_io1(peri: Peri<'d, T>, io1: Peri<'d, impl Io1Pin<T>>) -> Self {
+        let io1 = new_pin!(io1, AfType::output(OutputType::PushPull, Speed::High));
+        Self::new_inner(peri, None, io1)
+    }
 
-        let mut driver = Self {
+    fn new_inner(peri: Peri<'d, T>, io0: Option<Peri<'d, AnyPin>>, io1: Option<Peri<'d, AnyPin>>) -> Self {
+        // CH32H4 releases the peripheral clock through RCC. X0 and CH643 have a
+        // reset bit only: the core clock is `SYS_CFG.MST_CLK_GATE`, which
+        // `write_sys_cfg` drives.
+        #[cfg(not(any(ch32x0, ch643)))]
+        <T as SealedRccPeripheral>::enable_and_reset();
+        #[cfg(any(ch32x0, ch643))]
+        {
+            let rcc = crate::pac::RCC;
+            rcc.ahbrstr().modify(|w| w.set_piocrst(true));
+            rcc.ahbrstr().modify(|w| w.set_piocrst(false));
+        }
+
+        let claimed = u8::from(io0.is_some()) | (u8::from(io1.is_some()) << 1);
+        let driver = Self {
             _peri: peri,
             io0,
             io1,
             halted: true,
             host_config: false,
             loaded: false,
+            claimed,
         };
 
         driver.write_sys_cfg();
@@ -184,22 +225,131 @@ impl<'d, T: Instance> Pioc<'d, T> {
         Ok(())
     }
 
-    /// Wait for the firmware to finish, without Embassy.
+    /// Wait for the firmware to finish and return its status byte.
     ///
-    /// Spins until `INT_REQ` is set and returns the status byte. There is no
-    /// timeout: a firmware image that never completes blocks here forever, so
-    /// a caller that wants a deadline needs the async path.
-    pub fn wait_blocking(&mut self) -> Result<u8, Error> {
-        while !T::regs().sys_cfg().read().int_req() {
+    /// Spins until `INT_REQ` is set. There is no timeout: a firmware image that
+    /// never completes blocks here forever, so a caller that wants a deadline
+    /// needs the async path. With the `embassy` feature the interrupt handler
+    /// may consume the request first; this method reads the same completion
+    /// slot under the same lock.
+    pub fn wait_blocking(&mut self) -> u8 {
+        loop {
+            if let Some(status) = self.poll_status() {
+                return status;
+            }
             core::hint::spin_loop();
         }
-        Ok(T::regs().ctrl_rd().read())
+    }
+
+    /// Take a completed status byte without blocking.
+    fn poll_status(&self) -> Option<u8> {
+        #[cfg(feature = "embassy")]
+        {
+            irq::STATE.lock(|state| {
+                let mut state = state.borrow_mut();
+                if let Some(status) = state.status.take() {
+                    return Some(status);
+                }
+                if T::regs().sys_cfg().read().int_req() {
+                    return Some(T::regs().ctrl_rd().read());
+                }
+                None
+            })
+        }
+        #[cfg(not(feature = "embassy"))]
+        {
+            if T::regs().sys_cfg().read().int_req() {
+                Some(T::regs().ctrl_rd().read())
+            } else {
+                None
+            }
+        }
     }
 
     /// Halt the core while keeping the loaded image and the pin claims.
     pub fn halt(&mut self) {
         self.halted = true;
         self.write_sys_cfg();
+    }
+
+    /// Assert reset, stop the clock, and claim the selected pins.
+    pub fn reset_halted(&mut self, pins: pioc_programs::PinMask) -> Result<(), Error> {
+        self.check_pins(pins)?;
+        self.halted = true;
+        self.claimed = pins.bits();
+        self.write_sys_cfg();
+        Ok(())
+    }
+
+    /// Release reset, run the clock, and claim the selected pins.
+    pub fn run(&mut self, pins: pioc_programs::PinMask) -> Result<(), Error> {
+        self.check_pins(pins)?;
+        if !self.loaded {
+            return Err(Error::ProgramNotLoaded);
+        }
+        self.halted = false;
+        self.claimed = pins.bits();
+        self.write_sys_cfg();
+        Ok(())
+    }
+
+    /// Set `sys.ctrl.host_config`, used by RGB1W as the parasite-power flag.
+    pub fn set_host_config(&mut self, enabled: bool) -> Result<(), Error> {
+        self.host_config = enabled;
+        self.write_sys_cfg();
+        Ok(())
+    }
+
+    /// Access shared registers `d0..d31`.
+    pub fn write_data(&mut self, offset: u8, data: &[u8]) -> Result<(), Error> {
+        Self::check_data_range(offset, data.len())?;
+        for (index, value) in data.iter().copied().enumerate() {
+            T::regs().data_reg(usize::from(offset) + index).write(|w| *w = value);
+        }
+        Ok(())
+    }
+
+    /// Read shared registers `d0..d31`.
+    pub fn read_data(&mut self, offset: u8, data: &mut [u8]) -> Result<(), Error> {
+        Self::check_data_range(offset, data.len())?;
+        for (index, value) in data.iter_mut().enumerate() {
+            *value = T::regs().data_reg(usize::from(offset) + index).read();
+        }
+        Ok(())
+    }
+
+    /// Write firmware-owned shared SRAM while PIOC is halted.
+    pub fn write_program_ram(&mut self, offset: u16, data: &[u8]) -> Result<(), Error> {
+        self.write_ram(offset, data)
+    }
+
+    /// Whole program-SRAM window available through [`Self::write_program_ram`].
+    ///
+    /// The payload offset and the bytes left for payloads are properties of a
+    /// firmware ABI, so a protocol driver applies its own limit.
+    pub fn program_ram_capacity(&self) -> usize {
+        PROGRAM_RAM_BYTES
+    }
+
+    /// Write `cmd.in`, starting a firmware operation.
+    ///
+    /// A previous completion that was never consumed is discarded first. That
+    /// covers a cancelled wait (`embassy_time::with_timeout`, for one): its
+    /// `INT_REQ` would otherwise be taken as the completion of this command.
+    /// The acknowledge and the command write stay in one critical section.
+    pub fn start_command(&mut self, command: u8) -> Result<(), Error> {
+        #[cfg(feature = "embassy")]
+        irq::STATE.lock(|state| {
+            state.borrow_mut().status = None;
+            self.acknowledge_pending();
+            T::regs().ctrl_wr().write(|w| *w = command);
+        });
+        #[cfg(not(feature = "embassy"))]
+        {
+            self.acknowledge_pending();
+            T::regs().ctrl_wr().write(|w| *w = command);
+        }
+        Ok(())
     }
 
     /// Write `SYS_CFG` from the driver state.
@@ -210,24 +360,36 @@ impl<'d, T: Instance> Pioc<'d, T> {
         T::regs().sys_cfg().write(|w| {
             w.set_mst_reset(self.halted);
             w.set_mst_clk_gate(!self.halted);
-            w.set_mst_io_en0(self.io0.is_some());
-            w.set_mst_io_en1(self.io1.is_some());
+            w.set_mst_io_en0(self.claimed & 1 != 0);
+            w.set_mst_io_en1(self.claimed & 2 != 0);
             w.set_mst_cfg_b4(self.host_config);
         });
+    }
+
+    /// Pins this driver was built with, as a [`pioc_programs::PinMask`] value.
+    fn configured_pins(&self) -> u8 {
+        u8::from(self.io0.is_some()) | (u8::from(self.io1.is_some()) << 1)
     }
 
     /// Reject a pin claim the driver was not built for.
     ///
     /// `SYS_CFG` can only enable the pins this driver owns, so asking for a
     /// third pin would run the firmware on a wire nobody configured.
-    #[cfg(feature = "embassy")]
     fn check_pins(&self, pins: pioc_programs::PinMask) -> Result<(), Error> {
-        let configured = u8::from(self.io0.is_some()) | (u8::from(self.io1.is_some()) << 1);
+        let configured = self.configured_pins();
         let requested = pins.bits();
         if requested & !configured != 0 {
             return Err(Error::PinNotConfigured { requested, configured });
         }
         Ok(())
+    }
+
+    /// Acknowledge a completion left behind by a cancelled or unclaimed wait.
+    fn acknowledge_pending(&self) {
+        if T::regs().sys_cfg().read().int_req() {
+            // Reading `CTRL_RD` is the acknowledge.
+            let _ = T::regs().ctrl_rd().read();
+        }
     }
 
     /// Copy bytes into the program SRAM window; the core must be halted.
@@ -251,7 +413,6 @@ impl<'d, T: Instance> Pioc<'d, T> {
         Ok(())
     }
 
-    #[cfg(feature = "embassy")]
     fn check_data_range(offset: u8, len: usize) -> Result<(), Error> {
         let end = usize::from(offset) + len;
         if end > SFR_BYTES {
@@ -261,65 +422,52 @@ impl<'d, T: Instance> Pioc<'d, T> {
     }
 }
 
+impl<T: Instance> Drop for Pioc<'_, T> {
+    fn drop(&mut self) {
+        // Stop the core and release both pins before the `Peri` handles go
+        // away; a dropped driver must not keep driving firmware on its own.
+        self.halted = true;
+        self.claimed = 0;
+        self.write_sys_cfg();
+        #[cfg(feature = "embassy")]
+        irq::deinit();
+    }
+}
+
 #[cfg(feature = "embassy")]
 impl<'d, T: Instance> pioc_programs::CommandPort for Pioc<'d, T> {
     type Error = Error;
 
     fn reset_halted(&mut self, pins: pioc_programs::PinMask) -> Result<(), Error> {
-        self.check_pins(pins)?;
-        self.halted = true;
-        self.write_sys_cfg();
-        Ok(())
+        Pioc::reset_halted(self, pins)
     }
 
     fn run(&mut self, pins: pioc_programs::PinMask) -> Result<(), Error> {
-        self.check_pins(pins)?;
-        if !self.loaded {
-            return Err(Error::ProgramNotLoaded);
-        }
-        self.halted = false;
-        self.write_sys_cfg();
-        Ok(())
+        Pioc::run(self, pins)
     }
 
     fn set_host_config(&mut self, enabled: bool) -> Result<(), Error> {
-        self.host_config = enabled;
-        self.write_sys_cfg();
-        Ok(())
+        Pioc::set_host_config(self, enabled)
     }
 
     fn write_data(&mut self, offset: u8, data: &[u8]) -> Result<(), Error> {
-        Self::check_data_range(offset, data.len())?;
-        for (index, value) in data.iter().copied().enumerate() {
-            T::regs().data_reg(usize::from(offset) + index).write(|w| *w = value);
-        }
-        Ok(())
+        Pioc::write_data(self, offset, data)
     }
 
     fn read_data(&mut self, offset: u8, data: &mut [u8]) -> Result<(), Error> {
-        Self::check_data_range(offset, data.len())?;
-        for (index, value) in data.iter_mut().enumerate() {
-            *value = T::regs().data_reg(usize::from(offset) + index).read();
-        }
-        Ok(())
+        Pioc::read_data(self, offset, data)
     }
 
     fn write_program_ram(&mut self, offset: u16, data: &[u8]) -> Result<(), Error> {
-        self.write_ram(offset, data)
+        Pioc::write_program_ram(self, offset, data)
     }
 
     fn program_ram_capacity(&self) -> usize {
-        PAYLOAD_CAPACITY
+        Pioc::program_ram_capacity(self)
     }
 
     fn start_command(&mut self, command: u8) -> Result<(), Error> {
-        // A wait that was cancelled — `embassy_time::with_timeout`, for one —
-        // leaves the completion of the previous transfer in the slot. It must
-        // not be handed to this one, or the driver would proceed before the
-        // firmware has even started.
-        irq::STATE.lock(|state| state.borrow_mut().status = None);
-        T::regs().ctrl_wr().write(|w| *w = command);
-        Ok(())
+        Pioc::start_command(self, command)
     }
 
     async fn wait_for_interrupt(&mut self) -> Result<u8, Error> {
@@ -414,6 +562,18 @@ mod irq {
             qingke::pfic::enable_interrupt(Interrupt::PIOC as u8);
         }
     }
+
+    pub(super) fn deinit() {
+        unsafe {
+            qingke::pfic::disable_interrupt(Interrupt::PIOC as u8);
+            qingke::pfic::unpend_interrupt(Interrupt::PIOC as u8);
+        }
+        STATE.lock(|state| {
+            let mut state = state.borrow_mut();
+            state.status = None;
+            state.waker = None;
+        });
+    }
 }
 
 trait SealedInstance {
@@ -422,11 +582,19 @@ trait SealedInstance {
 
 /// PIOC instance trait.
 ///
-/// `RccPeripheral` is part of the bound because CH32H4 releases the peripheral
-/// clock through RCC. CH32X0/CH643 have no such bit and will need either a cfg
-/// here or a reset-only RCC entry in the register data.
+/// `RccPeripheral` is part of the bound only where the peripheral clock has an
+/// enable bit (CH32H4). X0 and CH643 reset the block through `AHBRSTR` and gate
+/// the core itself with `SYS_CFG.MST_CLK_GATE`, so there is nothing for the
+/// trait to enable.
 #[allow(private_bounds)]
+#[cfg(not(any(ch32x0, ch643)))]
 pub trait Instance: SealedInstance + RccPeripheral + PeripheralType {}
+
+/// `RemapBound` carries the `PCFR1.PIOC_RM` write on X0/CH643 and is empty on
+/// CH32H4, which selects the function per pin instead.
+#[allow(private_bounds)]
+#[cfg(any(ch32x0, ch643))]
+pub trait Instance: SealedInstance + crate::peripheral::RemapBound + PeripheralType {}
 
 foreach_peripheral!(
     (pioc, $inst:ident) => {
