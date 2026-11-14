@@ -112,8 +112,9 @@ const USAGE: &str = "\
 usage: cargo xtask <command> [options]
 
 commands:
-  build [--example NAME] [--dual-core | --jump-v5f]     build one example (or all)
-  flash --example NAME [--dual-core | --jump-v5f] [--no-build]
+  build [--example NAME] [--features A,B] [--dual-core | --jump-v5f]
+                                            build one example (or all)
+  flash --example NAME [--features A,B] [--dual-core | --jump-v5f] [--no-build]
         [--flasher wlink | probe-rs]        build, then flash and reset
   run   --example NAME [--dual-core | --jump-v5f] [--no-build]
                                             flash and view the V3F defmt RTT console
@@ -129,6 +130,10 @@ flashing:
                          probe; PROBE_RS_PROBE names the probe for probe-rs, and
                          both tools accept the same string, so set both or point
                          one at the other's value
+
+features:
+  --features A,B         extra crate features on top of the ones the example
+                         needs (`pioc_ws2812`'s IO0 pin, for instance)
 
 what gets programmed:
   (default)      the boot core alone (same as --v3f-only); the V5F region keeps
@@ -165,6 +170,8 @@ struct Options {
     no_build: bool,
     out: Option<PathBuf>,
     flasher: Flasher,
+    /// Extra crate features, appended to the per-example defaults.
+    features: Vec<String>,
 }
 
 impl Options {
@@ -175,6 +182,7 @@ impl Options {
             no_build: false,
             out: None,
             flasher: Flasher::Wlink,
+            features: Vec::new(),
         };
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -186,6 +194,13 @@ impl Options {
                 "--jump-v5f" => opts.layout = Layout::JumpV5f,
                 "--out" => opts.out = args.next().map(PathBuf::from),
                 "--no-build" => opts.no_build = true,
+                "--features" => {
+                    let list = args
+                        .next()
+                        .unwrap_or_else(|| fail("`--features` needs a comma-separated list"));
+                    opts.features
+                        .extend(list.split(',').filter(|name| !name.is_empty()).map(String::from));
+                }
                 "--flasher" => {
                     let tool = args.next().unwrap_or_else(|| fail("`--flasher` needs a tool"));
                     opts.flasher = match tool.as_str() {
@@ -422,7 +437,7 @@ fn build(opts: &Options) {
     // is fixed by the linker scripts (see `ch32h417_ipc::MAILBOX_ADDR`), so there
     // is no layout file to hand across.
     for job in &opts.jobs() {
-        build_core(job);
+        build_core(job, &opts.features);
     }
     if opts.example.is_some() {
         println!("built: {}", describe(&opts.jobs()));
@@ -430,25 +445,35 @@ fn build(opts: &Options) {
 }
 
 /// Builds one core's image.
-fn build_core(job: &Job) {
+fn build_core(job: &Job, extra_features: &[String]) {
     let dir = root().join(job.core.name);
-    let mut args = vec!["build", "--release"];
-    if !job.example.is_empty() {
-        args.extend(["--bin", &job.example]);
-    }
-    // `embassy_systick`, `can_async_check` and `usbss_host_link_check` are
-    // the V3F examples that start the SysTick time driver; the blocking
-    // examples keep that counter for `hal::delay`. The `eth_*` examples need
-    // Embassy plus the Ethernet stack, and the `usb*_cdc` and `usbss_bench`
-    // examples need Embassy plus the USB device stack.
-    let feature = match job.example.as_str() {
-        "embassy_systick" | "can_async_check" | "usbss_host_link_check" => Some("embassy"),
-        "eth_internal" | "eth_bench" => Some("eth"),
-        "usbhs_cdc" | "usbfs_cdc" | "usbss_cdc" | "usbss_bench" => Some("usb"),
-        _ => None,
+    // `build_core` owns the strings its arguments borrow from, so they are
+    // bound before `args` and outlive it.
+    let features = {
+        let default = match job.example.as_str() {
+            "embassy_systick" | "can_async_check" | "usbss_host_link_check" | "pioc_ws2812" | "pioc_text" => {
+                Some("embassy")
+            }
+            "eth_internal" | "eth_bench" => Some("eth"),
+            "usbhs_cdc" | "usbfs_cdc" | "usbss_cdc" | "usbss_bench" => Some("usb"),
+            _ => None,
+        };
+        // `--features` comes on top: `pioc_ws2812` needs it to pick the IO0
+        // pin, because the vendor default is not routed out on every board.
+        default
+            .into_iter()
+            .map(String::from)
+            .chain(extra_features.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(",")
     };
-    if let Some(feature) = feature {
-        args.extend(["--features", feature]);
+    let bin = job.example.clone();
+    let mut args = vec!["build", "--release"];
+    if !bin.is_empty() {
+        args.extend(["--bin", &bin]);
+    }
+    if !features.is_empty() {
+        args.extend(["--features", &features]);
     }
     println!("building {} ...", job.core.name);
     run("cargo", &args, &dir);

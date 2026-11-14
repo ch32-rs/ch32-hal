@@ -436,6 +436,10 @@ fn main() {
         // (H4's block is `usart_h4`), and the timer and I2C drivers were brought
         // back onto H4 once their register layouts checked out (`i2c` is
         // `version: v3` there).
+        // PIOC drives one external pin per IO channel; the firmware picks
+        // which of the muxed pins it uses.
+        (("pioc", "IO0"), quote!(crate::pioc::Io0Pin)),
+        (("pioc", "IO1"), quote!(crate::pioc::Io1Pin)),
         (("usart", "TX"), quote!(crate::usart::TxPin)),
         (("usart", "RX"), quote!(crate::usart::RxPin)),
         (("usart", "CTS"), quote!(crate::usart::CtsPin)),
@@ -525,6 +529,11 @@ fn main() {
     if !usb_pin_traits {
         pin_signals.retain(|key, _| key.0 != "usb");
     }
+    // `crate::pioc` only exists with the `pioc` feature, and the feature is
+    // manual: without this check X035 and CH643 builds would emit impls for a
+    // module that is not in the crate.
+    let pioc_feature = std::env::var_os("CARGO_FEATURE_PIOC").is_some();
+    pin_signals.retain(|key, _| key.0 != "pioc" || pioc_feature);
     // No pin row is dropped on CH32H4 today: SPI is `version: h4` but keeps
     // the V3 layout, and CAN and USBHS reuse the V4x7 drivers. ADC and DAC are
     // not in this table: their pin macros live inside the gated modules and
