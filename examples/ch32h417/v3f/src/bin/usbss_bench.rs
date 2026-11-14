@@ -4,7 +4,7 @@
 //! cargo xtask run --example usbss_bench
 //! ```
 //!
-//! Bulk OUT data is discarded. Bulk IN sends the same 128 KiB buffer forever;
+//! Bulk OUT data is discarded. Bulk IN sends the same 64 KiB buffer forever;
 //! every 1024-byte packet in it holds the bytes 0..=255 four times.
 //!
 //! The vendor request 1 (OUT, no data) stops the IN source with wValue 0 and
@@ -42,8 +42,7 @@ type BulkOut = <UsbDriver as embassy_usb::driver::Driver<'static>>::EndpointOut;
 const PACKET: usize = 1024;
 const MAX_BURST: u8 = 15;
 const BURST: usize = PACKET * (MAX_BURST as usize + 1);
-/// Eight bursts per transfer; the controller DMAs straight from these buffers.
-const TRANSFER: usize = 8 * BURST;
+const TRANSFER: usize = 4 * BURST;
 
 #[repr(align(4))]
 struct Ep0Memory([u8; 512]);
