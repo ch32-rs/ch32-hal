@@ -58,6 +58,11 @@ sdio-host = "0.5.0"
 
 embedded-storage = "0.3.1"
 
+# Local development against the `feat/vm-firmware-abi` worktree of
+# https://github.com/andelf/pioc. Replace with a `git` rev before opening the
+# PR: CI has no sibling checkout.
+pioc-programs = { path = "../../../../pioc/.claude/worktrees/vm-firmware-abi/pioc-programs", optional = true }
+
 [build-dependencies]
 # Same source as the `[dependencies]` entry.
 ch32-metapac = { features = [
@@ -78,6 +83,8 @@ embassy = [
 ]
 defmt = ["dep:defmt", "embassy-usb-driver/defmt"]
 memory-x = ["ch32-metapac/memory-x"]
+# Manual opt-in for the programmable I/O controller; see `src/pioc.rs`.
+pioc = ["dep:pioc-programs"]
 memory-split-usr = ["memory-x", "ch32-metapac/memory-split-usr"]
 ## Built-in EXTI driver and interrupt handlers. Disable to provide your own.
 exti = []

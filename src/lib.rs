@@ -132,6 +132,10 @@ pub mod i2c;
 pub mod i3c;
 #[cfg(rng)]
 pub mod rng;
+// `pioc` is a manual opt-in: the driver is useless without a firmware image,
+// so it is not part of any chip feature.
+#[cfg(all(peri_pioc, feature = "pioc"))]
+pub mod pioc;
 // Independent of `cfg(i2c)`: soft I2C exists precisely for chips or pins
 // without an I2C peripheral.
 #[cfg(feature = "soft-i2c")]

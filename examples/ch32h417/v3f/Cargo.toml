@@ -16,7 +16,15 @@ ch32-hal = { path = "../../../", default-features = false, features = [
     "memory-x",
     "rt",
     "exti",
+    # The PIOC host driver. Manual: it is useless without a firmware image.
+    "pioc",
 ] }
+
+# Assembles the canonical RGB1W source at compile time. Local development
+# points at the `feat/vm-firmware-abi` worktree of https://github.com/andelf/pioc;
+# replace with a `git` rev before opening the PR.
+pioc-proc = { path = "../../../../../../../pioc/.claude/worktrees/vm-firmware-abi/pioc-proc" }
+pioc-programs = { path = "../../../../../../../pioc/.claude/worktrees/vm-firmware-abi/pioc-programs" }
 
 # The shared mailbox: `define` is on for the boot core only, because this image
 # owns the region (it places `MAILBOX` in `.shared`) and exports its address to
@@ -81,6 +89,24 @@ eth = ["embassy", "dep:embassy-net", "ch32-hal/defmt"]
 # `spi_check` with PA7 (MOSI) jumpered to PA6 (MISO) verifies the received
 # bytes instead of only transfer completion.
 spi-loopback = []
+
+# `pioc_ws2812`: which pin PIOC IO0 is routed to. `PC1` is the vendor default
+# but is shared with ETH_MDIO and is not broken out on every board; the other
+# three are the remaining PIOC IO0 pins of the CH32H417.
+pioc-io0-pb8 = []
+pioc-io0-pc1 = []
+pioc-io0-pe3 = []
+pioc-io0-pf12 = []
+
+[[bin]]
+name = "pioc_text"
+path = "src/bin/pioc_text.rs"
+required-features = ["embassy"]
+
+[[bin]]
+name = "pioc_ws2812"
+path = "src/bin/pioc_ws2812.rs"
+required-features = ["embassy"]
 
 [[bin]]
 name = "embassy_systick"
