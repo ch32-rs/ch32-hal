@@ -516,11 +516,13 @@ fn main() {
     .into();
 
     // WCH USBFS (`kind: usb`) has four register layouts: v1fs / v2fs / l1fs /
-    // x0fs (see ch32-data docs/usb_ip.md). `crate::usbfs` currently binds the
-    // l1fs and x0fs backends, so pin rows for the other versions would point
-    // at a missing module — keep them only on those chips. OTG (`kind: otg`)
-    // and H4 USBFS (`kind: usbfs`) are the same FS IP with different kind
-    // strings and are handled by their own rows above / elsewhere.
+    // x0fs (see ch32-data docs/usb_ip.md). v1fs has no driver, so its pin rows
+    // would point at a missing module. v2fs rows are left out as well: the
+    // CH32V30x datasheet lists USBFS_DM/USBFS_DP on PB6/PB7 and OTG_FS on
+    // PA11/PA12, and the V303 data has PA11/PA12, so its pins are not settled;
+    // the driver takes any pin. OTG (`kind: otg`) and H4 USBFS (`kind: usbfs`)
+    // are the same FS IP with different kind strings and are handled by their
+    // own rows above / elsewhere.
     let usb_pin_traits = METADATA.peripherals.iter().any(|p| {
         p.registers
             .as_ref()
