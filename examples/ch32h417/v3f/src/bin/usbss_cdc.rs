@@ -30,12 +30,10 @@ type UsbDriver = Driver<'static, peripherals::USBSS>;
 
 const PACKET: usize = 1024;
 
-/// 512 bytes for EP0, 8 for the notification endpoint and one packet for each
-/// bulk endpoint.
 #[repr(align(4))]
-struct EndpointMemory([u8; 4096]);
+struct Ep0Memory([u8; 512]);
 
-static mut ENDPOINT_MEMORY: EndpointMemory = EndpointMemory([0; 4096]);
+static mut EP0_MEMORY: Ep0Memory = Ep0Memory([0; 512]);
 static mut CONFIG_DESCRIPTOR: [u8; 128] = [0; 128];
 static mut BOS_DESCRIPTOR: [u8; 32] = [0; 32];
 static mut MSOS_DESCRIPTOR: [u8; 32] = [0; 32];
@@ -79,7 +77,7 @@ async fn main(spawner: Spawner) -> ! {
         hal::signature::chip_id().dev_id()
     );
 
-    let memory = unsafe { &mut *core::ptr::addr_of_mut!(ENDPOINT_MEMORY) };
+    let memory = unsafe { &mut *core::ptr::addr_of_mut!(EP0_MEMORY) };
     let driver = Driver::new(p.USBSS, Irqs, &mut memory.0).unwrap();
 
     let mut usb_config = embassy_usb::Config::new(0xc0de, 0xcafe);

@@ -44,11 +44,10 @@ const BURST: usize = PACKET * (MAX_BURST as usize + 1);
 /// Eight bursts per transfer; the controller DMAs straight from these buffers.
 const TRANSFER: usize = 8 * BURST;
 
-/// 512 bytes for EP0 and one burst for each bulk endpoint.
 #[repr(align(4))]
-struct EndpointMemory([u8; 512 + 2 * BURST]);
+struct Ep0Memory([u8; 512]);
 
-static mut ENDPOINT_MEMORY: EndpointMemory = EndpointMemory([0; 512 + 2 * BURST]);
+static mut EP0_MEMORY: Ep0Memory = Ep0Memory([0; 512]);
 #[repr(align(4))]
 struct TransferBuffer([u8; TRANSFER]);
 
@@ -113,7 +112,7 @@ async fn main(spawner: Spawner) -> ! {
     });
     let p = hal::init(config);
 
-    let memory = unsafe { &mut *core::ptr::addr_of_mut!(ENDPOINT_MEMORY) };
+    let memory = unsafe { &mut *core::ptr::addr_of_mut!(EP0_MEMORY) };
     let driver = Driver::new(p.USBSS, Irqs, &mut memory.0).unwrap();
 
     let mut usb_config = embassy_usb::Config::new(0xc0de, 0xcaff);

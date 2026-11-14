@@ -17,7 +17,6 @@
 //! The block has its own 125 MHz PLL, PIPE/UTMI clocks and link state machine,
 //! separate from `usbhs`.
 
-use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -69,7 +68,6 @@ struct State {
     /// The current connection was already reported to `wait_connected`.
     connected_reported: AtomicBool,
     device_waker: AtomicWaker,
-    host_buf: HostBuffer,
     device: device::State,
 }
 
@@ -83,27 +81,8 @@ impl State {
             connected: AtomicBool::new(false),
             connected_reported: AtomicBool::new(false),
             device_waker: AtomicWaker::new(),
-            host_buf: HostBuffer::new(),
             device: device::State::new(regs::Regs(device)),
         }
-    }
-}
-
-/// Host control-transfer buffer. The controller DMAs through it, so it must
-/// keep a stable address.
-#[repr(align(64))]
-struct HostBuffer(UnsafeCell<[u8; 512]>);
-
-// Safety: only the host initialization hands the address to the controller.
-unsafe impl Sync for HostBuffer {}
-
-impl HostBuffer {
-    const fn new() -> Self {
-        Self(UnsafeCell::new([0; 512]))
-    }
-
-    fn as_ptr(&self) -> *mut u8 {
-        self.0.get().cast()
     }
 }
 
@@ -265,9 +244,6 @@ unsafe fn init_host<T: Instance>() {
     h.uh_tx_ctrl().write(|_| {});
     h.status().write(|w| w.set_uif_transfer(true));
 
-    let buf = T::state().host_buf.as_ptr() as u32;
-    h.uh_tx_dma().write(|w| w.set_uh_tx_dma(buf));
-    h.uh_rx_dma().write(|w| w.set_uh_rx_dma(buf));
     // The endpoint enable registers live in the device view at the same
     // offsets 0x80/0x82; host mode drives them too.
     d.uep_tx_en().write(|w| w.set_ep_tx_en(0, true));

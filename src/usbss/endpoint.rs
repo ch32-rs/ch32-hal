@@ -4,7 +4,7 @@ use core::task::Poll;
 
 use embassy_usb_driver::{EndpointError, EndpointInfo, Unsupported};
 
-use super::device::{dma_capable, slot, state, Buffer, Bus, Phase, Transfer};
+use super::device::{dma_capable, slot, state, Bus, Phase, Transfer};
 use super::Instance;
 use crate::internal::drop::OnDrop;
 
@@ -15,23 +15,18 @@ const IN_ABORT_SETTLE_US: u32 = 100;
 
 /// A data endpoint.
 ///
-/// Transfers DMA straight to or from the caller's buffer when it is 4-byte
-/// aligned and inside the controller's DMA range; otherwise they are copied
-/// through the endpoint memory one burst at a time. Dropping a transfer future
-/// aborts the transfer and loses the data in flight; for an IN transfer the
-/// drop blocks for 100 us.
+/// Transfers DMA straight to or from the caller's buffer. Dropping a transfer
+/// future aborts the transfer and loses the data in flight; for an IN transfer
+/// the drop blocks for 100 us.
 pub struct Endpoint<'d, T: Instance, const IN: bool> {
     info: EndpointInfo,
-    /// This endpoint's piece of the endpoint memory.
-    buffer: Buffer,
     _lifetime: PhantomData<&'d mut T>,
 }
 
 impl<'d, T: Instance, const IN: bool> Endpoint<'d, T, IN> {
-    pub(super) fn new(info: EndpointInfo, buffer: Buffer) -> Self {
+    pub(super) fn new(info: EndpointInfo) -> Self {
         Self {
             info,
-            buffer,
             _lifetime: PhantomData,
         }
     }
@@ -135,33 +130,12 @@ impl<T: Instance> Endpoint<'_, T, false> {
     /// if `single`.
     async fn receive(&mut self, buffer: &mut [u8], single: bool) -> Result<usize, EndpointError> {
         let mps = self.max_packet_size();
-        let mut total = 0;
-        loop {
-            let rest = &mut buffer[total..];
-            // Only whole packets go straight to `buffer`; a shorter tail could
-            // be overrun.
-            let direct = dma_capable(rest) && rest.len() >= mps;
-            let (address, room) = if direct {
-                (rest.as_ptr() as usize, rest.len() / mps * mps)
-            } else {
-                (
-                    self.buffer.address,
-                    rest.len().next_multiple_of(mps).clamp(mps, self.buffer.size),
-                )
-            };
-            let room = if single { mps } else { room };
-            let received = self.run(address, room, false).await?;
-            if !direct {
-                if received > rest.len() {
-                    return Err(EndpointError::BufferOverflow);
-                }
-                unsafe { self.buffer.read(&mut rest[..received]) };
-            }
-            total += received;
-            if single || received < room || total == buffer.len() {
-                return Ok(total);
-            }
+        let length = if single { mps } else { buffer.len() };
+        // The controller writes whole packets.
+        if length > buffer.len() || length % mps != 0 || !dma_capable(&buffer[..length]) {
+            return Err(EndpointError::BufferOverflow);
         }
+        self.run(buffer.as_ptr() as usize, length, false).await
     }
 }
 
@@ -178,17 +152,13 @@ impl<T: Instance> embassy_usb_driver::EndpointOut for Endpoint<'_, T, false> {
 impl<T: Instance> Endpoint<'_, T, true> {
     /// Sends `buffer`, then a ZLP if `zlp`.
     async fn send(&mut self, buffer: &[u8], zlp: bool) -> Result<(), EndpointError> {
-        if dma_capable(buffer) {
-            self.run(buffer.as_ptr() as usize, buffer.len(), zlp).await?;
+        if buffer.is_empty() && !zlp {
             return Ok(());
         }
-        for chunk in buffer.chunks(self.buffer.size) {
-            unsafe { self.buffer.write(chunk) };
-            self.run(self.buffer.address, chunk.len(), false).await?;
+        if !buffer.is_empty() && !dma_capable(buffer) {
+            return Err(EndpointError::BufferOverflow);
         }
-        if zlp {
-            self.run(self.buffer.address, 0, false).await?;
-        }
+        self.run(buffer.as_ptr() as usize, buffer.len(), zlp).await?;
         Ok(())
     }
 }

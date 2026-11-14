@@ -55,11 +55,9 @@ pub enum Error {
     BufferTooSmall,
 }
 
-/// A piece of the endpoint memory.
 #[derive(Clone, Copy)]
 pub(super) struct Buffer {
     pub address: usize,
-    pub size: usize,
 }
 
 impl Buffer {
@@ -72,13 +70,6 @@ impl Buffer {
         core::ptr::copy_nonoverlapping(source.as_ptr(), self.address as *mut u8, source.len());
         fence(Ordering::Release);
     }
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct EndpointConfig {
-    pub info: EndpointInfo,
-    /// For transfers the controller can't DMA directly.
-    pub buffer: Buffer,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -111,7 +102,7 @@ impl Transfer {
 
 #[derive(Clone, Copy)]
 pub(super) struct EndpointState {
-    pub config: Option<EndpointConfig>,
+    pub config: Option<EndpointInfo>,
     pub enabled: bool,
     pub stalled: bool,
     pub phase: Phase,
@@ -142,21 +133,22 @@ impl EndpointState {
         self.phase = Phase::Idle;
     }
 
-    /// Hands the next chain of the transfer to the controller.
-    pub fn queue(&mut self, regs: Regs) {
-        let config = self.config.unwrap();
-        let index = config.info.addr.index();
-        let mps = usize::from(config.info.max_packet_size);
+    /// Arms the next chain. A ZLP chain points at `ep0`, a valid DMA address
+    /// the controller reads nothing from.
+    pub fn queue(&mut self, regs: Regs, ep0: usize) {
+        let info = self.config.unwrap();
+        let index = info.addr.index();
+        let mps = usize::from(info.max_packet_size);
         let transfer = &mut self.transfer;
         let packets = transfer.chain_packets(mps);
         let remaining = transfer.length - transfer.progress;
         let address = (transfer.address + transfer.progress) as u32;
-        if config.info.addr.is_in() {
+        if info.addr.is_in() {
             let bytes = remaining.min(packets * mps);
             let tx = regs.tx(index);
             if bytes == 0 {
                 transfer.zlp = false;
-                tx.dma().write_value(config.buffer.address as u32);
+                tx.dma().write_value(ep0 as u32);
             } else {
                 tx.dma().write_value(address);
             }
@@ -213,10 +205,7 @@ impl State {
             inner: Mutex::new(RefCell::new(Inner {
                 regs,
                 endpoints: [EndpointState::new(); SLOTS],
-                ep0: Buffer {
-                    address: 0,
-                    size: EP0_SIZE,
-                },
+                ep0: Buffer { address: 0 },
                 powered: false,
                 suspended: false,
                 events: 0,
@@ -270,10 +259,10 @@ fn dma_range(address: usize, length: usize) -> bool {
     address >= RAM_START && address.checked_add(length).is_some_and(|end| end <= RAM_END)
 }
 
-/// Whether the controller can DMA straight to or from `buffer`.
+/// Whether the controller can DMA straight to or from `buffer`. Any byte
+/// alignment works.
 pub(super) fn dma_capable(buffer: &[u8]) -> bool {
-    let address = buffer.as_ptr() as usize;
-    !buffer.is_empty() && address % 4 == 0 && dma_range(address, buffer.len())
+    !buffer.is_empty() && dma_range(buffer.as_ptr() as usize, buffer.len())
 }
 
 /// Silicon revision, `CHIP_ID[7:4]`.
@@ -285,39 +274,31 @@ fn revision() -> u8 {
 
 pub struct Driver<'d, T: Instance> {
     peri: Peri<'d, T>,
-    memory: usize,
-    capacity: usize,
-    used: usize,
-    endpoints: [Option<EndpointConfig>; SLOTS],
+    ep0: usize,
+    endpoints: [Option<EndpointInfo>; SLOTS],
 }
 
 impl<'d, T: Instance> Driver<'d, T> {
-    /// `endpoint_memory` holds 512 bytes for EP0 plus one burst per endpoint,
-    /// used when a transfer buffer is outside the controller's DMA range
-    /// (`0x200A_0000..0x2018_0000`) or not 4-byte aligned. A burst is
-    /// `max_burst + 1` packets of a bulk endpoint, with the `max_burst` of its
-    /// `EndpointOptions`, and one packet of any other endpoint.
+    /// `ep0_memory` needs to be 512 bytes aligned to 4 bytes, inside the
+    /// controller's DMA range `0x200A_0000..0x2018_0000`.
     pub fn new(
         peri: Peri<'d, T>,
         _irqs: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>
             + interrupt::typelevel::Binding<T::LinkInterrupt, LinkInterruptHandler<T>>
             + 'd,
-        endpoint_memory: &'d mut [u8],
+        ep0_memory: &'d mut [u8],
     ) -> Result<Self, Error> {
-        let address = endpoint_memory.as_mut_ptr() as usize;
-        if !dma_range(address, endpoint_memory.len()) {
+        let address = ep0_memory.as_mut_ptr() as usize;
+        if !dma_range(address, ep0_memory.len()) {
             return Err(Error::InvalidMemory);
         }
         let aligned = (address + 3) & !3;
-        let capacity = endpoint_memory.len().saturating_sub(aligned - address);
-        if capacity < EP0_SIZE {
+        if ep0_memory.len().saturating_sub(aligned - address) < EP0_SIZE {
             return Err(Error::BufferTooSmall);
         }
         Ok(Self {
             peri,
-            memory: aligned,
-            capacity,
-            used: EP0_SIZE,
+            ep0: aligned,
             endpoints: [None; SLOTS],
         })
     }
@@ -351,11 +332,6 @@ impl<'d, T: Instance> Driver<'d, T> {
                 requested.is_none_or(|address| address.index() == *index) && self.endpoints[slot(*index, IN)].is_none()
             })
             .ok_or(EndpointAllocError)?;
-        let size = usize::from(max_packet_size) * (usize::from(max_burst) + 1);
-        let start = (self.used + 3) & !3;
-        if start + size > self.capacity {
-            return Err(EndpointAllocError);
-        }
         let info = EndpointInfo {
             addr: EndpointAddress::from_parts(index, direction),
             ep_type,
@@ -363,13 +339,8 @@ impl<'d, T: Instance> Driver<'d, T> {
             interval_ms,
             max_burst,
         };
-        let buffer = Buffer {
-            address: self.memory + start,
-            size,
-        };
-        self.endpoints[slot(index, IN)] = Some(EndpointConfig { info, buffer });
-        self.used = start + size;
-        Ok(Endpoint::new(info, buffer))
+        self.endpoints[slot(index, IN)] = Some(info);
+        Ok(Endpoint::new(info))
     }
 }
 
@@ -405,7 +376,7 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
                 state.reset(false);
                 state.config = config;
             }
-            inner.ep0.address = self.memory;
+            inner.ep0.address = self.ep0;
             inner.powered = false;
             inner.events = POWER;
             inner.setup = None;
@@ -471,7 +442,7 @@ impl<T: Instance> Bus<'_, T> {
 
     /// Runs `f` on a data endpoint of the powered controller, then wakes its
     /// task.
-    fn with_endpoint(address: EndpointAddress, f: impl FnOnce(Regs, &mut EndpointState, EndpointConfig)) {
+    fn with_endpoint(address: EndpointAddress, f: impl FnOnce(Regs, &mut EndpointState, EndpointInfo)) {
         if address.index() == 0 || address.index() >= ENDPOINTS {
             return;
         }
@@ -560,7 +531,7 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
             endpoint.reset(enabled);
             regs.set_enabled(index, incoming, false);
             if enabled {
-                let iso = config.info.ep_type == EndpointType::Isochronous;
+                let iso = config.ep_type == EndpointType::Isochronous;
                 regs.configure(index, incoming, iso);
                 regs.set_enabled(index, incoming, true);
             } else {
@@ -605,7 +576,7 @@ impl Inner {
                 self.regs.set_out_window(index, window);
             }
         }
-        self.endpoints[slot].queue(self.regs);
+        self.endpoints[slot].queue(self.regs, self.ep0.address);
     }
 
     /// A reset supersedes pending suspend/resume events, and a suspend and
@@ -830,7 +801,7 @@ impl Inner {
 
     /// A chain ended: starts the transfer's next one or completes it.
     fn data_irq(&mut self, index: usize, incoming: bool) {
-        let r = self.regs;
+        let (r, ep0) = (self.regs, self.ep0.address);
         let (packets, last) = if incoming {
             r.tx(index).chain_st().write(|w| w.set_chain_if(true));
             (0, 0)
@@ -846,7 +817,7 @@ impl Inner {
         let Some(config) = endpoint.config.filter(|_| endpoint.phase == Phase::Busy) else {
             return;
         };
-        let mps = usize::from(config.info.max_packet_size);
+        let mps = usize::from(config.max_packet_size);
         let transfer = &mut endpoint.transfer;
         let more = if incoming {
             transfer.progress < transfer.length || transfer.zlp
@@ -859,7 +830,7 @@ impl Inner {
             last >= mps && transfer.progress < transfer.length
         };
         if more {
-            endpoint.queue(r);
+            endpoint.queue(r, ep0);
             if !incoming {
                 r.set_out_window(index, self.out_window());
             }
