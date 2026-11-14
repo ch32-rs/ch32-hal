@@ -7,7 +7,8 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_usb_driver::{
-    Direction, EndpointAddress, EndpointAllocError, EndpointInfo, EndpointType, Event, Unsupported,
+    Direction, EndpointAddress, EndpointAllocError, EndpointInfo, EndpointType, Event, SuperSpeedEndpointCompanionInfo,
+    Unsupported,
 };
 
 use super::control::ControlPipe;
@@ -337,7 +338,12 @@ impl<'d, T: Instance> Driver<'d, T> {
             ep_type,
             max_packet_size,
             interval_ms,
-            max_burst,
+            companion: Some(SuperSpeedEndpointCompanionInfo {
+                max_burst,
+                max_streams: 0,
+                mult: 0,
+                bytes_per_interval: config.bytes_per_interval,
+            }),
         };
         self.endpoints[slot(index, IN)] = Some(info);
         Ok(Endpoint::new(info))

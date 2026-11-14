@@ -1036,7 +1036,7 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> Driver<'d, T, NR_EP
                 ep_type,
                 max_packet_size,
                 interval_ms,
-                max_burst: 0,
+                companion: None,
             },
             data,
         ))
@@ -1158,7 +1158,7 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
                 ep_type: EndpointType::Control,
                 max_packet_size: EP_MAX_PACKET_SIZE,
                 interval_ms: 0,
-                max_burst: 0,
+                companion: None,
             },
             ep0_buf,
         );

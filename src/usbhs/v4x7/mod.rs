@@ -314,7 +314,7 @@ impl<'d, T: Instance> Driver<'d, T> {
             ep_type,
             max_packet_size,
             interval_ms,
-            max_burst: 0,
+            companion: None,
         };
         self.endpoints[slot(index, IN)] = Some(EndpointConfig {
             info,
@@ -360,7 +360,7 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
                     ep_type: EndpointType::Control,
                     max_packet_size: control_max_packet_size,
                     interval_ms: 0,
-                    max_burst: 0,
+                    companion: None,
                 },
                 buffer: Buffer {
                     address: self.memory,
