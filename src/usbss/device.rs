@@ -1,6 +1,6 @@
 use core::cell::RefCell;
 use core::future::poll_fn;
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::Ordering;
 use core::task::Poll;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -13,10 +13,11 @@ use embassy_usb_driver::{
 
 use super::control::ControlPipe;
 use super::endpoint::Endpoint;
-use super::regs::{Regs, LINK_HOT_RESET};
+use super::regs::{Regs, Role};
 use super::{
-    delay_cycles, init_clocks, Instance, InterruptHandler, LinkInterruptHandler, LinkState, LMP_PORT_CAP, LMP_PORT_CFG,
-    LMP_PORT_CFG_RES, LMP_SET_LINK_FUNC, LMP_SUBTYPE_MASK, LMP_U2_INACT_TOUT, MODE_DEVICE,
+    delay_cycles, dma_memory, enable_interrupts, init_clocks, Buffer, Error, Instance, InterruptHandler,
+    LinkInterruptHandler, LinkState, EP0_SIZE, LMP_PORT_CAP, LMP_PORT_CFG, LMP_PORT_CFG_RES, LMP_SET_LINK_FUNC,
+    LMP_SUBTYPE_MASK, LMP_U2_INACT_TOUT, MODE_DEVICE,
 };
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::usbss::regs;
@@ -25,7 +26,6 @@ use crate::{interrupt, pac, Peri};
 
 pub(super) const ENDPOINTS: usize = 8;
 const SLOTS: usize = ENDPOINTS * 2;
-pub(super) const EP0_SIZE: usize = 512;
 
 /// Most packets in one chain; the count registers are 8 bits wide. A chain
 /// longer than a burst keeps the endpoint out of flow control in between.
@@ -48,30 +48,6 @@ const RESET: u8 = 1;
 const SUSPEND: u8 = 2;
 const RESUME: u8 = 4;
 const POWER: u8 = 8;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum Error {
-    InvalidMemory,
-    BufferTooSmall,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct Buffer {
-    pub address: usize,
-}
-
-impl Buffer {
-    pub unsafe fn read(self, target: &mut [u8]) {
-        fence(Ordering::Acquire);
-        core::ptr::copy_nonoverlapping(self.address as *const u8, target.as_mut_ptr(), target.len());
-    }
-
-    pub unsafe fn write(self, source: &[u8]) {
-        core::ptr::copy_nonoverlapping(source.as_ptr(), self.address as *mut u8, source.len());
-        fence(Ordering::Release);
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Phase {
@@ -253,19 +229,6 @@ fn packet_size_valid(kind: EndpointType, size: u16, interval: u8) -> bool {
     }
 }
 
-/// ITCM at `0x200A_0000` through the end of the shared SRAM.
-fn dma_range(address: usize, length: usize) -> bool {
-    const RAM_START: usize = 0x200A_0000;
-    const RAM_END: usize = 0x2018_0000;
-    address >= RAM_START && address.checked_add(length).is_some_and(|end| end <= RAM_END)
-}
-
-/// Whether the controller can DMA straight to or from `buffer`. Any byte
-/// alignment works.
-pub(super) fn dma_capable(buffer: &[u8]) -> bool {
-    !buffer.is_empty() && dma_range(buffer.as_ptr() as usize, buffer.len())
-}
-
 /// Silicon revision, `CHIP_ID[7:4]`.
 fn revision() -> u8 {
     // Undocumented: the vendor code reads flash before ESIG.
@@ -289,17 +252,9 @@ impl<'d, T: Instance> Driver<'d, T> {
             + 'd,
         ep0_memory: &'d mut [u8],
     ) -> Result<Self, Error> {
-        let address = ep0_memory.as_mut_ptr() as usize;
-        if !dma_range(address, ep0_memory.len()) {
-            return Err(Error::InvalidMemory);
-        }
-        let aligned = (address + 3) & !3;
-        if ep0_memory.len().saturating_sub(aligned - address) < EP0_SIZE {
-            return Err(Error::BufferTooSmall);
-        }
         Ok(Self {
             peri,
-            ep0: aligned,
+            ep0: dma_memory(ep0_memory, EP0_SIZE)?,
             endpoints: [None; SLOTS],
         })
     }
@@ -410,16 +365,13 @@ impl<T: Instance> Bus<'_, T> {
             T::state().mode.store(MODE_DEVICE, Ordering::Relaxed);
             inner.revision = revision();
             unsafe { init_clocks::<T>() };
-            inner.regs.init(inner.revision);
+            inner.regs.init(Role::Device {
+                revision: inner.revision,
+            });
             inner.powered = true;
             inner.bus_reset();
             inner.reset_seen = false;
-            T::Interrupt::unpend();
-            T::LinkInterrupt::unpend();
-            unsafe {
-                T::Interrupt::enable();
-                T::LinkInterrupt::enable();
-            }
+            unsafe { enable_interrupts::<T>() };
         });
         state::<T>().wake(true, !0);
     }
@@ -681,8 +633,7 @@ impl Inner {
                 }
                 LinkState::HOTRST => {
                     self.link_reset();
-                    r.link_ctrl()
-                        .modify(|w| w.set_link_tx_ts_cfg(w.link_tx_ts_cfg() & !LINK_HOT_RESET));
+                    r.end_hot_reset();
                 }
                 _ => {}
             }
@@ -709,7 +660,7 @@ impl Inner {
             match data0 & LMP_SUBTYPE_MASK {
                 LMP_PORT_CAP => r.tx_port_cap(),
                 LMP_PORT_CFG => r.tx_port_cfg_res(),
-                LMP_PORT_CFG_RES => r.link_lmp_port_cap().modify(|w| w.set_link_lmp_tx_cap_vld(true)),
+                LMP_PORT_CFG_RES => r.port_configured(),
                 LMP_U2_INACT_TOUT => r
                     .link_u2_inact_timer()
                     .write(|w| w.set_u2_inactive_timer((data0 >> 9) as u8)),
@@ -721,8 +672,7 @@ impl Inner {
 
         if flags.link_if_rx_lmp_tout() {
             r.link_int_flag().write(|w| w.set_link_if_rx_lmp_tout(true));
-            r.link_ctrl().modify(|w| w.set_link_go_disabled(true));
-            r.link_ctrl().modify(|w| w.set_link_go_rx_det(true));
+            r.redetect();
             return false;
         }
 

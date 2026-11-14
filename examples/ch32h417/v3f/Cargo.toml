@@ -137,11 +137,6 @@ path = "src/bin/usbfs_cdc.rs"
 required-features = ["usb"]
 
 [[bin]]
-name = "usbss_host_link_check"
-path = "src/bin/usbss_host_link_check.rs"
-required-features = ["embassy"]
-
-[[bin]]
 name = "usbss_cdc"
 path = "src/bin/usbss_cdc.rs"
 required-features = ["usb"]

@@ -4,8 +4,8 @@ use core::task::Poll;
 
 use embassy_usb_driver::EndpointError;
 
-use super::device::{slot, state, Inner, Phase, EP0_SIZE};
-use super::Instance;
+use super::device::{slot, state, Inner, Phase};
+use super::{Instance, EP0_SIZE};
 
 /// EP0 in SETUP flow mode: the controller answers the host with NRDY until
 /// the next stage is armed, then sends ERDY.

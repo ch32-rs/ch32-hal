@@ -4,8 +4,8 @@ use core::task::Poll;
 
 use embassy_usb_driver::{EndpointError, EndpointInfo, Unsupported};
 
-use super::device::{dma_capable, slot, state, Bus, Phase, Transfer};
-use super::Instance;
+use super::device::{slot, state, Bus, Phase, Transfer};
+use super::{dma_capable, Instance};
 use crate::internal::drop::OnDrop;
 
 /// How long a cancelled IN transfer keeps its endpoint unused. A chain armed
