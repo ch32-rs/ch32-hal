@@ -25,8 +25,26 @@ register (`PFIC_WAKEIP1`), so examples come in exactly two shapes, which
 
 | Kind | Files | Examples |
 |---|---|---|
-| **v3f-only** | `v3f/src/bin/NAME.rs` | `adc_check`, `blinky`, `bme280_blocking`, `bus_check`, `can_async_check`, `can_check`, `dac_check`, `delay_systick`, `dma2_check`, `dma_m2m`, `embassy_systick`, `esig_check`, `exti_check`, `flash_check`, `i2c_scan`, `launcher`, `rcc_delay_check`, `rng_check`, `rtc_check`, `rtc_hse_check`, `sdi_print`, `sdio_check`, `sdio_exfat`, `sdio_fat`, `spi_check`, `timer_check` |
+| **v3f-only** | `v3f/src/bin/NAME.rs` | `adc_check`, `blinky`, `bme280_blocking`, `bus_check`, `can_async_check`, `can_check`, `dac_check`, `delay_systick`, `dma2_check`, `dma_m2m`, `embassy_systick`, `esig_check`, `exti_check`, `flash_check`, `i2c_scan`, `launcher`, `pioc_text`, `pioc_ws2812`, `rcc_delay_check`, `rng_check`, `rtc_check`, `rtc_hse_check`, `sdi_print`, `sdio_check`, `sdio_exfat`, `sdio_fat`, `spi_check`, `timer_check` |
 | **dual-core** | both `src/bin/NAME.rs` | `atomics`, `bme280`, `cpuid`, `dualcore`, `hello`, `pingpong`, `sdi_cpuid` |
+
+## PIOC examples
+
+`pioc_ws2812` and `pioc_text` drive an 8x8 WS2812 panel from WCH's RGB1W
+firmware, which runs inside the PIOC instead of the RISC-V core. Neither builds
+without `--features embassy`, and both need the HAL's manual `pioc` feature,
+which the crate already enables.
+
+- The panel accepts IO0 on four pins. `pioc-io0-pe3` is the default here because
+  it is a 3.3 V pad and is routed out on the boards at hand; `pioc-io0-pf12` is
+  a trap, since PF11-PF14 sit in the VIO18 domain and only swing 1.8 V.
+- `v3f/src/panel.rs` holds the chain layout (`RowZigzag`, mirrored) and the
+  colour wheel both examples share. A wrong layout mirrors or shuffles the
+  picture, and only an asymmetric test image such as text shows it.
+- `firmware/rgb1w-100m.pio` is `EXAM/PIOC/PIOC_1_Wire/Common/Asm/RGB1W.ASM`
+  translated to the canonical dialect; assembling it reproduces the vendor
+  `RGB1W.BIN` byte for byte. The delay loops are `nop` padding, so the image is
+  tied to the 100 MHz PIOC clock the panel is driven at here.
 
 In a dual-core example the V3F half brings the chip up (clocks, GPIO),
 hands over to hart 1, and reports. The V5F half depends on `ch32-hal` but never

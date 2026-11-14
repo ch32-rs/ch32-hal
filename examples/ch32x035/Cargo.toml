@@ -11,7 +11,13 @@ ch32-hal = { path = "../../", features = [
     "rt",
     "time-driver-tim2",
     "soft-i2c",
+    # The PIOC host driver; manual, like every other chip.
+    "pioc",
 ] }
+
+# Assembles the canonical RGB1W source at compile time.
+pioc-proc = "0.1.0"
+pioc-programs = "0.1.0"
 embassy-executor = { version = "0.10.0", features = [
     "platform-spin",
     "executor-thread",

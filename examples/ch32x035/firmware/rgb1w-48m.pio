@@ -1,0 +1,731 @@
+.program rgb1w
+
+; 2022.11.23, RGB1W+DS1W 1-wire
+
+
+; EXTERNAL
+    .alias var_size_l = d0
+    .alias var_size_h = d1
+    .alias var_data_l = d0
+    .alias var_data_h = d1
+    .alias var_flag = d2
+; INTERNAL
+    .alias var_addr_l = d30
+    .alias var_addr_h = d31
+
+; RESET VECTOR
+    .origin 0x0000
+    .word 0x0000    ; RESERVED INFO
+    .word 0x0000    ; RESERVED ID
+
+mcu_start:
+    nop
+    nop
+    jmp wait_command
+
+    .origin 0x0008
+
+; HIGH/LOW DELAY HALF BIT, 28 CYCLES @48M, 14 CYCLES @24M
+rgb1w_dly_half:
+    nop
+rgb1w_dly_half_b0:
+    call rgb1w_dly_1l
+; CALL  RGB1W_DLY_1L
+; RET
+; 1167nS,0x38(56)@48MHz,0x1C(28)@24MHz
+; LOW DELAY FOR 1, 14-3 CYCLES @48M, 7-3 CYCLES @24M
+rgb1w_dly_1l:
+    nop
+; HIGH DELAY FOR 0, 14-4 CYCLES @48M, 7-4 CYCLES @24M
+rgb1w_dly_0h:
+    nop
+pioc_freq_cfg:
+    nop    ; FORCE RET IF 24MHz
+; LOW DELAY FOR 1 OF BIT0, 14-3-3 CYCLES @48M, 7-3-3 CYCLES @24M
+rgb1w_dly_1l_b0:
+    nop    ; FORCE RET IF 24MHz
+    nop
+    nop
+    nop
+    nop
+    nop
+    ret
+
+    nop
+    nop
+
+; SFR_CTRL_WR: COMMAND
+; 01H-20H: RGB WITH SHORT DATA IN SFR, LOW 7 BIT IS TOTAL BYTE
+; 88H-FCH: RGB WITH LONG DATA IN CODE RAM, LOW 7 BIT IS NEW SB_BIT_CYCLE
+; 41H: DS1W START CONVERT
+; 42H: DS1W GET TEMPERATURE
+; 43H: DS1W START CONVERT THEN GET TEMPERATURE
+
+wait_command:
+    skip set,sys.ctrl.core_to_host_pending    ; WAIT MASTER ACK
+    bclr sys.irq_request    ; CANCEL INTERRUPT IF ACK
+    skip set,sys.ctrl.host_to_core_pending    ; NEW COMMAND
+    jmp wait_command    ; WAIT COMMAND
+    bclr sys.irq_request    ; CANCEL INTERRUPT
+    mov a,cmd.in    ; COMMAND CODE
+    mov ptr1,a
+    jmp a == #0x41,ds1w_convert
+    jmp a == #0x42,ds1w_get_data
+    jmp a == #0x43,ds1w_conv_get
+    jmp a == #0x00,cmd_unknown    ; UNKNOWN COMMAND
+    flags.sub #0x20,a
+    jmp nc,rgb1w_short    ; SHORT DATA IN SFR IF <=0X20
+    flags.sub #0x60,a
+    jmp nc,rgb1w_short_1    ; SHORT DATA IN SFR IF <=0X60
+    flags.sub #0x88-1,a
+    jmp nc,cmd_unknown    ; UNKNOWN COMMAND IF <=0X87
+    flags.sub #0xfc,a
+    jmp nc,rgb1w_long    ; LONG DATA IN CODE RAM IF <=0XFC
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+cmd_unknown:
+    mov a,#0x01    ; ERROR CODE FOR UNKNOWN COMMAND
+    jmp cmd_return
+
+ds1w_convert:
+    nop
+    call start_temperat
+    jmp cmd_return
+
+ds1w_conv_get:
+    nop
+    call start_temperat
+    jmp nz,cmd_return    ; FAILED
+    mov ptr1,#75    ; 750mS
+ds1w_wait_10ms:
+    mov ptr0,#40    ; 40*250=10mS
+ds1w_wait_250us:
+    call delay_250us    ; 250uS
+    dec ptr0
+    jmp nz,ds1w_wait_250us
+    dec ptr1
+    jmp nz,ds1w_wait_10ms
+; JMP   DS1W_GET_DATA
+
+ds1w_get_data:
+    nop
+    call read_temperat
+    jmp cmd_return
+
+; RGB WITH SHORT DATA IN SFR, SOFTWARE ENCODE
+rgb1w_short:
+    nop
+    clr codec.period
+    bclr pins.out0    ; DEFAULT OUTPUT LOW
+    bset pins.dir0
+    clr codec.ctrl
+    mov a,#0x06    ; ERROR CODE FOR PIN RX HIGH
+    skip clear,pins.in0    ; PIN LOW
+    jmp cmd_return    ; PIN HIGH
+    mov a,ptr1
+    mov ptr0,a    ; TOTAL BYTE
+    mov ptr1,#sfr_data_reg0    ; DATA BUFFER START ADDRESS
+    nop
+rgb1w_byte_nx:
+    bset pins.out0    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][7]    ; BIT SFR_INDIR_PORT2.7
+    bclr pins.out0    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out0    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out0    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][6]    ; BIT SFR_INDIR_PORT2.6
+    bclr pins.out0    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out0    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out0    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][5]    ; BIT SFR_INDIR_PORT2.5
+    bclr pins.out0    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out0    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out0    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][4]    ; BIT SFR_INDIR_PORT2.4
+    bclr pins.out0    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out0    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out0    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][3]    ; BIT SFR_INDIR_PORT2.3
+    bclr pins.out0    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out0    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out0    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][2]    ; BIT SFR_INDIR_PORT2.2
+    bclr pins.out0    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out0    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out0    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][1]    ; BIT SFR_INDIR_PORT2.1
+    bclr pins.out0    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out0    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out0    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][0]    ; BIT SFR_INDIR_PORT2.0
+    bclr pins.out0    ; BIT0
+    call rgb1w_dly_half_b0    ; APPEND 584n FOR HIGH/LOW
+    mov a,[ptr1+]    ; INCREASE ADDRESS
+    bclr pins.out0    ; FALL EDGE
+    call rgb1w_dly_1l_b0    ; LOW 292n IF 1
+
+    dec ptr0
+    jmp nz,rgb1w_byte_nx    ; NEXT BYTE
+rgb1w_load:
+    mov a,#30
+    call delay_us    ; OUTPUT LOW 286US
+; MOVL  0
+    call delay_us
+    clr a    ; SUCCESS CODE
+    skip clear,pins.in0
+    mov a,#0x04    ; ERROR CODE IF PIN HIGH
+cmd_return:
+    mov cmd.out,a    ; RETURN RESULT
+    bset sys.irq_request    ; REQUEST INTERRUPT
+    jmp wait_command
+rgb1w_end:
+    mov a,#0x02    ; ERROR CODE IF PARAMETER ERROR
+    jmp cmd_return
+
+; RGB WITH SHORT DATA IN SFR, SOFTWARE ENCODE
+rgb1w_short_1:
+    nop
+    bclr ptr1[6]
+    clr codec.period
+    bclr pins.out1    ; DEFAULT OUTPUT LOW
+    bset pins.dir1
+    clr codec.ctrl
+    mov a,#0x06    ; ERROR CODE FOR PIN RX HIGH
+    skip clear,pins.in1    ; PIN LOW
+    jmp cmd_return    ; PIN HIGH
+    mov a,ptr1
+    mov ptr0,a    ; TOTAL BYTE
+    mov ptr1,#sfr_data_reg0    ; DATA BUFFER START ADDRESS
+    nop
+rgb1w_byte_nx_1:
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][7]    ; BIT SFR_INDIR_PORT2.7
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][6]    ; BIT SFR_INDIR_PORT2.6
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][5]    ; BIT SFR_INDIR_PORT2.5
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][4]    ; BIT SFR_INDIR_PORT2.4
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][3]    ; BIT SFR_INDIR_PORT2.3
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][2]    ; BIT SFR_INDIR_PORT2.2
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][1]    ; BIT SFR_INDIR_PORT2.1
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,[ptr1][0]    ; BIT SFR_INDIR_PORT2.0
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half_b0    ; APPEND 584n FOR HIGH/LOW
+    mov a,[ptr1+]    ; INCREASE ADDRESS
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l_b0    ; LOW 292n IF 1
+
+    dec ptr0
+    jmp nz,rgb1w_byte_nx_1    ; NEXT BYTE
+rgb1w_load_1:
+    mov a,#30
+    call delay_us    ; OUTPUT LOW 286US
+; MOVL  0
+    call delay_us
+    clr a    ; SUCCESS CODE
+    skip clear,pins.in1
+    mov a,#0x04    ; ERROR CODE IF PIN HIGH
+    jmp cmd_return
+
+; RGB WITH LONG DATA IN CODE RAM, USE PWM DUTY ENCODE
+rgb1w_long:
+    nop
+    skip clear,var_flag[0]
+    jmp rgb1w_long_1
+    clr codec.period
+    bclr pins.out0    ; DEFAULT OUTPUT LOW
+    mov a,#0x80
+    mov codec.ctrl,a    ; SB_BIT_TX_EN
+; BS    SFR_BIT_CONFIG,SB_BIT_TX_EN	;ENABLE TX
+    mov a,var_size_l
+    or a,var_size_h
+    jmp z,rgb1w_end    ; DATA SIZE IS ZERO
+; BTSS  SFR_PORT_IO,SB_PORT_OUT0	;PIN HIGH
+; JMP   RGB1W_PIN_LOW		;PIN LOW
+; BS    SFR_BIT_CYCLE,6	;FORCE COUNT
+; NOP
+; CLR   SFR_BIT_CYCLE
+; BC    SFR_PORT_IO,SB_PORT_OUT0	;DEFAULT OUTPUT LOW
+; BS    SFR_PORT_DIR,SB_PORT_DIR0
+; CALL  DELAY_65US		;OUTPUT LOW 321US
+; MOVL  0
+; CALL  DELAY_US
+; MOVL  0X05				;ERROR CODE FOR PIN TX HIGH
+; BTSC  SFR_PORT_IO,SB_PORT_OUT0	;PIN LOW
+; JMP   CMD_RETURN		;PIN HIGH
+rgb1w_pin_low:
+    bset pins.dir0
+    bclr ptr1[7]    ; LOW 7 BIT IS NEW SB_BIT_CYCLE
+    clr var_addr_l
+    clr ptr0
+    mov a,#0x06    ; ERROR CODE FOR PIN RX HIGH
+    skip clear,pins.in0    ; PIN LOW
+    jmp cmd_return    ; PIN HIGH
+    mov a,#0x02
+    mov var_addr_h,a    ; DATA BUFFER START ADDRESS
+    code.read    ; GET FIRST WORD
+    mov xchg,a    ; LOW BYTE
+    and a,#0x80    ; FIRST BIT
+    or a,ptr1    ; 1167nS,0x38(56)@48MHz,0x1C(28)@24MHz
+    nop
+    mov codec.period,a    ; SB_BIT_TX_O0=SFR_DATA_EXCH.7...
+; BP2F  BO_BIT_TX_O0,7	;SB_BIT_TX_O0=SFR_DATA_EXCH.7...
+rgb1w_word_next:
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    mov codec.tx_bit,xchg[6]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.6...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    mov codec.tx_bit,xchg[5]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.5...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    mov codec.tx_bit,xchg[4]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.4...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    mov codec.tx_bit,xchg[3]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.3...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    mov codec.tx_bit,xchg[2]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.2...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    dec var_size_l
+    inc a,var_size_l
+    skip clear,status.zero
+    dec var_size_h    ; CARRY IF LOW BYTE IS 0XFF
+    mov codec.tx_bit,xchg[1]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.1...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    mov a,var_size_l
+    or a,var_size_h
+    jmp z,rgb1w_bit_last    ; FINISH AFTER LAST BIT
+    mov codec.tx_bit,xchg[0]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.0...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+; HIGH BYTE
+    mov a,ptr0
+    mov xchg,a    ; HIGH BYTE
+    mov codec.tx_bit,xchg[7]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.7...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    mov codec.tx_bit,xchg[6]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.6...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    mov codec.tx_bit,xchg[5]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.5...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    mov codec.tx_bit,xchg[4]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.4...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    dec var_size_l
+    inc a,var_size_l
+    skip clear,status.zero
+    dec var_size_h    ; CARRY IF LOW BYTE IS 0XFF
+    mov codec.tx_bit,xchg[3]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.3...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    inc var_addr_l
+    skip clear,status.zero
+    inc var_addr_h    ; CARRY IF LOW BYTE IS ZERO
+    mov codec.tx_bit,xchg[2]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.2...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    mov a,var_addr_l
+    mov ptr0,a
+    mov codec.tx_bit,xchg[1]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.1...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    mov a,var_size_l
+    or a,var_size_h
+    jmp z,rgb1w_bit_last    ; FINISH AFTER LAST BIT
+    mov a,var_addr_h
+    mov codec.tx_bit,xchg[0]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.0...
+    wait io0_rise    ; WAIT RISE EDGE AND CLEAR EDGE FLAG AFTER EXIT
+    code.read    ; GET NEXT WORD
+    mov xchg,a    ; LOW BYTE
+    mov codec.tx_bit,xchg[7]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.7...
+    jmp rgb1w_word_next    ; NEXT WORD
+rgb1w_bit_last:
+    mov codec.tx_bit,xchg[0]    ; SB_BIT_TX_O0=SFR_DATA_EXCH.0...
+    wait io0_rise    ; WAIT RISE EDGE OF LAST BIT AND CLEAR EDGE FLAG AFTER EXIT
+    bclr codec.period.tx_bit    ; CLEAR FALL EDGE FLAG
+    wait io0_fall    ; WAIT FALL EDGE OF LAST BIT AND CLEAR EDGE FLAG AFTER EXIT
+    clr codec.period    ; STOP
+; BC    SFR_BIT_CONFIG,SB_BIT_TX_EN	;ENABLE TX
+    jmp rgb1w_load    ; LOAD AND RESET
+
+; RGB WITH LONG DATA IN CODE RAM, USE PWM DUTY ENCODE
+rgb1w_long_1:
+    nop
+    clr codec.period
+    clr codec.ctrl
+    bclr pins.out1    ; DEFAULT OUTPUT LOW
+    mov a,var_size_l
+    or a,var_size_h
+    jmp z,rgb1w_end    ; DATA SIZE IS ZERO+
+    bset pins.dir1
+    clr var_addr_l
+    clr ptr0
+    mov a,#0x06    ; ERROR CODE FOR PIN RX HIGH
+    skip clear,pins.in0    ; PIN LOW
+    jmp cmd_return    ; PIN HIGH
+    mov a,#0x02
+    mov var_addr_h,a    ; DATA BUFFER START ADDRESS
+    code.read    ; GET FIRST WORD
+    mov xchg,a    ; LOW BYTE
+
+rgb1w_word_next_1:
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[7]    ; BIT SFR_DATA_EXCH.7
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[6]    ; BIT SFR_DATA_EXCH.6
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[5]    ; BIT SFR_DATA_EXCH.5
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[4]    ; BIT SFR_DATA_EXCH.4
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[3]    ; BIT SFR_DATA_EXCH.3
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[2]    ; BIT SFR_DATA_EXCH.2
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[1]    ; BIT SFR_DATA_EXCH.1
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[0]    ; BIT SFR_DATA_EXCH.0
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    nop
+    nop
+    nop
+    nop
+
+    dec var_size_l
+    inc a,var_size_l
+    skip clear,status.zero
+    dec var_size_h    ; CARRY IF LOW BYTE IS 0XFF
+    mov a,var_size_l
+    or a,var_size_h
+    jmp z,rgb1w_load_1    ; FINISH AFTER LAST BIT
+    mov a,ptr0
+    mov xchg,a    ; HIGH BYTE
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[7]    ; BIT SFR_DATA_EXCH.7
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[6]    ; BIT SFR_DATA_EXCH.6
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[5]    ; BIT SFR_DATA_EXCH.5
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[4]    ; BIT SFR_DATA_EXCH.4
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[3]    ; BIT SFR_DATA_EXCH.3
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[2]    ; BIT SFR_DATA_EXCH.2
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    call rgb1w_dly_1l    ; LOW 292n IF 1
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[1]    ; BIT SFR_DATA_EXCH.1
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    nop
+    nop
+    nop
+    nop
+
+    dec var_size_l
+    inc a,var_size_l
+    skip clear,status.zero
+    dec var_size_h    ; CARRY IF LOW BYTE IS 0XFF
+    inc var_addr_l
+    skip clear,status.zero
+    inc var_addr_h    ; CARRY IF LOW BYTE IS ZERO
+    mov a,var_addr_l
+    mov ptr0,a
+
+    bset pins.out1    ; RISE EDGE
+    call rgb1w_dly_0h    ; HIGH 292n IF 0
+    skip set,xchg[0]    ; BIT SFR_DATA_EXCH.0
+    bclr pins.out1    ; BIT0
+    call rgb1w_dly_half    ; APPEND 584n FOR HIGH/LOW
+    bclr pins.out1    ; FALL EDGE
+    nop
+    nop
+    nop
+    nop
+    mov a,var_size_l
+    or a,var_size_h
+    jmp z,rgb1w_load_1    ; FINISH AFTER LAST BIT
+    mov a,var_addr_h
+    code.read    ; GET NEXT WORD
+    mov xchg,a    ; LOW BYTE
+    jmp rgb1w_word_next_1    ; NEXT WORD
+
+; DELAY 250US
+delay_250us:
+    mov a,#250
+    jmp delay_us
+; DELAY 65US
+delay_65us:
+    mov a,#65
+    jmp delay_us
+; DELAY 2US
+delay_2us:
+    mov a,#2
+; DELAY US
+delay_us:
+    call rgb1w_dly_1l_b0    ; 10 CLOCK @48M, 4 CLOCK @24M
+    nop
+    call rgb1w_dly_1l_b0    ; 10 CLOCK @48M, 4 CLOCK @24M
+    nop
+    call rgb1w_dly_1l_b0    ; 10 CLOCK @48M, 4 CLOCK @24M
+    nop
+    call rgb1w_dly_1l_b0    ; 10 CLOCK @48M, 4 CLOCK @24M
+    nop
+    add a,#0xff
+    nop
+    jmp nz,delay_us
+    ret
+
+; initial DS1W
+; OUTPUT: A & Z
+init_ds1w:
+    bclr pins.dir0    ; PULLUP
+    clr codec.period
+    clr codec.ctrl
+    mov a,#5
+    call delay_us
+    bclr pins.out0
+    bset pins.dir0    ; LOW
+    call delay_250us    ; DELAY >480uS
+    call delay_250us
+    bclr pins.dir0    ; PULLUP
+    call delay_65us
+    clr ptr1    ; ACK
+    skip clear,pins.in0
+    mov ptr1,#0x04    ; ERROR CODE IF NAK
+    call delay_250us
+    mov a,ptr1
+    ret
+; write a byte
+; INPUT: A
+write_ds1w:
+    mov ptr1,a    ; DATA BYTE
+    mov ptr0,#8
+write_ds1w_bit:
+    bclr pins.out0
+    bset pins.dir0    ; LOW TO START
+    call delay_2us
+    skip clear,ptr1[0]    ; BIT DATA 0
+    bclr pins.dir0    ; PULLUP IF BIT DATA 1
+    call delay_65us
+    bclr pins.dir0    ; PULLUP
+    mov a,#5
+    skip set,ptr1[0]    ; SKIP DELAY IF BIT DATA 1
+    call delay_us    ; PULLUP FOR BIT DATA 0
+    rorc ptr1
+    dec ptr0
+    jmp nz,write_ds1w_bit    ; 8BIT
+    ret
+; read a byte
+; OUTPUT: A
+read_ds1w:
+    mov ptr0,#8
+read_ds1w_bit:
+    bclr pins.out0
+    bset pins.dir0    ; LOW TO START
+    call delay_2us
+    bclr pins.dir0    ; PULLUP FOR INPUT
+    mov a,#10
+    call delay_us    ; WAIT DATA READY
+    rorc ptr1
+    bclr ptr1[7]
+    skip clear,pins.in0    ; GET BIT DATA 0
+    bset ptr1[7]    ; GET BIT DATA 1
+    mov a,#55
+    call delay_us    ; WAIT SLOT
+    dec ptr0
+    jmp nz,read_ds1w_bit
+    mov a,ptr1
+    ret
+; start temperature
+; OUTPUT: A & Z
+start_temperat:
+    call init_ds1w
+    jmp nz,start_temp_err
+    mov a,#0xcc    ; SKIP ROM
+    call write_ds1w
+    mov a,#0x44    ; CONVERT
+    call write_ds1w
+    skip set,sys.ctrl.host_config    ; PARASITE POWER
+    jmp start_temp_ret    ; EXTERNAL POWER
+    bset pins.out0
+    bset pins.dir0    ; HIGH FOR POWER
+start_temp_ret:
+    clr a
+start_temp_err:
+    ret
+; read temperature
+; OUTPUT: VAR_DATA_L/H
+read_temperat:
+    call init_ds1w
+    jmp nz,read_temp_err
+    mov a,#0xcc    ; SKIP ROM
+    call write_ds1w
+    mov a,#0xbe    ; READ DATA
+    call write_ds1w
+    call read_ds1w
+    mov var_data_l,a    ; LOW BYTE
+    call read_ds1w
+    mov var_data_h,a    ; HIGH BYTE
+    call init_ds1w
+read_temp_err:
+    ret
+
+    nop
+
+    .end
