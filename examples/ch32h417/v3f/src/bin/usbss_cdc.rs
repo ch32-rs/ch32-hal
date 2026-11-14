@@ -20,6 +20,7 @@ use embassy_executor::Spawner;
 use embassy_usb::class::cdc_acm::device::{CdcAcmClass, Config as CdcAcmConfig, State};
 use embassy_usb::{Builder, UsbDeviceSpeed, UsbVersion};
 use panic_halt as _;
+use static_cell::{ConstStaticCell, StaticCell};
 
 bind_interrupts!(struct Irqs {
     USBSS => InterruptHandler<peripherals::USBSS>;
@@ -33,12 +34,11 @@ const PACKET: usize = 1024;
 #[repr(align(4))]
 struct Ep0Memory([u8; 512]);
 
-static mut EP0_MEMORY: Ep0Memory = Ep0Memory([0; 512]);
-static mut CONFIG_DESCRIPTOR: [u8; 128] = [0; 128];
-static mut BOS_DESCRIPTOR: [u8; 32] = [0; 32];
-static mut MSOS_DESCRIPTOR: [u8; 32] = [0; 32];
-static mut CONTROL_BUFFER: [u8; 64] = [0; 64];
-static mut CDC_STATE: State = State::new();
+static EP0_MEMORY: ConstStaticCell<Ep0Memory> = ConstStaticCell::new(Ep0Memory([0; 512]));
+static CONFIG_DESCRIPTOR: ConstStaticCell<[u8; 128]> = ConstStaticCell::new([0; 128]);
+static BOS_DESCRIPTOR: ConstStaticCell<[u8; 32]> = ConstStaticCell::new([0; 32]);
+static CONTROL_BUFFER: ConstStaticCell<[u8; 64]> = ConstStaticCell::new([0; 64]);
+static CDC_STATE: StaticCell<State> = StaticCell::new();
 
 #[embassy_executor::task]
 async fn echo(mut class: CdcAcmClass<'static, UsbDriver>) {
@@ -77,8 +77,7 @@ async fn main(spawner: Spawner) -> ! {
         hal::signature::chip_id().dev_id()
     );
 
-    let memory = unsafe { &mut *core::ptr::addr_of_mut!(EP0_MEMORY) };
-    let driver = Driver::new(p.USBSS, Irqs, &mut memory.0).unwrap();
+    let driver = Driver::new(p.USBSS, Irqs, &mut EP0_MEMORY.take().0).unwrap();
 
     let mut usb_config = embassy_usb::Config::new(0xc0de, 0xcafe);
     usb_config.manufacturer = Some("ch32-hal");
@@ -91,16 +90,12 @@ async fn main(spawner: Spawner) -> ! {
     let mut builder = Builder::new(
         driver,
         usb_config,
-        unsafe { &mut *core::ptr::addr_of_mut!(CONFIG_DESCRIPTOR) },
-        unsafe { &mut *core::ptr::addr_of_mut!(BOS_DESCRIPTOR) },
-        unsafe { &mut *core::ptr::addr_of_mut!(MSOS_DESCRIPTOR) },
-        unsafe { &mut *core::ptr::addr_of_mut!(CONTROL_BUFFER) },
+        CONFIG_DESCRIPTOR.take(),
+        BOS_DESCRIPTOR.take(),
+        &mut [],
+        CONTROL_BUFFER.take(),
     );
-    let class = CdcAcmClass::new(
-        &mut builder,
-        unsafe { &mut *core::ptr::addr_of_mut!(CDC_STATE) },
-        CdcAcmConfig::new(),
-    );
+    let class = CdcAcmClass::new(&mut builder, CDC_STATE.init(State::new()), CdcAcmConfig::new());
     let mut usb = builder.build();
     info!("USBSS CDC ready");
 

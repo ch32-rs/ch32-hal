@@ -71,6 +71,8 @@ embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "e867f12104
     "class-msc",
     "defmt",
 ] }
+# `usbss_cdc` / `usbss_bench`: `'static` buffers for the spawned USB tasks.
+static_cell = { version = "2.1", optional = true }
 
 [features]
 # Pulls in the H4 SysTick time driver. Other bins keep the blocking delay, which
@@ -79,7 +81,7 @@ embassy = ["ch32-hal/embassy", "dep:embassy-executor", "dep:embassy-time"]
 
 # `usbhs_cdc` / `usbfs_cdc` / `usbss_cdc` / `usbss_bench` / `usbss_host_msc`:
 # Embassy plus the USB stack.
-usb = ["embassy", "dep:embassy-usb"]
+usb = ["embassy", "dep:embassy-usb", "dep:static_cell"]
 
 # `eth_internal` / `eth_bench`: Embassy + the Ethernet stack. `ch32-hal/defmt`
 # gives `ch32_hal::eth::Error`/`Link` their `defmt::Format`, which both bins
