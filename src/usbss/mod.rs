@@ -1,10 +1,10 @@
 //! USB 3.0 SuperSpeed controller (USBSS), RM §27.
 //!
-//! [`Driver`] is an `embassy-usb` device driver for SuperSpeed (5 Gbit/s),
-//! ported from the TinyUSB `dcd_ch32_usbss` driver. Build the `embassy-usb`
-//! configuration with `UsbDeviceSpeed::Super` and a `bcd_usb` of 3.0 or later,
-//! and use 1024-byte bulk endpoints, each bursting the `max_burst` of its
-//! `EndpointOptions`. The controller has no USB 2.0 fallback.
+//! [`Driver`] is an `embassy-usb` device driver for SuperSpeed (5 Gbit/s).
+//! Build the `embassy-usb` configuration with `UsbDeviceSpeed::Super` and a
+//! `bcd_usb` of 3.0 or later, and use 1024-byte bulk endpoints, each bursting
+//! the `max_burst` of its `EndpointOptions`. The controller has no USB 2.0
+//! fallback.
 //!
 //! The controller mishandles a link error that finds more than a few header
 //! packets pending: an OUT endpoint can stall, a control transfer can fail, or

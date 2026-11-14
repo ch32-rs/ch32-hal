@@ -10,7 +10,6 @@ use crate::pac::usbss::{regs, EpRx, EpTx, UsbssDevice};
 /// Hot Reset bit of `LINK_CTRL.LINK_TX_TS_CFG`.
 pub(super) const LINK_HOT_RESET: u8 = 1;
 
-/// The device register block.
 #[derive(Clone, Copy)]
 pub(super) struct Regs(pub UsbssDevice);
 
@@ -156,8 +155,8 @@ impl Regs {
         self.phy_cfg_dat().write(|w| w.set_phy_cfg_data(1));
     }
 
-    /// PHY values from the EVT examples. The RM documents neither the indirect
-    /// PHY interface nor the `0x5003_C018` write.
+    /// Undocumented PHY values: the RM documents neither the indirect PHY
+    /// interface nor the `0x5003_C018` write.
     ///
     /// Call this after `LINK_PHY_RESET` has been released. Values written
     /// before it do not survive a cold boot, and the link then drops into

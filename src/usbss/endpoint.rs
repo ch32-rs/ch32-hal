@@ -55,7 +55,6 @@ impl<'d, T: Instance, const IN: bool> Endpoint<'d, T, IN> {
             inner.start(slot);
             Ok(())
         })?;
-        // Aborts the transfer if the future is dropped before it completes.
         let abort = OnDrop::new(move || {
             let aborted = state::<T>().inner.lock(|inner| {
                 let mut inner = inner.borrow_mut();

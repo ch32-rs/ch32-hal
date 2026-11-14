@@ -268,7 +268,7 @@ pub(super) fn dma_capable(buffer: &[u8]) -> bool {
 
 /// Silicon revision, `CHIP_ID[7:4]`.
 fn revision() -> u8 {
-    // The EVT `FLASH_BOOT_GetMode` reads flash before the ESIG area.
+    // Undocumented: the vendor code reads flash before ESIG.
     unsafe { core::ptr::read_volatile(0x0800_0000 as *const u32) };
     ((crate::signature::chip_id().dev_id() >> 4) & 0xf) as u8
 }
@@ -779,7 +779,6 @@ impl Inner {
     fn complete(&mut self, slot: usize) {
         if self.endpoints[slot].phase == Phase::Busy {
             self.endpoints[slot].phase = Phase::Done;
-            // EP0 waits on slot 0 for both directions.
             self.wake |= 1 << if slot < 2 { 0 } else { slot };
         }
     }
