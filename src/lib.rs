@@ -170,18 +170,18 @@ pub mod usb;
 #[cfg(otg)]
 pub mod otg_fs;
 
-/// H4's FS controller (`kind: usbfs` / `usbfs_h4`) and X035's `x0fs` block
-/// (`kind: usb` / `x0fs`) are the same device core as `crate::otg_fs`, so
-/// they reuse that driver. X035's register block is array-grouped; the
-/// differences live in the `otg_fs::regs` adapter.
-#[cfg(any(usbfs_h4, usb_x0fs))]
+/// H4's FS controller (`kind: usbfs` / `usbfs_h4`), X035's `x0fs` block and the
+/// CH32V20x/V303 `v2fs` block (`kind: usb`) are the same device core as
+/// `crate::otg_fs`, so they reuse that driver. X035's register block is
+/// array-grouped; the differences live in the `otg_fs::regs` adapter.
+#[cfg(any(usbfs_h4, usb_x0fs, usb_v2fs))]
 #[path = "otg_fs/mod.rs"]
 pub mod usbfs;
 
 /// WCH USBFS `l1fs` layout only (`kind: usb`, CH32L103). Sibling layouts
 /// (`v1fs`/`v2fs`/`x0fs`) are not this module; see `ch32-data` `docs/usb_ip.md`.
-/// H4's `kind: usbfs` and X035's `x0fs` use the OTG-v2 backend above, never
-/// both at once.
+/// H4's `kind: usbfs` and the `x0fs`/`v2fs` layouts use the OTG-v2 backend
+/// above, never both at once.
 #[cfg(usb_l1fs)]
 pub mod usbfs;
 

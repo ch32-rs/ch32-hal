@@ -1,9 +1,10 @@
 //! USB_FS and OTG_FS device mode peripheral driver
 //! Note that this currently only implements device mode
 //!
-//! Serves both register models of the FS device block: `kind: otg`
-//! (`otg_v2`, the V2/V3 OTG parts) and `kind: usbfs` (`usbfs_h4`, CH32H417).
-//! The field-name differences live in the private `regs` module.
+//! Serves the register models of the FS device block: `kind: otg` (`otg_v2`,
+//! the V2/V3 OTG parts), `kind: usbfs` (`usbfs_h4`, CH32H417) and `kind: usb`
+//! (`x0fs` on CH32X035, `v2fs` on CH32V20x/V303). The field-name differences
+//! live in the private `regs` module.
 //!
 //! <div class="warning">
 //! There's a lot of TODOs and panics where things are not implemented
@@ -20,8 +21,8 @@
 //! Other Endpoints:
 //! - [x] Interrupt Out
 //! - [x] Interrupt In
-//! - [ ] Bulk Out (Expected to work but not tested)
-//! - [ ] Bulk In (Expected to work but not tested)
+//! - [x] Bulk Out (CDC-ACM echo on the CH32V203 USBFS)
+//! - [x] Bulk In (same)
 //!
 //! Other Features:
 //! - [ ] Set endpoint stall
@@ -166,14 +167,15 @@ where
         assert!(ep_buffer.len() > 0);
 
         // RM table 9-12: on H4 the FS controller drives DP/DM itself once it
-        // is clocked, so the pins need no alternate-function setup.
+        // is clocked, so the pins need no alternate-function setup; the
+        // CH32V20x manual says the same of its USBFS (table 10-9).
         #[cfg(otg_v2)]
         {
             dp.set_as_af_output(AFType::OutputPushPull, Speed::High);
             dm.set_as_af_output(AFType::OutputPushPull, Speed::High);
             let _ = config;
         }
-        #[cfg(usbfs_h4)]
+        #[cfg(any(usbfs_h4, usb_v2fs))]
         let _ = (dp, dm, config);
         // X035 keeps DP/DM as GPIO inputs and switches the on-die pull-up on
         // through `AFIO.CTLR` instead of selecting an alternate function.
@@ -532,8 +534,9 @@ foreach_peripheral!(
 );
 
 // X035's FS controller (`kind: usb`, version `x0fs`) keeps the same device
-// core in array-grouped registers.
-#[cfg(usb_x0fs)]
+// core in array-grouped registers; the CH32V20x/V303 one (`v2fs`) is the
+// `otg_v2` block without its OTG registers.
+#[cfg(any(usb_x0fs, usb_v2fs))]
 foreach_peripheral!(
     (usb, $inst:ident) => {
         impl SealedInstance for peripherals::$inst {

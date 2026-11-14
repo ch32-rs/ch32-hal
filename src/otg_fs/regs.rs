@@ -1,18 +1,19 @@
 //! Register-view adapter for the OTG-FS register models.
 //!
-//! `otg_v2` (CH32V4x7), `usbfs_h4` (CH32H417) and `usb_x0fs` (CH32X035)
-//! describe the same FS device block at different kind/version pairs. H4
-//! keeps the RM's `UC_`/`UIE_`/`UIF_`/`MASK_UEP_` field prefixes and X035
-//! groups endpoints into arrays (`UEP0123_DMA`, `UEP567_CTRL`, …), so the
-//! driver goes through this module instead of touching the PAC directly.
+//! `otg_v2` (CH32V4x7), `usbfs_h4` (CH32H417), `usb_x0fs` (CH32X035) and
+//! `usb_v2fs` (CH32V20x/V303) describe the same FS device block at different
+//! kind/version pairs. H4 keeps the RM's `UC_`/`UIE_`/`UIF_`/`MASK_UEP_` field
+//! prefixes, X035 groups endpoints into arrays (`UEP0123_DMA`, `UEP567_CTRL`, …)
+//! and V2 has the `otg_v2` layout without its OTG registers, so the driver goes
+//! through this module instead of touching the PAC directly.
 
 #[cfg(otg_v2)]
 pub(crate) use crate::pac::otg::vals::{EpRxResponse, EpTxResponse, UsbToken};
 #[cfg(otg_v2)]
 pub(crate) use crate::pac::otg::Usbd as Regs;
-#[cfg(usb_x0fs)]
+#[cfg(any(usb_x0fs, usb_v2fs))]
 pub(crate) use crate::pac::usb::vals::{EpRxResponse, EpTxResponse, UsbToken};
-#[cfg(usb_x0fs)]
+#[cfg(any(usb_x0fs, usb_v2fs))]
 pub(crate) use crate::pac::usb::Usbd as Regs;
 #[cfg(usbfs_h4)]
 pub(crate) use crate::pac::usbfs::vals::{EpRxResponse, EpTxResponse, UsbToken};
@@ -39,12 +40,13 @@ pub(crate) struct IntSt {
     pub tog_ok: bool,
 }
 
-#[cfg(otg_v2)]
+// `usb_v2fs` is the `otg_v2` device block without the OTG registers; only
+// the endpoint-mode fields are named differently.
+#[cfg(any(otg_v2, usb_v2fs))]
 mod imp {
     use embassy_usb_driver::Direction;
 
-    use super::{IntFg, IntSt, Regs};
-    use crate::pac::otg::vals::{EpRxResponse, EpTxResponse};
+    use super::{EpRxResponse, EpTxResponse, IntFg, IntSt, Regs};
 
     pub(crate) fn int_fg(regs: Regs) -> IntFg {
         let v = regs.int_fg().read();
@@ -182,6 +184,7 @@ mod imp {
         regs.uep_rx_ctrl(ep).modify(|v| v.set_r_tog(tog));
     }
 
+    #[cfg(otg_v2)]
     pub(crate) fn ep_is_enabled(regs: Regs, ep: usize, dir: Direction) -> bool {
         match (ep, dir) {
             (4, Direction::In) => regs.uep4_1_mod().read().uep4_tx_en(),
@@ -202,6 +205,7 @@ mod imp {
         }
     }
 
+    #[cfg(otg_v2)]
     pub(crate) fn ep_set_enabled(regs: Regs, ep: usize, dir: Direction, enabled: bool) {
         match (ep, dir) {
             (4, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_uep4_tx_en(enabled)),
@@ -218,6 +222,50 @@ mod imp {
             (6, Direction::Out) => regs.uep5_6_mod().modify(|v| v.set_uep6_rx_en(enabled)),
             (7, Direction::In) => regs.uep7_mod().modify(|v| v.set_uep7_tx_en(enabled)),
             (7, Direction::Out) => regs.uep7_mod().modify(|v| v.set_uep7_rx_en(enabled)),
+            _ => panic!("setting non-existent endpoint"),
+        }
+    }
+
+    // `usb_v2fs` indexes the two endpoints of a mode register: 0 is the first
+    // one in its name (EP4 in `UEP4_1_MOD`), 1 the second.
+    #[cfg(usb_v2fs)]
+    pub(crate) fn ep_is_enabled(regs: Regs, ep: usize, dir: Direction) -> bool {
+        match (ep, dir) {
+            (4, Direction::In) => regs.uep4_1_mod().read().tx_en(0),
+            (4, Direction::Out) => regs.uep4_1_mod().read().rx_en(0),
+            (1, Direction::In) => regs.uep4_1_mod().read().tx_en(1),
+            (1, Direction::Out) => regs.uep4_1_mod().read().rx_en(1),
+            (2, Direction::In) => regs.uep2_3_mod().read().tx_en(0),
+            (2, Direction::Out) => regs.uep2_3_mod().read().rx_en(0),
+            (3, Direction::In) => regs.uep2_3_mod().read().tx_en(1),
+            (3, Direction::Out) => regs.uep2_3_mod().read().rx_en(1),
+            (5, Direction::In) => regs.uep5_6_mod().read().tx_en(0),
+            (5, Direction::Out) => regs.uep5_6_mod().read().rx_en(0),
+            (6, Direction::In) => regs.uep5_6_mod().read().tx_en(1),
+            (6, Direction::Out) => regs.uep5_6_mod().read().rx_en(1),
+            (7, Direction::In) => regs.uep7_mod().read().tx_en(),
+            (7, Direction::Out) => regs.uep7_mod().read().rx_en(),
+            _ => panic!("Unsupported EP"),
+        }
+    }
+
+    #[cfg(usb_v2fs)]
+    pub(crate) fn ep_set_enabled(regs: Regs, ep: usize, dir: Direction, enabled: bool) {
+        match (ep, dir) {
+            (4, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_tx_en(0, enabled)),
+            (4, Direction::Out) => regs.uep4_1_mod().modify(|v| v.set_rx_en(0, enabled)),
+            (1, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_tx_en(1, enabled)),
+            (1, Direction::Out) => regs.uep4_1_mod().modify(|v| v.set_rx_en(1, enabled)),
+            (2, Direction::In) => regs.uep2_3_mod().modify(|v| v.set_tx_en(0, enabled)),
+            (2, Direction::Out) => regs.uep2_3_mod().modify(|v| v.set_rx_en(0, enabled)),
+            (3, Direction::In) => regs.uep2_3_mod().modify(|v| v.set_tx_en(1, enabled)),
+            (3, Direction::Out) => regs.uep2_3_mod().modify(|v| v.set_rx_en(1, enabled)),
+            (5, Direction::In) => regs.uep5_6_mod().modify(|v| v.set_tx_en(0, enabled)),
+            (5, Direction::Out) => regs.uep5_6_mod().modify(|v| v.set_rx_en(0, enabled)),
+            (6, Direction::In) => regs.uep5_6_mod().modify(|v| v.set_tx_en(1, enabled)),
+            (6, Direction::Out) => regs.uep5_6_mod().modify(|v| v.set_rx_en(1, enabled)),
+            (7, Direction::In) => regs.uep7_mod().modify(|v| v.set_tx_en(enabled)),
+            (7, Direction::Out) => regs.uep7_mod().modify(|v| v.set_rx_en(enabled)),
             _ => panic!("setting non-existent endpoint"),
         }
     }
@@ -634,7 +682,7 @@ pub(crate) use imp::*;
 
 /// Set the device address in `DEV_AD`.
 pub(crate) fn set_device_address(regs: Regs, addr: u8) {
-    #[cfg(otg_v2)]
+    #[cfg(any(otg_v2, usb_v2fs))]
     regs.dev_ad().write(|v| v.set_mask_usb_addr(addr));
     #[cfg(usbfs_h4)]
     regs.usb_dev_ad().write(|v| v.set_mask_usb_addr(addr));
