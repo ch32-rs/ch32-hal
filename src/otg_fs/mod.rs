@@ -188,6 +188,7 @@ where
                 w.set_udm_pue(0);
                 w.set_usb_ioen(true);
             });
+            regs::save_pull_up(config.udp_pue);
         }
 
         T::enable_and_reset();
@@ -393,6 +394,9 @@ where
     T: Instance,
 {
     async fn enable(&mut self) {
+        // `start` already set the pull-up for the first enable; set it again after a `disable`.
+        regs::set_pull_up(T::regs(), true);
+
         // Enable the port
         regs::enable_port(T::regs());
 
@@ -401,7 +405,10 @@ where
     }
 
     async fn disable(&mut self) {
-        trace!("disable")
+        // Detach from the bus, as TinyUSB's `dcd_disconnect` does on this block.
+        regs::set_pull_up(T::regs(), false);
+        // embassy-usb enables the bus again only on `PowerDetected`, which `poll` fakes once.
+        self.inited = false;
     }
 
     async fn poll(&mut self) -> embassy_usb_driver::Event {

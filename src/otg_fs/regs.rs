@@ -109,6 +109,11 @@ mod imp {
         });
     }
 
+    /// Connects or disconnects the internal D+ pull-up: the host sees the device attach or leave.
+    pub(crate) fn set_pull_up(regs: Regs, on: bool) {
+        regs.ctrl().modify(|w| w.set_dev_pu_en(on));
+    }
+
     pub(crate) fn enable_port(regs: Regs) {
         regs.udev_ctrl().write(|w| {
             // Pull-down is host mode only.
@@ -287,6 +292,11 @@ mod imp {
             w.set_uc_dma_en(true);
             w.set_uc_dev_pu_en(true);
         });
+    }
+
+    /// Connects or disconnects the internal D+ pull-up: the host sees the device attach or leave.
+    pub(crate) fn set_pull_up(regs: Regs, on: bool) {
+        regs.usb_ctrl().modify(|w| w.set_uc_dev_pu_en(on));
     }
 
     pub(crate) fn enable_port(regs: Regs) {
@@ -471,6 +481,25 @@ mod imp {
             // internal pull-up (X035RM `CTLR` bits [5:4]).
             w.set_sys_ctrl(0b10);
         });
+    }
+
+    /// The `AFIO.CTLR.UDP_PUE` setting the driver was created with, which `set_pull_up` sets back.
+    static UDP_PUE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+    /// Records the pull-up setting the driver is created with.
+    pub(crate) fn save_pull_up(udp_pue: u8) {
+        UDP_PUE.store(udp_pue, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Connects or disconnects the D+ pull-up: the host sees the device attach or leave.
+    /// `SYS_CTRL=0b00` also stops the device controller until it is set back to `0b10`.
+    pub(crate) fn set_pull_up(regs: Regs, on: bool) {
+        // On X035 the pull-up is the on-die resistor `AFIO.CTLR.UDP_PUE` selects: clearing
+        // `SYS_CTRL` alone leaves D+ high and the host never sees the device leave.
+        let udp_pue = if on { UDP_PUE.load(core::sync::atomic::Ordering::Relaxed) } else { 0 };
+        // `AFIO.CTLR` also holds other peripherals' settings (USB PD).
+        critical_section::with(|_| crate::pac::AFIO.ctlr().modify(|w| w.set_udp_pue(udp_pue)));
+        regs.ctrl().modify(|w| w.set_sys_ctrl(if on { 0b10 } else { 0b00 }));
     }
 
     pub(crate) fn enable_port(regs: Regs) {
