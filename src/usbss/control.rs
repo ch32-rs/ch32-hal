@@ -23,11 +23,9 @@ impl<T: Instance> ControlPipe<'_, T> {
         }
     }
 
-    /// Runs one stage of the control transfer: `start` hands it to the
-    /// controller, then the interrupt handler completes the EP0 slot. An OUT
-    /// stage copies the received data to `out` and returns its length.
-    ///
-    /// Fails once a newer SETUP or a bus reset ends the control transfer.
+    /// Runs one stage: `start` arms it and the interrupt handler completes the
+    /// EP0 slot. An OUT stage copies its data to `out` and returns the length.
+    /// Fails once a newer SETUP or a bus reset ends the transfer.
     async fn stage(
         &mut self,
         incoming: bool,

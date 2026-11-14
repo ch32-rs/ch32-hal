@@ -31,17 +31,14 @@ const SLOTS: usize = ENDPOINTS * 2;
 /// longer than a burst keeps the endpoint out of flow control in between.
 const CHAIN_PACKETS: usize = 255;
 
-/// `ERDY_NUMP` of an OUT endpoint while it is the only data endpoint with a
-/// transfer queued, and while it is not. The host keeps one packet fewer
-/// than this waiting for its ACK.
+/// `ERDY_NUMP` of an OUT endpoint alone, and next to other queued transfers;
+/// the host keeps one packet fewer awaiting its ACK.
 ///
-/// The controller buffers only three or four header packets for replay after
-/// a link error. With more pending, counting the ACKs of OUT packets and the
-/// headers of IN packets, it loses ACKs, which stalls the OUT endpoint, or
-/// sends an IN packet with wrong data. `[3, 4]` keeps OUT at full speed next
-/// to other traffic, where it exceeds that budget. In case of such issues,
-/// change it to `[3, 2]`, which roughly halves OUT throughput while another
-/// data endpoint has a transfer queued.
+/// After a link error the controller replays only three or four pending
+/// header packets, OUT ACKs and IN headers together. Beyond that it loses
+/// ACKs, stalling OUT, or sends an IN packet with wrong data. `[3, 4]` keeps
+/// OUT at full speed but can exceed the budget next to other traffic; `[3, 2]`
+/// stays within it at about half the OUT throughput.
 const OUT_WINDOW: [u8; 2] = [3, 4];
 
 const RESET: u8 = 1;
@@ -71,7 +68,6 @@ pub(super) struct Transfer {
 }
 
 impl Transfer {
-    /// Packets in the next chain.
     fn chain_packets(&self, mps: usize) -> usize {
         (self.length - self.progress).div_ceil(mps).clamp(1, CHAIN_PACKETS)
     }
@@ -416,10 +412,9 @@ impl<T: Instance> Bus<'_, T> {
         state::<T>().endpoint_wakers[slot].wake();
     }
 
-    /// Sets or clears the STALL handshake of an endpoint, for the bus and
-    /// the endpoint alike.
+    /// Sets or clears the STALL handshake of a data endpoint. EP0 needs none:
+    /// its stall is a protocol stall that the next SETUP clears.
     pub(super) fn set_endpoint_stalled(address: EndpointAddress, stalled: bool) {
-        // An EP0 stall is a protocol stall that the next SETUP clears.
         let (index, incoming) = (address.index(), address.is_in());
         Self::with_endpoint(address, |regs, endpoint, _| {
             if !endpoint.enabled {

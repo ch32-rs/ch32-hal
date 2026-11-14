@@ -194,7 +194,6 @@ impl<T: Instance> interrupt::typelevel::Handler<T::LinkInterrupt> for LinkInterr
     }
 }
 
-/// Enables the USBSS PLL, the block clock, the PIPE clock and the UTMI clock.
 unsafe fn init_clocks<T: Instance>() {
     crate::rcc::enable_usbss_pll(UsbsspllRefsel::F25MHZ);
     T::enable_and_reset();
