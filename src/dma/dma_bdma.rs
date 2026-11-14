@@ -2,9 +2,7 @@ use core::future::{poll_fn, Future};
 use core::pin::Pin;
 #[cfg(not(dma_v4x7))]
 use core::sync::atomic::compiler_fence;
-#[cfg(dma_v4x7)]
-use core::sync::atomic::AtomicBool;
-use core::sync::atomic::{fence, AtomicUsize, Ordering};
+use core::sync::atomic::{fence, AtomicBool, AtomicUsize, Ordering};
 use core::task::{Context, Poll, Waker};
 
 use embassy_sync::waitqueue::AtomicWaker;
@@ -219,6 +217,11 @@ pub(crate) struct ChannelState {
     pub(super) report_error: AtomicBool,
     #[cfg(dma_v4x7)]
     pub(super) transfer_error: AtomicBool,
+    /// set: a transfer error stops the channel and is reported instead of panicking
+    #[cfg(not(dma_v4x7))]
+    soft_error: AtomicBool,
+    #[cfg(not(dma_v4x7))]
+    error: AtomicBool,
 }
 
 impl ChannelState {
@@ -231,6 +234,10 @@ impl ChannelState {
         report_error: AtomicBool::new(false),
         #[cfg(dma_v4x7)]
         transfer_error: AtomicBool::new(false),
+        #[cfg(not(dma_v4x7))]
+        soft_error: AtomicBool::new(false),
+        #[cfg(not(dma_v4x7))]
+        error: AtomicBool::new(false),
     };
 }
 
@@ -302,28 +309,42 @@ impl AnyChannel {
                 };
 
                 if teif {
-                    panic!("DMA: error on DMA@{:08x} channel {}", r.as_ptr() as u32, info.num);
+                    if !state.soft_error.load(Ordering::Relaxed) {
+                        panic!("DMA: error on DMA@{:08x} channel {}", r.as_ptr() as u32, info.num);
+                    }
+                    // the hardware has cleared EN; the owner sees the error and restarts
+                    #[cfg(not(ch32h4))]
+                    r.ifcr().write(|w| w.set_teif(info.num, true));
+                    #[cfg(ch32h4)]
+                    r.intfcr().write(|w| w.set_cteif(info.num, true));
+                    state.error.store(true, Ordering::Release);
+                    state.waker.wake();
+                    return;
                 }
 
-                if htif && htie {
+                let half = htif && htie;
+                let complete = tcif && tcie;
+                if half {
                     // Acknowledge half transfer complete interrupt
                     #[cfg(not(ch32h4))]
                     r.ifcr().write(|w| w.set_htif(info.num, true));
                     #[cfg(ch32h4)]
                     r.intfcr().write(|w| w.set_chtif(info.num, true));
-                } else if tcif && tcie {
-                    // Acknowledge transfer complete interrupt
-                    #[cfg(not(ch32h4))]
-                    r.ifcr().write(|w| w.set_tcif(info.num, true));
-                    #[cfg(ch32h4)]
-                    r.intfcr().write(|w| w.set_ctcif(info.num, true));
+                }
+                if complete {
+                    // Acknowledge and count in one critical section, so that
+                    // `CircularTransfer::position` (possibly in a higher priority interrupt)
+                    // never sees the flag cleared but the transfer not yet counted
                     critical_section::with(|_| {
-                        // #safty this is okay because critical section ensures
-                        // no interruption
+                        #[cfg(not(ch32h4))]
+                        r.ifcr().write(|w| w.set_tcif(info.num, true));
+                        #[cfg(ch32h4)]
+                        r.intfcr().write(|w| w.set_ctcif(info.num, true));
                         let cnt = state.complete_count.load(Ordering::Acquire);
-                        state.complete_count.store(cnt + 1, Ordering::Release);
+                        state.complete_count.store(cnt.wrapping_add(1), Ordering::Release);
                     });
-                } else {
+                }
+                if !(half || complete) {
                     return;
                 }
 
@@ -382,6 +403,8 @@ impl AnyChannel {
                 let ch = r.ch(info.num);
 
                 state.complete_count.store(0, Ordering::Release);
+                state.soft_error.store(false, Ordering::Relaxed);
+                state.error.store(false, Ordering::Relaxed);
                 self.clear_irqs();
 
                 write_channel(ch, peri_addr, mem_addr, mem_len, incr_mem, data_size, dir, &options);
@@ -1036,5 +1059,242 @@ impl<'a, W: Word> Drop for WritableRingBuffer<'a, W> {
 
         // "Subsequent reads and writes cannot be moved ahead of preceding reads."
         fence(Ordering::SeqCst);
+    }
+}
+
+// ==============================
+
+#[cfg(not(dma_v4x7))]
+fn remaining(r: pac::dma::Dma, num: usize) -> usize {
+    #[cfg(not(ch32h4))]
+    return r.ch(num).ndtr().read().ndt() as usize;
+    #[cfg(ch32h4)]
+    return r.ch(num).cntr().read().ndt() as usize;
+}
+
+#[cfg(not(dma_v4x7))]
+fn tcif(r: pac::dma::Dma, num: usize) -> bool {
+    #[cfg(not(ch32h4))]
+    return r.isr().read().tcif(num);
+    #[cfg(ch32h4)]
+    return r.intfr().read().tcif(num);
+}
+
+#[cfg(not(dma_v4x7))]
+/// Where a circular transfer is: whole passes over the buffer, and the index of the next
+/// element the DMA moves.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct RingPosition {
+    /// completed passes since the transfer was configured (wraps). the DMA interrupt counts
+    /// them off TCIF, a single sticky flag: an interrupt held off (masked, or behind a
+    /// handler at its level) for more than a pass counts the passes it missed as one, and
+    /// `laps` stays short by the rest from then on (`index` stays right)
+    pub laps: u32,
+    /// next element, `0..len`
+    pub index: usize,
+}
+
+#[cfg(not(dma_v4x7))]
+/// Reads a circular transfer's [`RingPosition`] from anywhere, e.g. another interrupt
+/// handler, without owning the transfer. It borrows the channel for as long as the transfer
+/// did, so no other driver can take the channel while a reader exists.
+#[derive(Copy, Clone)]
+pub struct RingPositionReader<'a> {
+    id: u8,
+    len: u16,
+    _channel: core::marker::PhantomData<&'a ()>,
+}
+
+#[cfg(not(dma_v4x7))]
+impl<'a> RingPositionReader<'a> {
+    /// The transfer's current position. Consistent even when called from an interrupt
+    /// that preempts the DMA interrupt, or while the DMA wraps around.
+    pub fn read(&self) -> RingPosition {
+        let ch = AnyChannel { id: self.id };
+        let info = ch.info();
+        let state = &STATE[self.id as usize];
+        let len = self.len as usize;
+        match info.dma {
+            DmaInfo::Dma(r) => critical_section::with(|_| {
+                // the DMA interrupt acknowledges TCIF and counts it in one critical
+                // section: inside ours, (count, TCIF) is consistent. the DMA itself keeps
+                // going, so read NDTR between two looks at TCIF
+                let laps = state.complete_count.load(Ordering::Acquire) as u32;
+                let tc_before = tcif(r, info.num);
+                let mut ndt = remaining(r, info.num);
+                let tc = tcif(r, info.num);
+                if tc && !tc_before {
+                    // wrapped while reading: NDTR may be from before the wrap
+                    ndt = remaining(r, info.num);
+                }
+                // NDTR reloads on the wrap; 0 can only be the instant before it
+                let index = if ndt == 0 { 0 } else { len - ndt };
+                let laps = if ndt == 0 && !tc { laps.wrapping_add(1) } else { laps };
+                RingPosition {
+                    laps: laps.wrapping_add(tc as u32),
+                    index,
+                }
+            }),
+        }
+    }
+}
+
+#[cfg(all(spi, not(dma_v4x7)))]
+/// A circular DMA transfer over a buffer the owner reads or writes in place (no copy),
+/// typically in halves: the half and complete interrupts wake the registered waker.
+///
+/// A transfer error doesn't panic: the channel stops and [`take_error`](Self::take_error)
+/// reports it, so the owner can restart.
+pub(crate) struct CircularTransfer<'a> {
+    channel: Peri<'a, AnyChannel>,
+    len: u16,
+}
+
+#[cfg(all(spi, not(dma_v4x7)))]
+impl<'a> CircularTransfer<'a> {
+    /// Take a channel; [`configure_read`](Self::configure_read) /
+    /// [`configure_write`](Self::configure_write) set the transfer up.
+    pub fn new(channel: Peri<'a, impl Channel>) -> Self {
+        Self {
+            channel: channel.into(),
+            len: 0,
+        }
+    }
+
+    /// Peripheral -> `buf`, circular, not started. `interrupts`: half + complete interrupts.
+    ///
+    /// # Safety
+    /// `buf` must stay valid, and not be written by anyone else, while the transfer runs.
+    pub unsafe fn configure_read<W: Word>(
+        &mut self,
+        request: Request,
+        peri_addr: *mut W,
+        buf: *mut [W],
+        priority: Priority,
+        interrupts: bool,
+    ) {
+        let (ptr, len) = super::slice_ptr_parts_mut(buf);
+        self.configure(
+            request,
+            Dir::PeripheralToMemory,
+            peri_addr as *const u32,
+            ptr as *mut u32,
+            len,
+            W::size(),
+            priority,
+            interrupts,
+        );
+    }
+
+    /// `buf` -> peripheral, circular, not started. `interrupts`: half + complete interrupts.
+    ///
+    /// # Safety
+    /// `buf` must stay valid while the transfer runs.
+    pub unsafe fn configure_write<W: Word>(
+        &mut self,
+        request: Request,
+        buf: *const [W],
+        peri_addr: *mut W,
+        priority: Priority,
+        interrupts: bool,
+    ) {
+        let (ptr, len) = super::slice_ptr_parts(buf);
+        self.configure(
+            request,
+            Dir::MemoryToPeripheral,
+            peri_addr as *const u32,
+            ptr as *mut u32,
+            len,
+            W::size(),
+            priority,
+            interrupts,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn configure(
+        &mut self,
+        request: Request,
+        dir: Dir,
+        peri_addr: *const u32,
+        mem_addr: *mut u32,
+        len: usize,
+        size: WordSize,
+        priority: Priority,
+        interrupts: bool,
+    ) {
+        self.stop();
+        let options = TransferOptions {
+            priority,
+            circular: true,
+            half_transfer_ir: interrupts,
+            complete_transfer_ir: interrupts,
+            ..Default::default()
+        };
+        self.channel
+            .configure(request, dir, peri_addr, mem_addr, len, true, size, options);
+        STATE[self.channel.id as usize]
+            .soft_error
+            .store(true, Ordering::Relaxed);
+        self.len = len as u16;
+    }
+
+    /// Start (or resume) the configured transfer.
+    pub fn start(&mut self) {
+        compiler_fence(Ordering::SeqCst);
+        self.channel.start();
+    }
+
+    /// Stop the transfer at once (the next request isn't served).
+    pub fn stop(&mut self) {
+        let info = self.channel.info();
+        match info.dma {
+            #[cfg(not(ch32h4))]
+            DmaInfo::Dma(r) => r.ch(info.num).cr().modify(|w| w.set_en(false)),
+            #[cfg(ch32h4)]
+            DmaInfo::Dma(r) => r.ch(info.num).cfgr().modify(|w| w.set_en(false)),
+        }
+        compiler_fence(Ordering::SeqCst);
+    }
+
+    /// The transfer's position (see [`RingPositionReader::read`]).
+    pub fn position(&self) -> RingPosition {
+        self.reader().read()
+    }
+
+    /// A handle for reading the position elsewhere.
+    pub fn reader(&self) -> RingPositionReader<'a> {
+        RingPositionReader {
+            id: self.channel.id,
+            len: self.len,
+            _channel: core::marker::PhantomData,
+        }
+    }
+
+    /// Whether a transfer error stopped the channel since the last call (or configure).
+    pub fn take_error(&self) -> bool {
+        // no atomic swap on every target
+        let error = &STATE[self.channel.id as usize].error;
+        critical_section::with(|_| {
+            let e = error.load(Ordering::Acquire);
+            error.store(false, Ordering::Release);
+            e
+        })
+    }
+
+    /// Wake `waker` on the next half / complete interrupt (or error).
+    pub fn register_waker(&self, waker: &Waker) {
+        STATE[self.channel.id as usize].waker.register(waker);
+    }
+}
+
+#[cfg(all(spi, not(dma_v4x7)))]
+impl<'a> Drop for CircularTransfer<'a> {
+    fn drop(&mut self) {
+        self.stop();
+        STATE[self.channel.id as usize]
+            .soft_error
+            .store(false, Ordering::Relaxed);
     }
 }
