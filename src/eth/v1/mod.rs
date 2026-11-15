@@ -398,6 +398,18 @@ fn configure_mac_dma<T: Instance>(
         }
     }
 
+    // MMC counters raise ETH interrupts at half range. We do not service
+    // those sources, so mask them after every reset (including recovery) to
+    // prevent a persistent interrupt from starving the executor.
+    // TODO: use PAC accessors once emac_v1 describes the MMC registers.
+    // SAFETY: these aligned offsets from the MAC base are MMCRIMR and
+    // MMCTIMR, documented in the CH32V307 reference manual, section 27.1.8.2.
+    unsafe {
+        let mac = e.as_ptr().cast::<u8>();
+        core::ptr::write_volatile(mac.add(0x10c).cast::<u32>(), (1 << 17) | (1 << 5));
+        core::ptr::write_volatile(mac.add(0x110).cast::<u32>(), 1 << 21);
+    }
+
     // 4. Select SMI clock divider — div42 for HCLK 60-100MHz+
     let hclk = crate::rcc::clocks().hclk.0;
     let clock_range: u8 = if hclk < 35_000_000 {
