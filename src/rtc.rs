@@ -7,7 +7,8 @@
 //!
 //! [`Rtc::new`] enables the requested oscillator, selects it as `RTCCLK` and
 //! writes the prescaler for a 1 Hz time base (RM §3.3.5.3). If the RTC is
-//! already running from the same source, the elapsed time is preserved.
+//! already running from the same source, it is left as it is: counter and
+//! prescaler are kept, so the elapsed time is preserved.
 //!
 //! Register writes go through the configuration sequence of RM §6.2.3: poll
 //! `CTLRL.RTOFF`, set `CNF`, write, clear `CNF`, poll `RTOFF`.
@@ -94,6 +95,10 @@ pub struct Rtc<'d> {
 impl<'d> Rtc<'d> {
     /// Enable the RTC from `source` with a 1 Hz time base.
     ///
+    /// An RTC already running from `source` keeps the prescaler it was
+    /// started with: the prescaler is write-only, and rewriting it restarts
+    /// the current second.
+    ///
     /// Returns an error before changing `RTCCLK` when the divider does not
     /// fit or the RTC already runs from another source.
     pub fn new(peri: Peri<'d, peripherals::RTC>, source: ClockSource) -> Result<Self, Error> {
@@ -132,9 +137,14 @@ impl<'d> Rtc<'d> {
 
         let rtc = Self { _peri: peri, frequency };
         // First access after a reset must re-acquire the register shadow
-        // (RM §6.3.2). Then program the divider; the counter itself is kept.
+        // (RM §6.3.2).
         rtc.synchronize();
-        rtc.write_prescaler(divider);
+        // Program the divider only on a stopped RTC: writing it while the
+        // RTC runs restarts the current second, so every re-open would lose
+        // up to one second.
+        if !running {
+            rtc.write_prescaler(divider);
+        }
         Ok(rtc)
     }
 
