@@ -47,6 +47,7 @@ async fn main(spawner: Spawner) -> ! {
             hspll: None,
         },
         dma_interrupt_priority: interrupt::Priority::P0,
+        ..Default::default()
     });
     let core_freq: u32 = 120_000_000;
 

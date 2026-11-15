@@ -250,6 +250,11 @@ pub use crate::_generated::interrupt;
 pub struct Config {
     pub rcc: rcc::Config,
     pub dma_interrupt_priority: interrupt::Priority,
+    /// Release the debug-interface pins for GPIO. Defaults to `false`.
+    ///
+    /// The debugger can only reattach after resetting into the system bootloader.
+    #[cfg(afio)]
+    pub release_swd_pins: bool,
 }
 
 impl Default for Config {
@@ -257,6 +262,8 @@ impl Default for Config {
         Self {
             rcc: Default::default(),
             dma_interrupt_priority: interrupt::Priority::P0,
+            #[cfg(afio)]
+            release_swd_pins: false,
         }
     }
 }
@@ -281,6 +288,11 @@ pub fn init(config: Config) -> Peripherals {
 
     ::critical_section::with(|cs| unsafe {
         gpio::init(cs, true);
+        // After `gpio::init`, because its AFIO reset pulse clears `SW_CFG`.
+        #[cfg(afio)]
+        if config.release_swd_pins {
+            debug::release_swd_pins();
+        }
         dma::init(cs, config.dma_interrupt_priority, true);
         #[cfg(feature = "exti")]
         exti::init(cs);
