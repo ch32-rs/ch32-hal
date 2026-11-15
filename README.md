@@ -87,6 +87,7 @@ mailbox, `xtask` for flash/report) live in [`examples/ch32h417`](examples/ch32h4
 ### Notes
 
 - For USB OTGFS, HS and SS, look at the respective `mod.rs` to understand what is / is not tested.
+- Embassy executor: most examples use `platform-spin`, which never sleeps. `platform-riscv32` sleeps in WFI between polls, and on the CH32V003 and CH32V203 the DMA makes no progress while the core sleeps. One-shot DMA transfers keep the executor awake on these chips; ring-buffered reception (`RingBufferedUartRx`) does not, and loses bytes there with `platform-riscv32`, so keep `platform-spin` if you use it.
 
 ### Important: ROM/RAM Split Configuration (CH32V2/V3)
 
