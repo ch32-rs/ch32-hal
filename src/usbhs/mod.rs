@@ -1226,7 +1226,28 @@ impl<'d, T: Instance> embassy_usb_driver::Bus for Bus<'d, T> {
         critical_section::with(|_| T::regs().ctrl().modify(|v| v.set_dev_pu_en(true)));
     }
 
-    async fn disable(&mut self) {}
+    async fn disable(&mut self) {
+        // Detach: drop the D+ pull-up and pulse the SIE reset, the mechanism WCH's
+        // `USBHS_Device_Init(DISABLE)` uses. Without the reset the device never attaches again:
+        // when `enable` sets the pull-up back, D+ stays low.
+        let r = T::regs();
+        critical_section::with(|_| {
+            r.ctrl().modify(|w| {
+                w.set_dev_pu_en(false);
+                w.set_clr_all(true);
+                w.set_reset_sie(true);
+            })
+        });
+        crate::internal::delay::block_for_us(10);
+        critical_section::with(|_| {
+            r.ctrl().modify(|w| {
+                w.set_clr_all(false);
+                w.set_reset_sie(false);
+            })
+        });
+        // embassy-usb enables the bus again only on `PowerDetected`, which `poll` fakes once.
+        self.fake_power_on = false;
+    }
 
     async fn poll(&mut self) -> Event {
         // TODO: VBUS detection
