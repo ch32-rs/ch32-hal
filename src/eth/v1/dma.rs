@@ -252,7 +252,12 @@ impl<'d, T: Instance, const N: usize> RDesRing<'d, T, N> {
 
     /// Returns a reference to the received frame data if a complete frame is available.
     pub fn available(&mut self) -> Option<&mut [u8]> {
-        self.resume_rx();
+        // A buffer released just before DMA suspended needs a demand poll.
+        // On a full ring that would only raise RBUS again, waking the driver
+        // in a loop until a buffer is released.
+        if T::regs().dmasr().read().rps() == 0b100 && self.dma_owns_current() {
+            self.resume_rx();
+        }
 
         // Skip frames spanning several descriptors and erroneous frames, so
         // that good frames queued behind them are not delayed until the next
@@ -327,6 +332,16 @@ impl<'d, T: Instance, const N: usize> RDesRing<'d, T, N> {
             r.dmasr().write(|w| w.set_rbus(status.rbus()));
             self.demand_poll();
         }
+    }
+
+    /// Whether the descriptor at the DMA's cursor belongs to DMA. An off-ring
+    /// cursor does not prevent a demand poll, so recovery can still proceed.
+    fn dma_owns_current(&self) -> bool {
+        let current = T::regs().dmachrdr().read().hrdap();
+        self.desc
+            .iter()
+            .find(|d| *d as *const RDes as u32 == current)
+            .map_or(true, |d| d.rdes0() & RDES0_OWN != 0)
     }
 
     fn demand_poll(&self) {
