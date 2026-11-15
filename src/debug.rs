@@ -8,6 +8,14 @@ use qingke::riscv;
 const DEBUG_DATA0_ADDRESS: *mut u32 = DATA0 as *mut u32;
 const DEBUG_DATA1_ADDRESS: *mut u32 = DATA1 as *mut u32;
 
+/// Give the debug-interface pins back to GPIO (`AFIO.PCFR1.SW_CFG = 0b100`).
+///
+/// The debugger can only reattach after resetting into the system bootloader.
+#[cfg(afio)]
+pub fn release_swd_pins() {
+    crate::pac::AFIO.pcfr1().modify(|w| w.set_sw_cfg(0b100));
+}
+
 pub struct SDIPrint;
 
 impl SDIPrint {

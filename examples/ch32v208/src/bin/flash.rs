@@ -34,6 +34,7 @@ async fn main(_spawner: Spawner) -> ! {
             hspll: None,
         },
         dma_interrupt_priority: interrupt::Priority::P0,
+        ..Default::default()
     });
     ch32_hal::debug::SDIPrint::enable();
 
