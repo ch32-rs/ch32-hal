@@ -140,11 +140,11 @@ pub mod pioc;
 // without an I2C peripheral.
 #[cfg(feature = "soft-i2c")]
 pub mod soft_i2c;
-// The RTC block is the shared F1-style layout, but only CH32H4 currently has
-// a PWR peripheral in the PAC for the `DBP` backup-domain write enable. V4x7
-// has `PWR.CTLR.DBP` too, but a raw `RTCSEL` byte instead of the `Rtcsel`
-// enum, so it needs its own branch before this gate can widen.
-#[cfg(all(rtc, rcc_h4))]
+// The RTC block is the shared F1-style layout; it needs the PAC's PWR for the
+// `DBP` backup-domain write enable. V4x7 has `PWR.CTLR.DBP` too, but a raw
+// `RTCSEL` byte instead of the `Rtcsel` enum, so it needs its own branch
+// before this gate can widen.
+#[cfg(all(rtc, any(rcc_h4, pwr_v3)))]
 pub mod rtc;
 #[cfg(sdio_v3)]
 pub mod sdio;

@@ -1,17 +1,32 @@
 //! LSE / LSI / RTC clock setup (RCC_BDCTLR).
 
-use super::LSI_FREQUENCY;
 use crate::pac::rcc::vals::Rtcsel;
 use crate::pac::RCC;
-use crate::rcc::{LsConfig, LseMode, RtcClockSource};
+use crate::rcc::{LsConfig, LseMode, RtcClockSource, LSI_FREQ};
 use crate::time::Hertz;
 
-pub(crate) unsafe fn init_ls(config: &LsConfig) -> Option<Hertz> {
-    // LSEON, LSEBYP, RTCSEL and RTCEN live in the write-protected backup
-    // domain: writes are dropped until `PWR.CTLR.DBP` is set, and PWR itself
-    // needs its HB1 clock (RM §3.4.10).
+/// `RTCSEL` value for the divided HSE: /512 on CH32H4; /128 or /512 on
+/// V2/V3, depending on the part (RCC_BDCTLR).
+#[cfg(rcc_h4)]
+const RTCSEL_HSE: Rtcsel = Rtcsel::HSE_DIV512;
+#[cfg(pwr_v3)]
+const RTCSEL_HSE: Rtcsel = Rtcsel::HSE;
+
+/// Allow writes to the backup domain (`RCC_BDCTLR`, RTC, BKP).
+///
+/// LSEON, LSEBYP, RTCSEL and RTCEN live in the write-protected backup
+/// domain: writes are dropped until `PWR.CTLR.DBP` is set, and PWR itself
+/// needs its bus clock (RCC_BDCTLR in the reference manuals).
+pub(crate) fn enable_backup_domain_writes() {
+    #[cfg(rcc_h4)]
     RCC.hb1pcenr().modify(|w| w.set_pwren(true));
+    #[cfg(pwr_v3)]
+    RCC.apb1pcenr().modify(|w| w.set_pwren(true));
     crate::pac::PWR.ctlr().modify(|w| w.set_dbp(true));
+}
+
+pub(crate) unsafe fn init_ls(config: &LsConfig) -> Option<Hertz> {
+    enable_backup_domain_writes();
 
     if config.lsi {
         RCC.rstsckr().modify(|w| w.set_lsion(true));
@@ -46,7 +61,7 @@ pub(crate) unsafe fn init_ls(config: &LsConfig) -> Option<Hertz> {
             }
             Rtcsel::LSI
         }
-        RtcClockSource::HSE => Rtcsel::HSE_DIV512,
+        RtcClockSource::HSE => RTCSEL_HSE,
     };
 
     // Never retarget a running RTC: its counter would silently change time
@@ -57,8 +72,7 @@ pub(crate) unsafe fn init_ls(config: &LsConfig) -> Option<Hertz> {
 
     match rtcsel {
         Rtcsel::LSE => lse_hz,
-        Rtcsel::LSI => Some(LSI_FREQUENCY),
-        Rtcsel::HSE_DIV512 => None,
-        Rtcsel::NO_CLK => None,
+        Rtcsel::LSI => Some(LSI_FREQ),
+        _ => None,
     }
 }

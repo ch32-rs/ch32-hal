@@ -215,6 +215,9 @@ impl Default for Config {
 pub(crate) unsafe fn init(config: Config) {
     // Configure HSI
     while !RCC.ctlr().read().hsirdy() {}
+
+    #[cfg(pwr_v3)]
+    super::ls::init_ls(&config.ls);
     let hsi = Some(HSI_FREQUENCY);
 
     // Configure HSE
