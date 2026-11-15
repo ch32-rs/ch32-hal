@@ -21,6 +21,9 @@ use crate::time::Hertz;
 
 mod shared;
 
+#[cfg(any(rcc_h4, pwr_v3))]
+pub(crate) mod ls;
+
 /// 时钟树与 CSDK 命名对照（阅读用，见文件内文档）。
 #[doc(hidden)]
 pub mod clock_tree_reference;

@@ -27,6 +27,7 @@ pub enum ClockSource {
     /// into OSC32_IN when `bypass` is set.
     Lse { frequency: Hertz, bypass: bool },
     /// HSE divided by 512. The HSE tree must already be running.
+    #[cfg(rcc_h4)]
     HseDiv512 { frequency: Hertz },
 }
 
@@ -46,6 +47,7 @@ impl ClockSource {
         match self {
             Self::Lsi => Rtcsel::LSI,
             Self::Lse { .. } => Rtcsel::LSE,
+            #[cfg(rcc_h4)]
             Self::HseDiv512 { .. } => Rtcsel::HSE_DIV512,
         }
     }
@@ -54,6 +56,7 @@ impl ClockSource {
         match self {
             Self::Lsi => crate::rcc::LSI_FREQ,
             Self::Lse { frequency, .. } => frequency,
+            #[cfg(rcc_h4)]
             Self::HseDiv512 { frequency } => frequency / 512u32,
         }
     }
@@ -81,6 +84,7 @@ impl ClockSource {
                 }
                 while !rcc.bdctlr().read().lserdy() {}
             }
+            #[cfg(rcc_h4)]
             Self::HseDiv512 { .. } => {}
         }
     }
@@ -108,10 +112,7 @@ impl<'d> Rtc<'d> {
             _ => return Err(Error::InvalidFrequency(frequency)),
         };
 
-        // PWR is clocked from HB1, and the backup domain ignores writes until
-        // `PWR.CTLR.DBP` is set (RM §3.4.10).
-        pac::RCC.hb1pcenr().modify(|w| w.set_pwren(true));
-        pac::PWR.ctlr().modify(|w| w.set_dbp(true));
+        crate::rcc::ls::enable_backup_domain_writes();
 
         let bdctlr = pac::RCC.bdctlr();
         let rtcsel = source.rtcsel();

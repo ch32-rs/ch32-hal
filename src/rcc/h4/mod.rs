@@ -9,7 +9,6 @@
 //! });
 //! ```
 
-mod ls;
 mod measure;
 mod mux;
 mod pll;
@@ -167,7 +166,7 @@ impl Config {
 pub unsafe fn init(config: Config) {
     while !RCC.ctlr().read().hsirdy() {}
 
-    let _rtc = ls::init_ls(&config.ls);
+    let _rtc = super::ls::init_ls(&config.ls);
     mux::apply_mux(&config.mux);
 
     let (sysclk_hz, bus, _v3f_hz, use_pll_sw) = recipe_params(&config);
