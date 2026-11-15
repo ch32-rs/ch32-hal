@@ -341,10 +341,8 @@ impl<'d, T: Instance, M: Mode> Can<'d, T, M> {
         let regs = Registers::new::<T>();
         let fifo = self.fifo.val();
 
-        let dlc = regs.0.rxmdtr(fifo).read().dlc() as usize;
-        if dlc > 8 {
-            return Err(CanError::Form);
-        }
+        // A DLC of 9 to 15 is valid in classic CAN and carries 8 data bytes.
+        let dlc = (regs.0.rxmdtr(fifo).read().dlc() as usize).min(8);
         let rxmir = regs.0.rxmir(fifo).read();
 
         let id = if rxmir.ide() {
