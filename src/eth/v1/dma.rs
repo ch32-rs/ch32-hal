@@ -141,24 +141,32 @@ impl<'d, T: Instance, const N: usize> TDesRing<'d, T, N> {
                 &desc[0] as *const TDes as u32
             };
 
-            desc[i].set_tdes0(TDES0_TCH | TDES0_IC | TDES0_FS | TDES0_LS);
-            desc[i].set_tdes1(0);
             desc[i].set_tdes2(buf[i].as_ptr() as u32);
             desc[i].set_tdes3(next);
         }
         // Last descriptor chains back to first (already set in loop above).
 
-        // Tell DMA where the TX descriptor ring starts
-        T::regs()
-            .dmatdlar()
-            .write(|w| w.set_stl(&desc[0] as *const TDes as u32));
-
-        Self {
+        let mut ring = Self {
             desc,
             buf,
             index: 0,
             _phantom: PhantomData,
+        };
+        ring.reset();
+        ring
+    }
+
+    /// Discard pending frames and restart the ring. DMA must be stopped, either
+    /// before its first start or after a completed MAC/DMA software reset.
+    pub(super) fn reset(&mut self) {
+        for d in self.desc.iter_mut() {
+            d.set_tdes0(TDES0_TCH | TDES0_IC | TDES0_FS | TDES0_LS);
+            d.set_tdes1(0);
         }
+        self.index = 0;
+        T::regs()
+            .dmatdlar()
+            .write(|w| w.set_stl(&self.desc[0] as *const TDes as u32));
     }
 
     /// Returns a mutable slice of the next available TX buffer, or None if DMA owns it.
@@ -214,24 +222,32 @@ impl<'d, T: Instance, const N: usize> RDesRing<'d, T, N> {
                 &desc[0] as *const RDes as u32
             };
 
-            desc[i].set_rdes0(RDES0_OWN); // DMA owns initially
             desc[i].set_rdes1(RDES1_RCH | (RX_BUF_SIZE as u32 & 0x1FFF));
             desc[i].set_rdes2(buf[i].as_ptr() as u32);
             desc[i].set_rdes3(next);
         }
         // Last descriptor chains back to first (already set in loop above).
 
-        // Tell DMA where the RX descriptor ring starts
-        T::regs()
-            .dmardlar()
-            .write(|w| w.set_srl(&desc[0] as *const RDes as u32));
-
-        Self {
+        let mut ring = Self {
             desc,
             buf,
             index: 0,
             _phantom: PhantomData,
+        };
+        ring.reset();
+        ring
+    }
+
+    /// Discard received frames and restart the ring. DMA must be stopped,
+    /// either before its first start or after a completed MAC/DMA software reset.
+    pub(super) fn reset(&mut self) {
+        for d in self.desc.iter_mut() {
+            d.set_rdes0(RDES0_OWN);
         }
+        self.index = 0;
+        T::regs()
+            .dmardlar()
+            .write(|w| w.set_srl(&self.desc[0] as *const RDes as u32));
     }
 
     /// Returns a reference to the received frame data if a complete frame is available.
