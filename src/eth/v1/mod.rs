@@ -86,6 +86,21 @@ enum PhyInterface {
 /// Maximum RCC_CTLR reads while waiting for PLL3 to lock.
 const PLL3_POLL_LIMIT: u32 = 1_000_000;
 
+/// Counts kept by the driver since initialization, wrapping.
+///
+/// Each receive or transmit call reads and clears DMAMFBOCR, adding each of its
+/// frame counts to the matching field. Counts beyond what the hardware counters
+/// hold between two calls are lost.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stats {
+    /// Frames the MAC dropped for want of a free receive descriptor.
+    pub missed_frames: u32,
+    /// Frames the MAC dropped because its receive FIFO overflowed.
+    pub overflow_frames: u32,
+    /// Completed MAC/DMA recovery resets.
+    pub resets: u32,
+}
+
 /// An error while initializing the Ethernet MAC or PHY.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitError {
@@ -124,6 +139,8 @@ pub struct Ethernet<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> {
     speed_100m: bool,
     /// Frames for every destination are received (`set_promiscuous`).
     promiscuous: bool,
+    /// Counts for the application (`stats`).
+    stats: Stats,
     /// The link dropped at this time, if it is down.
     #[cfg(feature = "embassy")]
     down_since: Option<embassy_time::Instant>,
@@ -329,6 +346,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             full_duplex: true,
             speed_100m,
             promiscuous: false,
+            stats: Stats::default(),
             #[cfg(feature = "embassy")]
             down_since: None,
             #[cfg(feature = "embassy")]
@@ -393,6 +411,9 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         // counts the dropped frames in DMAMFBOCR (cleared on read).
         let e = T::regs();
         let missed = e.dmamfbocr().read();
+        // The read cleared both counters: keep them for `stats`.
+        self.stats.missed_frames = self.stats.missed_frames.wrapping_add(u32::from(missed.mfc()));
+        self.stats.overflow_frames = self.stats.overflow_frames.wrapping_add(u32::from(missed.mfa()));
         if missed.mfa() == 0 && !missed.ofoc() && !self.recovery_pending && !self.tx.derailed() {
             return;
         }
@@ -429,6 +450,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         self.rx.reset();
         fence(Ordering::SeqCst);
         start_mac_dma::<T>();
+        self.stats.resets = self.stats.resets.wrapping_add(1);
     }
 
     /// Get the SMI interface for direct PHY register access.
@@ -464,6 +486,12 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         }
         let len = self.rx.available()?.len();
         Some(RxToken { rx: &mut self.rx, len })
+    }
+
+    /// Counts since initialization, wrapping. This does not read the hardware:
+    /// the counts are as of the last receive or transmit call.
+    pub fn stats(&self) -> Stats {
+        self.stats
     }
 }
 
