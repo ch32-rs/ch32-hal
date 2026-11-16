@@ -445,7 +445,11 @@ fn configure_mac_dma<T: Instance>(
             w.set_ire(true); // Internal 50-ohm pull-up (10M PHY only)
         } else {
             w.set_fes(if speed_100m { 1 } else { 0 }); // Link speed
-            w.set_apcs(true); // Auto pad/CRC strip
+
+            // `RDesRing` takes the FCS off every frame. With APCS set, the MAC
+            // already strips pad and FCS from frames with a length field, so
+            // their end would be cut.
+            w.set_apcs(false);
             w.set_rd(true); // Retry disable
         }
     });
