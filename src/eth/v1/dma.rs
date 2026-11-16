@@ -8,7 +8,9 @@ use super::Instance;
 // ============================================================================
 
 pub(super) const MTU: usize = 1514;
-const TX_BUF_SIZE: usize = 1514;
+// A VLAN-tagged frame is up to 1518 bytes without its FCS (IEEE 802.3, 3.2.7): a bridge
+// forwards them. The IP stack still sends at most MTU.
+const TX_BUF_SIZE: usize = 1518;
 const RX_BUF_SIZE: usize = 1536;
 
 // TX descriptor word 0 (TDES0) bits
