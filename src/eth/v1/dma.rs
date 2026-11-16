@@ -404,8 +404,19 @@ impl<const TX: usize, const RX: usize> PacketQueue<TX, RX> {
 }
 
 /// Token for receiving a single packet from the DMA ring.
+///
+/// Dropped without `consume()`, it leaves the frame in its descriptor, unless a
+/// later recovery reset discards it.
 pub struct RxToken<'a, 'd, T: Instance, const N: usize> {
     pub(super) rx: &'a mut RDesRing<'d, T, N>,
+    pub(super) len: usize,
+}
+
+impl<T: Instance, const N: usize> RxToken<'_, '_, T, N> {
+    /// Length of the frame, without its FCS.
+    pub fn len(&self) -> usize {
+        self.len
+    }
 }
 
 /// Token for transmitting a single packet via the DMA ring.

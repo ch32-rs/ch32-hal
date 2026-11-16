@@ -448,6 +448,23 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         self.promiscuous = on;
         T::regs().macffr().modify(|w| w.set_pm(on));
     }
+
+    /// Receive one frame whatever the transmit ring holds.
+    ///
+    /// `receive()` of `embassy_net_driver::Driver` also needs a free transmit
+    /// descriptor, as the stack may answer at once. A bridge forwards frames to
+    /// another interface instead: it must keep receiving while its own transmit
+    /// ring is full. The token tells the frame's length before it is consumed,
+    /// so a frame with nowhere to go yet can be left in the ring.
+    pub fn receive_frame(&mut self, cx: &mut Context) -> Option<RxToken<'_, 'd, T, RX>> {
+        T::state().waker.register(cx.waker());
+        self.recover_dma(cx);
+        if self.recovery_pending {
+            return None;
+        }
+        let len = self.rx.available()?.len();
+        Some(RxToken { rx: &mut self.rx, len })
+    }
 }
 
 /// DMA soft reset and MAC/DMA configuration (steps 3-11). Shared by
@@ -710,12 +727,14 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driv
         let s = T::state();
         s.waker.register(cx.waker());
         self.recover_dma(cx);
-        if !self.recovery_pending && self.rx.available().is_some() && self.tx.available().is_some() {
-            // rx and tx are disjoint struct fields, Rust permits simultaneous &mut borrows.
-            Some((RxToken { rx: &mut self.rx }, TxToken { tx: &mut self.tx }))
-        } else {
-            None
+        if self.recovery_pending {
+            return None;
         }
+        // RX first, as before: `available()` also resumes a suspended RX DMA.
+        let len = self.rx.available()?.len();
+        self.tx.available()?;
+        // rx and tx are disjoint struct fields, Rust permits simultaneous &mut borrows.
+        Some((RxToken { rx: &mut self.rx, len }, TxToken { tx: &mut self.tx }))
     }
 
     fn transmit(&mut self, cx: &mut Context) -> Option<Self::TxToken<'_>> {
