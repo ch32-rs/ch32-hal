@@ -203,6 +203,24 @@ impl<'d, T: Instance, const N: usize> TDesRing<'d, T, N> {
     pub fn len(&self) -> usize {
         N
     }
+
+    /// Whether the TX DMA left its ring.
+    ///
+    /// On the CH32V307, after a frame is aborted for excessive collisions
+    /// (half duplex), the TX DMA can take the start of a TX buffer for its next
+    /// descriptor. Reading frame bytes as descriptors then leaves it suspended
+    /// or stuck reading data, and TX stops. Writing DMATDLAR while it is
+    /// stopped does not bring it back: it resumes from the position it kept. A
+    /// DMA software reset restarts it from the ring.
+    pub(super) fn derailed(&self) -> bool {
+        let regs = T::regs();
+        // Any state but stopped: it was seen suspended (TPS 6) and reading (TPS 3).
+        regs.dmasr().read().tps() != 0 && {
+            let current = regs.dmachtdr().read().htdap() as usize;
+            let offset = current.wrapping_sub(self.desc.as_ptr() as usize);
+            offset >= core::mem::size_of::<[TDes; N]>() || offset % core::mem::size_of::<TDes>() != 0
+        }
+    }
 }
 
 /// An RX DMA descriptor ring.
