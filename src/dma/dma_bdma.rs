@@ -730,6 +730,13 @@ impl<'a> Future for Transfer<'a> {
         state.waker.register(cx.waker());
 
         if self.is_running() {
+            // On the CH32V003 and CH32V203 the DMA makes no progress while the
+            // core sleeps in WFI/WFE, so an executor that sleeps between polls
+            // would only move the transfer on at its next unrelated wake-up.
+            // Wake the task again so that the executor keeps polling until the
+            // transfer is done.
+            #[cfg(any(ch32v003, ch32v203))]
+            cx.waker().wake_by_ref();
             Poll::Pending
         } else {
             Poll::Ready(())
