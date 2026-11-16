@@ -36,6 +36,11 @@ pub trait Phy {
     }
 }
 
+/// Reads of BCR while waiting for a PHY reset to complete. A PHY finishes its
+/// reset within 0.5 s (IEEE 802.3 22.2.4.1.1). At the fastest configured MDC
+/// (144 MHz / 42), 30 000 reads of 64 cycles take at least 560 ms.
+const RESET_POLL_LIMIT: usize = 30_000;
+
 /// MII PHY register constants.
 mod phy_regs {
     pub const BCR: u8 = 0x00;
@@ -70,9 +75,14 @@ impl GenericPhy {
 impl Phy for GenericPhy {
     fn phy_reset(&mut self, smi: &mut Smi) -> Result<(), SmiError> {
         smi.write(self.phy_addr, phy_regs::BCR, phy_regs::BCR_RESET)?;
-        // Wait for reset bit to self-clear
-        while smi.read(self.phy_addr, phy_regs::BCR)? & phy_regs::BCR_RESET != 0 {}
-        Ok(())
+        // Wait for the reset bit to self-clear. Without a PHY at this address
+        // MDIO reads all ones, so the bit never clears: bound the wait.
+        for _ in 0..RESET_POLL_LIMIT {
+            if smi.read(self.phy_addr, phy_regs::BCR)? & phy_regs::BCR_RESET == 0 {
+                return Ok(());
+            }
+        }
+        Err(SmiError::Timeout)
     }
 
     fn phy_init(&mut self, smi: &mut Smi) -> Result<(), SmiError> {
