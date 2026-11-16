@@ -119,6 +119,8 @@ pub struct Ethernet<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> {
     full_duplex: bool,
     /// MAC speed, from the PHY at link-up.
     speed_100m: bool,
+    /// Frames for every destination are received (`set_promiscuous`).
+    promiscuous: bool,
     /// The link dropped at this time, if it is down.
     #[cfg(feature = "embassy")]
     down_since: Option<embassy_time::Instant>,
@@ -250,7 +252,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         // 3.-11. Soft reset and MAC/DMA configuration
         // Start at 100M for RMII and adjust to the link after negotiation.
         let speed_100m = phy_interface == PhyInterface::Rmii;
-        let clock_range = configure_mac_dma::<T>(phy_interface, mac_addr, true, speed_100m)?;
+        let clock_range = configure_mac_dma::<T>(phy_interface, mac_addr, true, speed_100m, false)?;
         let mut smi = Smi::new(T::regs(), clock_range);
 
         // Complete fallible PHY setup before DMA can access the packet queue.
@@ -282,6 +284,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             link_up: false,
             full_duplex: true,
             speed_100m,
+            promiscuous: false,
             #[cfg(feature = "embassy")]
             down_since: None,
             #[cfg(feature = "embassy")]
@@ -359,7 +362,15 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         });
         e.dmaomr().modify(|w| w.set_sr(false));
 
-        if configure_mac_dma::<T>(self.phy_interface, self.mac_addr, self.full_duplex, self.speed_100m).is_err() {
+        if configure_mac_dma::<T>(
+            self.phy_interface,
+            self.mac_addr,
+            self.full_duplex,
+            self.speed_100m,
+            self.promiscuous,
+        )
+        .is_err()
+        {
             // Do not touch descriptors or issue tokens until reset completes.
             // Poll again instead of waiting for an interrupt that cannot come.
             self.recovery_pending = true;
@@ -385,6 +396,14 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
     pub fn mac_addr(&self) -> [u8; 6] {
         self.mac_addr
     }
+
+    /// Receive frames for every destination address, not only this MAC's, its
+    /// multicast and broadcast: what a bridge needs. The setting survives the
+    /// driver's own MAC/DMA resets.
+    pub fn set_promiscuous(&mut self, on: bool) {
+        self.promiscuous = on;
+        T::regs().macffr().modify(|w| w.set_pm(on));
+    }
 }
 
 /// DMA soft reset and MAC/DMA configuration (steps 3-11). Shared by
@@ -394,6 +413,7 @@ fn configure_mac_dma<T: Instance>(
     mac_addr: [u8; 6],
     full_duplex: bool,
     speed_100m: bool,
+    promiscuous: bool,
 ) -> Result<u8, InitError> {
     let e = T::regs();
 
@@ -456,11 +476,12 @@ fn configure_mac_dma<T: Instance>(
     });
 
     // 6. Frame filter
-    // No receive-all / promiscuous mode: the built-in PHY handles the cable
-    // polarity itself (automatic PN polarity, see `InternalPhy`), so frames for
-    // other hosts are not needed and would only cost RX descriptors.
+    // No receive-all mode: the built-in PHY handles the cable polarity itself
+    // (automatic PN polarity, see `InternalPhy`). Frames for other hosts are
+    // only received when asked for (`set_promiscuous`).
     e.macffr().write(|w| {
         w.set_pam(true); // Pass all multicast (needed for ARP/DHCP)
+        w.set_pm(promiscuous);
     });
 
     // 7. Hash table (unused, zero)
