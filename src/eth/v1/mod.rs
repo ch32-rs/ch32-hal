@@ -54,7 +54,10 @@ use dma::MTU;
 const POLARITY_RETRY: embassy_time::Duration = embassy_time::Duration::from_millis(2000);
 pub use dma::{PacketQueue, RDes, RDesRing, RxToken, TDes, TDesRing, TxToken};
 pub use phy::{GenericPhy, InternalPhy, Phy};
-pub use pins::{CrsDvPin, MdcPin, MdioPin, RefClkPin, RmiiPins, Rxd0Pin, Rxd1Pin, TxEnPin, Txd0Pin, Txd1Pin};
+use pins::HeldPins;
+pub use pins::{
+    CrsDvPin, MdcPin, MdioPin, RefClkPin, RmiiDataPins, RmiiPins, Rxd0Pin, Rxd1Pin, TxEnPin, Txd0Pin, Txd1Pin,
+};
 pub use smi::{Smi, SmiError};
 
 struct State {
@@ -127,7 +130,7 @@ pub struct Ethernet<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> {
     /// Time of the last receive-polarity retry while the link was down.
     #[cfg(feature = "embassy")]
     polarity_changed_at: Option<embassy_time::Instant>,
-    _pins: Option<[Peri<'d, crate::gpio::AnyPin>; 9]>,
+    _pins: Option<HeldPins<'d>>,
     _phantom: PhantomData<T>,
 }
 
@@ -191,7 +194,48 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             phy,
             mac_addr,
             PhyInterface::Rmii,
-            Some(pins.configure()),
+            Some(HeldPins::Rmii(pins.configure())),
+        )
+    }
+
+    /// Initialize Ethernet using an external PHY connected through RMII, without MDIO and
+    /// MDC: the application manages the PHY on a bus of its own (for example MDIO driven
+    /// by GPIO, as it may need to keep managing the PHY across a MAC reset). The driver
+    /// configures and retains the seven data pins using the default mapping.
+    ///
+    /// The driver does not configure or retain MDIO and MDC, but still calls every
+    /// [`Phy`] method: the implementation must ignore the [`Smi`] it gets and report
+    /// what the application learnt from the PHY. [`GenericPhy`] and [`InternalPhy`]
+    /// are not suitable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if DMA reset times out or a `phy` method returns an error.
+    pub fn new_rmii_without_smi(
+        peri: Peri<'d, T>,
+        irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+        queue: &'d mut PacketQueue<TX, RX>,
+        pins: RmiiDataPins<
+            'd,
+            impl RefClkPin<T>,
+            impl CrsDvPin<T>,
+            impl Rxd0Pin<T>,
+            impl Rxd1Pin<T>,
+            impl TxEnPin<T>,
+            impl Txd0Pin<T>,
+            impl Txd1Pin<T>,
+        >,
+        phy: P,
+        mac_addr: [u8; 6],
+    ) -> Result<Self, InitError> {
+        Self::new_inner(
+            peri,
+            irqs,
+            queue,
+            phy,
+            mac_addr,
+            PhyInterface::Rmii,
+            Some(HeldPins::RmiiData(pins.configure())),
         )
     }
 
@@ -202,7 +246,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         mut phy: P,
         mac_addr: [u8; 6],
         phy_interface: PhyInterface,
-        pins: Option<[Peri<'d, crate::gpio::AnyPin>; 9]>,
+        pins: Option<HeldPins<'d>>,
     ) -> Result<Self, InitError> {
         // ETH needs separate MAC, TX, and RX clocks.
         critical_section::with(|_| {
