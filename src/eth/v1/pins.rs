@@ -86,3 +86,57 @@ impl<'d, REFCLK: Pin, MDIO: Pin, MDC: Pin, CRSDV: Pin, RXD0: Pin, RXD1: Pin, TXE
         ]
     }
 }
+
+/// Pins for the default RMII mapping without MDIO and MDC, consumed and configured by
+/// [`Ethernet::new_rmii_without_smi`](super::Ethernet::new_rmii_without_smi).
+///
+/// For a PHY the application manages on a bus of its own, so that a MAC reset never cuts
+/// a management transfer short.
+pub struct RmiiDataPins<'d, REFCLK: Pin, CRSDV: Pin, RXD0: Pin, RXD1: Pin, TXEN: Pin, TXD0: Pin, TXD1: Pin> {
+    /// REF_CLK (PA1).
+    pub ref_clk: Peri<'d, REFCLK>,
+    /// CRS_DV (PA7).
+    pub crs_dv: Peri<'d, CRSDV>,
+    /// RXD0 (PC4).
+    pub rxd0: Peri<'d, RXD0>,
+    /// RXD1 (PC5).
+    pub rxd1: Peri<'d, RXD1>,
+    /// TX_EN (PB11).
+    pub tx_en: Peri<'d, TXEN>,
+    /// TXD0 (PB12).
+    pub txd0: Peri<'d, TXD0>,
+    /// TXD1 (PB13).
+    pub txd1: Peri<'d, TXD1>,
+}
+
+impl<'d, REFCLK: Pin, CRSDV: Pin, RXD0: Pin, RXD1: Pin, TXEN: Pin, TXD0: Pin, TXD1: Pin>
+    RmiiDataPins<'d, REFCLK, CRSDV, RXD0, RXD1, TXEN, TXD0, TXD1>
+{
+    pub(super) fn configure(self) -> [Peri<'d, AnyPin>; 7] {
+        self.ref_clk.set_as_input(Pull::None);
+        self.crs_dv.set_as_input(Pull::None);
+        self.rxd0.set_as_input(Pull::None);
+        self.rxd1.set_as_input(Pull::None);
+        self.tx_en.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        self.txd0.set_as_af_output(AFType::OutputPushPull, Speed::High);
+        self.txd1.set_as_af_output(AFType::OutputPushPull, Speed::High);
+
+        [
+            self.ref_clk.into(),
+            self.crs_dv.into(),
+            self.rxd0.into(),
+            self.rxd1.into(),
+            self.tx_en.into(),
+            self.txd0.into(),
+            self.txd1.into(),
+        ]
+    }
+}
+
+/// The RMII pins the driver keeps, with or without the management pins.
+// Never read: holding them is what keeps them from other drivers.
+#[allow(dead_code)]
+pub(super) enum HeldPins<'d> {
+    Rmii([Peri<'d, AnyPin>; 9]),
+    RmiiData([Peri<'d, AnyPin>; 7]),
+}
