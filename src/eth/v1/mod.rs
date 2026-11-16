@@ -80,11 +80,17 @@ enum PhyInterface {
     Internal10M,
 }
 
+/// Maximum RCC_CTLR reads while waiting for PLL3 to lock.
+const PLL3_POLL_LIMIT: u32 = 1_000_000;
+
 /// An error while initializing the Ethernet MAC or PHY.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitError {
     /// The DMA software reset did not complete within the polling budget.
     DmaResetTimeout,
+    /// PLL3, which clocks the built-in PHY from the HSE, did not lock within
+    /// the polling budget.
+    Pll3Timeout,
     /// A PHY management transaction failed.
     Smi(SmiError),
 }
@@ -125,11 +131,13 @@ pub struct Ethernet<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> {
 
 impl<'d, T: Instance, const TX: usize, const RX: usize> Ethernet<'d, T, TX, RX, InternalPhy> {
     /// Initialize Ethernet using the built-in 10M PHY at its fixed SMI address.
-    /// No external MII/RMII pins are needed.
+    /// No external MII/RMII pins are needed. The PHY is clocked from the HSE
+    /// through PLL3.
     ///
     /// # Errors
     ///
-    /// Returns an error if DMA reset or a PHY management transaction times out.
+    /// Returns an error if PLL3 does not lock, or if DMA reset or a PHY
+    /// management transaction times out.
     pub fn new_internal(
         peri: Peri<'d, T>,
         irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
@@ -214,7 +222,10 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
                 w.set_pll3mul(pac::rcc::vals::PllxMul::MUL15);
             });
             pac::RCC.ctlr().modify(|w| w.set_pll3on(true));
-            while !pac::RCC.ctlr().read().pll3rdy() {}
+            // PLL3 runs from the HSE: it never locks if the HSE is not running.
+            if !(0..PLL3_POLL_LIMIT).any(|_| pac::RCC.ctlr().read().pll3rdy()) {
+                return Err(InitError::Pll3Timeout);
+            }
 
             // Enable the built-in 10M PHY via EXTEND register
             pac::EXTEND.ctr().modify(|w| w.set_eth_10m_en(true));
