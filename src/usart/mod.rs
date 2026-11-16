@@ -627,7 +627,6 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
         compiler_fence(Ordering::SeqCst);
 
         // future which completes when idle line or error is detected
-        let mut first_poll = true;
         let abort = poll_fn(move |cx| {
             let s = T::state();
 
@@ -635,13 +634,16 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
 
             compiler_fence(Ordering::SeqCst);
 
-            // Take the error the interrupt handler latched before checking
-            // `STATR`: the handler's own status read and the DMA's data read
-            // may already have cleared the flag from the register.
-            let latched = critical_section::with(|_| {
+            // This closure never reads `STATR`: a read here would arm
+            // the RM §17.10.1 "read STATR, then read DATAR" clear sequence, and
+            // the DMA's next `DATAR` read could clear a FE/NE/ORE before the
+            // handler sees it. The handler latches the errors, and acknowledges
+            // an idle line by clearing `IDLEIE`. Take both together, errors
+            // first, since the error path clears `IDLEIE` too.
+            let (latched, idle) = critical_section::with(|_| {
                 let latched = s.rx_errors.load(Ordering::Acquire);
                 s.rx_errors.store(0, Ordering::Release);
-                latched
+                (latched, enable_idle_line_detection && !r.ctlr1().read().idleie())
             });
             if let Some(error) = receive_error(pac::usart::regs::Statr(latched)) {
                 r.ctlr3().modify(|register| register.set_dmar(false));
@@ -649,32 +651,7 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
                 return Poll::Ready(Err(error));
             }
 
-            // The first poll runs before any byte can have arrived. Reading
-            // `STATR` here would arm the RM §17.10.1 "read STATR, then read
-            // DATAR" clear sequence, so the DMA's own `DATAR` read would
-            // clear a FE/NE/ORE raised by the first frame before the
-            // interrupt handler gets to read it; the handler would then find
-            // nothing and the read would hang. The interrupt handler is the
-            // only observer of those bits, so only its latched copy is safe
-            // to consume here.
-            if first_poll {
-                first_poll = false;
-                return Poll::Pending;
-            }
-
-            let sr = r.statr().read();
-
-            compiler_fence(Ordering::SeqCst);
-
-            if let Some(error) = receive_error(sr) {
-                r.ctlr3().modify(|register| register.set_dmar(false));
-                let _ = r.datar().read();
-                // all Rx interrupts and Rx DMA Request have already been cleared in interrupt handler
-
-                return Poll::Ready(Err(error));
-            }
-
-            if enable_idle_line_detection && sr.idle() {
+            if idle {
                 r.ctlr3().modify(|register| register.set_dmar(false));
                 let _ = r.datar().read();
                 // Idle line detected
