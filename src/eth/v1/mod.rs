@@ -111,8 +111,8 @@ pub struct Ethernet<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> {
     smi: Smi,
     mac_addr: [u8; 6],
     phy_interface: PhyInterface,
-    /// An RX FIFO overflow recovery could not complete and is retried.
-    rx_recovery_pending: bool,
+    /// A MAC/DMA recovery did not complete and must be retried.
+    recovery_pending: bool,
     /// Link state at the last `link_state()` poll.
     link_up: bool,
     /// MAC duplex mode, from the PHY at link-up.
@@ -278,7 +278,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
             smi,
             mac_addr,
             phy_interface,
-            rx_recovery_pending: false,
+            recovery_pending: false,
             link_up: false,
             full_duplex: true,
             speed_100m,
@@ -329,7 +329,8 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         }
     }
 
-    /// Reset and reconfigure the MAC and DMA after an RX FIFO overflow.
+    /// Reset and reconfigure the MAC and DMA after an RX FIFO overflow, or when
+    /// the TX DMA left its ring (see `TDesRing::derailed`).
     ///
     /// On the CH32V307 (seen with the built-in 10M PHY), an RX FIFO overflow
     /// leaves the MAC reporting a stale frame length (the previous frame's) for
@@ -340,15 +341,15 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
     /// After the reset both descriptor rings restart from scratch, so the DMA
     /// and driver agree on their positions. Queued frames and FIFO contents
     /// are lost.
-    fn recover_rx_overflow(&mut self, cx: &mut Context) {
+    fn recover_dma(&mut self, cx: &mut Context) {
         // The CH32V307 does not set DMASR.ROS on an RX FIFO overflow; it only
         // counts the dropped frames in DMAMFBOCR (cleared on read).
         let e = T::regs();
         let missed = e.dmamfbocr().read();
-        if missed.mfa() == 0 && !missed.ofoc() && !self.rx_recovery_pending {
+        if missed.mfa() == 0 && !missed.ofoc() && !self.recovery_pending && !self.tx.derailed() {
             return;
         }
-        self.rx_recovery_pending = false;
+        self.recovery_pending = false;
 
         // Stop TX DMA, then MAC TX/RX, then RX DMA.
         e.dmaomr().modify(|w| w.set_st(false));
@@ -361,7 +362,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
         if configure_mac_dma::<T>(self.phy_interface, self.mac_addr, self.full_duplex, self.speed_100m).is_err() {
             // Do not touch descriptors or issue tokens until reset completes.
             // Poll again instead of waiting for an interrupt that cannot come.
-            self.rx_recovery_pending = true;
+            self.recovery_pending = true;
             cx.waker().wake_by_ref();
             return;
         }
@@ -387,7 +388,7 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> Ethernet<'d, T, 
 }
 
 /// DMA soft reset and MAC/DMA configuration (steps 3-11). Shared by
-/// initialization and RX overflow recovery. Returns the SMI clock range.
+/// initialization and recovery. Returns the SMI clock range.
 fn configure_mac_dma<T: Instance>(
     phy_interface: PhyInterface,
     mac_addr: [u8; 6],
@@ -643,8 +644,8 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driv
     fn receive(&mut self, cx: &mut Context) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let s = T::state();
         s.waker.register(cx.waker());
-        self.recover_rx_overflow(cx);
-        if !self.rx_recovery_pending && self.rx.available().is_some() && self.tx.available().is_some() {
+        self.recover_dma(cx);
+        if !self.recovery_pending && self.rx.available().is_some() && self.tx.available().is_some() {
             // rx and tx are disjoint struct fields, Rust permits simultaneous &mut borrows.
             Some((RxToken { rx: &mut self.rx }, TxToken { tx: &mut self.tx }))
         } else {
@@ -655,8 +656,8 @@ impl<'d, T: Instance, const TX: usize, const RX: usize, P: Phy> embassy_net_driv
     fn transmit(&mut self, cx: &mut Context) -> Option<Self::TxToken<'_>> {
         let s = T::state();
         s.waker.register(cx.waker());
-        self.recover_rx_overflow(cx);
-        if !self.rx_recovery_pending && self.tx.available().is_some() {
+        self.recover_dma(cx);
+        if !self.recovery_pending && self.tx.available().is_some() {
             Some(TxToken { tx: &mut self.tx })
         } else {
             None
