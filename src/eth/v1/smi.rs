@@ -14,7 +14,8 @@ const BUSY_POLL_LIMIT: usize = 10_000;
 /// An error during a PHY management transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SmiError {
-    /// The MAC management interface did not become idle within the polling budget.
+    /// The MAC management interface did not become idle, or the PHY did not
+    /// leave reset, within the polling budget.
     Timeout,
 }
 
