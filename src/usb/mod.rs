@@ -1,4 +1,4 @@
-use embassy_usb_driver::EndpointAllocError;
+use embassy_usb_driver::{EndpointAllocError, EndpointDisabledError, EndpointError};
 
 /// Splits a transfer into packets, as `(packet, first, last)`. An empty
 /// transfer is a single ZLP, and `needs_zlp` adds one after an exact non-zero
@@ -15,6 +15,38 @@ pub(crate) fn packets(
         .chain(zlp.then_some(&[][..]))
         .enumerate()
         .map(move |(index, packet)| (packet, index == 0, index + 1 == count))
+}
+
+/// `EndpointOut::read_transfer` over a driver's single-packet read: packets
+/// until a short one or a full `buf`.
+#[allow(dead_code)]
+pub(crate) async fn read_transfer(
+    buf: &mut [u8],
+    max_packet_size: usize,
+    mut read_packet: impl AsyncFnMut(&mut [u8]) -> Result<usize, EndpointError>,
+) -> Result<usize, EndpointError> {
+    let mut length = 0;
+    loop {
+        let received = read_packet(&mut buf[length..]).await?;
+        length += received;
+        if received < max_packet_size || length == buf.len() {
+            return Ok(length);
+        }
+    }
+}
+
+/// `EndpointIn::write_transfer` over a driver's single-packet write.
+#[allow(dead_code)]
+pub(crate) async fn write_transfer(
+    buf: &[u8],
+    needs_zlp: bool,
+    max_packet_size: usize,
+    mut write_packet: impl AsyncFnMut(&[u8]) -> Result<(), EndpointDisabledError>,
+) -> Result<(), EndpointDisabledError> {
+    for (packet, _, _) in packets(buf, needs_zlp, max_packet_size) {
+        write_packet(packet).await?;
+    }
+    Ok(())
 }
 
 pub(crate) struct EndpointBufferAllocator<'d, const NR_EP: usize, const SIZE: usize> {
