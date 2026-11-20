@@ -7,8 +7,8 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_usb_driver::{
-    Direction, EndpointAddress, EndpointAllocError, EndpointInfo, EndpointType, Event, SuperSpeedEndpointCompanionInfo,
-    Unsupported,
+    Direction, EndpointAddress, EndpointAllocError, EndpointDisabledError, EndpointError, EndpointInfo, EndpointType,
+    Event, Speed, Unsupported,
 };
 
 use super::control::ControlPipe;
@@ -217,10 +217,10 @@ pub(super) fn slot(index: usize, incoming: bool) -> usize {
     index * 2 + incoming as usize
 }
 
-fn packet_size_valid(kind: EndpointType, size: u16, interval: u8) -> bool {
+fn packet_size_valid(kind: EndpointType, size: u16) -> bool {
     match kind {
         EndpointType::Bulk => size == 1024,
-        EndpointType::Interrupt | EndpointType::Isochronous => (1..=1024).contains(&size) && interval != 0,
+        EndpointType::Interrupt | EndpointType::Isochronous => (1..=1024).contains(&size),
         EndpointType::Control => false,
     }
 }
@@ -264,14 +264,13 @@ impl<'d, T: Instance> Driver<'d, T> {
             addr: requested,
             ep_type,
             max_packet_size,
-            interval_ms,
-            max_burst,
+            interval,
+            companion,
             ..
         } = *config;
-        if !packet_size_valid(ep_type, max_packet_size, interval_ms)
-            || max_burst > 15
-            || config.max_streams != 0
-            || config.mult != 0
+        if !packet_size_valid(ep_type, max_packet_size)
+            || companion
+                .is_some_and(|companion| companion.max_burst > 15 || companion.max_streams != 0 || companion.mult != 0)
         {
             return Err(EndpointAllocError);
         }
@@ -284,18 +283,14 @@ impl<'d, T: Instance> Driver<'d, T> {
                 requested.is_none_or(|address| address.index() == *index) && self.endpoints[slot(*index, IN)].is_none()
             })
             .ok_or(EndpointAllocError)?;
-        let info = EndpointInfo {
-            addr: EndpointAddress::from_parts(index, direction),
+        let mut info = EndpointInfo::new(
+            EndpointAddress::from_parts(index, direction),
             ep_type,
             max_packet_size,
-            interval_ms,
-            companion: Some(SuperSpeedEndpointCompanionInfo {
-                max_burst,
-                max_streams: 0,
-                mult: 0,
-                bytes_per_interval: config.bytes_per_interval,
-            }),
-        };
+            interval,
+        );
+        info.bytes_per_interval = config.bytes_per_interval;
+        info.companion = companion;
         self.endpoints[slot(index, IN)] = Some(info);
         Ok(Endpoint::new(info))
     }
@@ -304,7 +299,6 @@ impl<'d, T: Instance> Driver<'d, T> {
 impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
     type EndpointOut = Endpoint<'d, T, false>;
     type EndpointIn = Endpoint<'d, T, true>;
-    type ControlPipe = ControlPipe<'d, T>;
     type Bus = Bus<'d, T>;
 
     fn alloc_endpoint_out(
@@ -321,7 +315,7 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
         self.allocate(config)
     }
 
-    fn start(self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
+    fn start(self, control_max_packet_size: u16) -> Self::Bus {
         assert_eq!(
             usize::from(control_max_packet_size),
             EP0_SIZE,
@@ -338,12 +332,16 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
             inner.events = POWER;
             inner.setup = None;
         });
-        (Bus { _peri: self.peri }, ControlPipe::new())
+        Bus {
+            _peri: self.peri,
+            control: ControlPipe::new(),
+        }
     }
 }
 
 pub struct Bus<'d, T: Instance> {
     _peri: Peri<'d, T>,
+    control: ControlPipe<T>,
 }
 
 impl<T: Instance> Bus<'_, T> {
@@ -439,6 +437,14 @@ impl<T: Instance> Bus<'_, T> {
                 .inner
                 .lock(|inner| inner.borrow().endpoints[slot(address.index(), address.is_in())].stalled)
     }
+
+    pub(super) fn is_endpoint_enabled(address: EndpointAddress) -> bool {
+        address.index() < ENDPOINTS
+            && state::<T>().inner.lock(|inner| {
+                let inner = inner.borrow();
+                inner.powered && inner.endpoints[slot(address.index(), address.is_in())].enabled
+            })
+    }
 }
 
 impl<T: Instance> Drop for Bus<'_, T> {
@@ -459,11 +465,12 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
     async fn poll(&mut self) -> Event {
         poll_fn(|context| {
             state::<T>().bus_waker.register(context.waker());
+            state::<T>().endpoint_wakers[0].register(context.waker());
             state::<T>().inner.lock(|inner| {
                 let mut inner = inner.borrow_mut();
                 for (flag, event) in [
                     (POWER, Event::PowerDetected),
-                    (RESET, Event::Reset),
+                    (RESET, Event::Reset(Speed::Super)),
                     (SUSPEND, Event::Suspend),
                     (RESUME, Event::Resume),
                 ] {
@@ -472,13 +479,42 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
                         return Poll::Ready(event);
                     }
                 }
-                Poll::Pending
+                // Bus events go first: `control_aborted` fails the control
+                // transfer of a SETUP taken while one is pending.
+                match self.control.take_setup(&mut inner) {
+                    Some(setup) => Poll::Ready(Event::Setup(setup)),
+                    None => Poll::Pending,
+                }
             })
         })
         .await
     }
 
-    fn endpoint_set_enabled(&mut self, address: EndpointAddress, enabled: bool) {
+    fn control_max_packet_size(&self) -> usize {
+        EP0_SIZE
+    }
+
+    async fn control_data_out(&mut self, buffer: &mut [u8]) -> Result<usize, EndpointError> {
+        self.control.data_out(buffer).await
+    }
+
+    async fn control_data_in(&mut self, data: &[u8], needs_zlp: bool) -> Result<(), EndpointDisabledError> {
+        self.control.data_in(data, needs_zlp).await
+    }
+
+    async fn control_accept(&mut self) {
+        self.control.accept().await
+    }
+
+    async fn control_reject(&mut self) {
+        self.control.reject()
+    }
+
+    async fn control_accept_set_address(&mut self, address: u8) {
+        self.control.accept_set_address(address).await
+    }
+
+    async fn endpoint_set_enabled(&mut self, address: EndpointAddress, enabled: bool) {
         let (index, incoming) = (address.index(), address.is_in());
         Self::with_endpoint(address, |regs, endpoint, config| {
             endpoint.reset(enabled);
@@ -493,7 +529,11 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
         });
     }
 
-    fn endpoint_set_stalled(&mut self, address: EndpointAddress, stalled: bool) {
+    fn endpoint_is_enabled(&mut self, address: EndpointAddress) -> bool {
+        Self::is_endpoint_enabled(address)
+    }
+
+    async fn endpoint_set_stalled(&mut self, address: EndpointAddress, stalled: bool) {
         Self::set_endpoint_stalled(address, stalled);
     }
 
@@ -541,6 +581,15 @@ impl Inner {
             RESUME if self.events & SUSPEND != 0 => self.events &= !SUSPEND,
             _ => self.events |= event,
         }
+        // The control transfer in progress checks for bus events.
+        self.wake |= 1;
+    }
+
+    /// Whether the control transfer of the SETUP counted `generation` can no
+    /// longer complete: a newer SETUP or a reset replaced it, or a pending
+    /// reset or suspend that `Bus::poll` has to report first.
+    pub fn control_aborted(&self, generation: u32) -> bool {
+        !self.powered || self.control_generation != generation || self.events & (RESET | SUSPEND) != 0
     }
 
     /// Ends the control transfer in progress.

@@ -1,5 +1,22 @@
 use embassy_usb_driver::EndpointAllocError;
 
+/// Splits a transfer into packets, as `(packet, first, last)`. An empty
+/// transfer is a single ZLP, and `needs_zlp` adds one after an exact non-zero
+/// multiple of `max_packet_size`.
+#[allow(dead_code)]
+pub(crate) fn packets(
+    data: &[u8],
+    needs_zlp: bool,
+    max_packet_size: usize,
+) -> impl Iterator<Item = (&[u8], bool, bool)> {
+    let zlp = data.is_empty() || (needs_zlp && data.len() % max_packet_size == 0);
+    let count = data.len().div_ceil(max_packet_size) + usize::from(zlp);
+    data.chunks(max_packet_size)
+        .chain(zlp.then_some(&[][..]))
+        .enumerate()
+        .map(move |(index, packet)| (packet, index == 0, index + 1 == count))
+}
+
 pub(crate) struct EndpointBufferAllocator<'d, const NR_EP: usize, const SIZE: usize> {
     /// The buffers not handed out yet. Each allocation splits one off, so the endpoints get
     /// disjoint `&mut` borrows.

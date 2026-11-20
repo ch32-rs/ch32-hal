@@ -33,7 +33,6 @@ mod endpoint;
 pub mod host;
 mod regs;
 
-pub use control::ControlPipe;
 pub use device::{Bus, Driver};
 pub use endpoint::Endpoint;
 

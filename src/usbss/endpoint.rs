@@ -2,7 +2,7 @@ use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
-use embassy_usb_driver::{EndpointError, EndpointInfo, Unsupported};
+use embassy_usb_driver::{EndpointDisabledError, EndpointError, EndpointInfo};
 
 use super::device::{slot, state, Bus, Phase, Transfer};
 use super::{dma_capable, Instance};
@@ -15,9 +15,11 @@ const IN_ABORT_SETTLE_US: u32 = 100;
 
 /// A data endpoint.
 ///
-/// Transfers DMA straight to or from the caller's buffer. Dropping a transfer
-/// future aborts the transfer and loses the data in flight; for an IN transfer
-/// the drop blocks for 100 us.
+/// Transfers DMA straight to or from the caller's buffer, which has to lie in
+/// the controller's DMA range `0x200A_0000..0x2018_0000`: an OUT transfer fails
+/// with `BufferOverflow` otherwise, and an IN transfer panics. Dropping a
+/// transfer future aborts the transfer and loses the data in flight; for an IN
+/// transfer the drop blocks for 100 us.
 pub struct Endpoint<'d, T: Instance, const IN: bool> {
     info: EndpointInfo,
     _lifetime: PhantomData<&'d mut T>,
@@ -37,14 +39,14 @@ impl<'d, T: Instance, const IN: bool> Endpoint<'d, T, IN> {
 
     /// Runs one transfer and returns the bytes moved. `address` must stay
     /// valid until the future completes or is dropped.
-    async fn run(&mut self, address: usize, length: usize, zlp: bool) -> Result<usize, EndpointError> {
+    async fn run(&mut self, address: usize, length: usize, zlp: bool) -> Result<usize, EndpointDisabledError> {
         let slot = slot(self.info.addr.index(), IN);
         state::<T>().inner.lock(|inner| {
             let mut inner = inner.borrow_mut();
             let powered = inner.powered;
             let endpoint = &mut inner.endpoints[slot];
             if !powered || !endpoint.enabled || endpoint.stalled {
-                return Err(EndpointError::Disabled);
+                return Err(EndpointDisabledError);
             }
             endpoint.transfer = Transfer {
                 address,
@@ -83,7 +85,7 @@ impl<'d, T: Instance, const IN: bool> Endpoint<'d, T, IN> {
                         Poll::Ready(Ok(endpoint.transfer.progress))
                     }
                     // A reset, disable or stall dropped the transfer.
-                    Phase::Idle => Poll::Ready(Err(EndpointError::Disabled)),
+                    Phase::Idle => Poll::Ready(Err(EndpointDisabledError)),
                 }
             })
         })
@@ -94,8 +96,8 @@ impl<'d, T: Instance, const IN: bool> Endpoint<'d, T, IN> {
 }
 
 impl<T: Instance, const IN: bool> embassy_usb_driver::Endpoint for Endpoint<'_, T, IN> {
-    fn info(&self) -> &EndpointInfo {
-        &self.info
+    fn info(&self) -> EndpointInfo {
+        self.info
     }
 
     async fn wait_enabled(&mut self) {
@@ -114,64 +116,38 @@ impl<T: Instance, const IN: bool> embassy_usb_driver::Endpoint for Endpoint<'_, 
         .await
     }
 
-    fn set_stall(&mut self, stalled: bool) -> Result<(), Unsupported> {
+    fn is_enabled(&self) -> bool {
+        Bus::<T>::is_endpoint_enabled(self.info.addr)
+    }
+
+    async fn set_stalled(&mut self, stalled: bool) {
         Bus::<T>::set_endpoint_stalled(self.info.addr, stalled);
-        Ok(())
     }
 
-    fn is_stalled(&self) -> Result<bool, Unsupported> {
-        Ok(Bus::<T>::is_endpoint_stalled(self.info.addr))
-    }
-}
-
-impl<T: Instance> Endpoint<'_, T, false> {
-    /// Receives until a short packet or a full `buffer`, or just one packet
-    /// if `single`.
-    async fn receive(&mut self, buffer: &mut [u8], single: bool) -> Result<usize, EndpointError> {
-        let mps = self.max_packet_size();
-        let length = if single { mps } else { buffer.len() };
-        // The controller writes whole packets.
-        if length > buffer.len() || length % mps != 0 || !dma_capable(&buffer[..length]) {
-            return Err(EndpointError::BufferOverflow);
-        }
-        self.run(buffer.as_ptr() as usize, length, false).await
+    fn is_stalled(&self) -> bool {
+        Bus::<T>::is_endpoint_stalled(self.info.addr)
     }
 }
 
 impl<T: Instance> embassy_usb_driver::EndpointOut for Endpoint<'_, T, false> {
-    async fn read(&mut self, buffer: &mut [u8]) -> Result<usize, EndpointError> {
-        self.receive(buffer, true).await
-    }
-
     async fn read_transfer(&mut self, buffer: &mut [u8]) -> Result<usize, EndpointError> {
-        self.receive(buffer, false).await
-    }
-}
-
-impl<T: Instance> Endpoint<'_, T, true> {
-    /// Sends `buffer`, then a ZLP if `zlp`.
-    async fn send(&mut self, buffer: &[u8], zlp: bool) -> Result<(), EndpointError> {
-        if buffer.is_empty() && !zlp {
-            return Ok(());
-        }
-        if !buffer.is_empty() && !dma_capable(buffer) {
+        // The controller writes whole packets.
+        if buffer.len() % self.max_packet_size() != 0 || !dma_capable(buffer) {
             return Err(EndpointError::BufferOverflow);
         }
-        self.run(buffer.as_ptr() as usize, buffer.len(), zlp).await?;
-        Ok(())
+        Ok(self.run(buffer.as_ptr() as usize, buffer.len(), false).await?)
     }
 }
 
 impl<T: Instance> embassy_usb_driver::EndpointIn for Endpoint<'_, T, true> {
-    async fn write(&mut self, buffer: &[u8]) -> Result<(), EndpointError> {
-        if buffer.len() > self.max_packet_size() {
-            return Err(EndpointError::BufferOverflow);
-        }
-        self.send(buffer, buffer.is_empty()).await
-    }
-
-    async fn write_transfer(&mut self, buffer: &[u8], needs_zlp: bool) -> Result<(), EndpointError> {
-        self.send(buffer, needs_zlp && buffer.len() % self.max_packet_size() == 0)
-            .await
+    async fn write_transfer(&mut self, buffer: &[u8], needs_zlp: bool) -> Result<(), EndpointDisabledError> {
+        // An empty transfer is a single ZLP.
+        let zlp = buffer.is_empty() || (needs_zlp && buffer.len() % self.max_packet_size() == 0);
+        assert!(
+            buffer.is_empty() || dma_capable(buffer),
+            "USBSS IN transfers need a buffer in the DMA range"
+        );
+        self.run(buffer.as_ptr() as usize, buffer.len(), zlp).await?;
+        Ok(())
     }
 }
