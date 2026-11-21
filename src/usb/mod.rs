@@ -1,5 +1,6 @@
 use embassy_usb_driver::EndpointAllocError;
 
+#[allow(dead_code)]
 pub(crate) struct EndpointBufferAllocator<'d, const NR_EP: usize, const SIZE: usize> {
     /// The buffers not handed out yet. Each allocation splits one off, so the endpoints get
     /// disjoint `&mut` borrows.
@@ -11,6 +12,7 @@ const fn validate_buffer_size(size: usize) -> bool {
     matches!(size, 8 | 16 | 32 | 64 | 512)
 }
 
+#[allow(dead_code)]
 impl<'d, const NR_EP: usize, const SIZE: usize> EndpointBufferAllocator<'d, NR_EP, SIZE> {
     pub fn new(ep_buffer: &'d mut [EndpointDataBuffer<SIZE>; NR_EP]) -> Self {
         const { assert!(validate_buffer_size(SIZE), "Invalid buffer size") };
@@ -68,6 +70,7 @@ impl<const SIZE: usize> Default for EndpointDataBuffer<SIZE> {
     }
 }
 
+#[allow(dead_code)]
 impl<const SIZE: usize> EndpointDataBuffer<SIZE> {
     pub(crate) fn read_volatile(&self, buf: &mut [u8]) {
         assert!(buf.len() <= self.data.len());
@@ -89,6 +92,19 @@ impl<const SIZE: usize> EndpointDataBuffer<SIZE> {
 
     pub(crate) fn addr(&self) -> usize {
         self.data.as_ptr() as usize
+    }
+
+    /// View a contiguous array of `EndpointDataBuffer`s as a raw byte pool.
+    #[allow(dead_code)]
+    pub(crate) fn slice_as_mut_ptr<const NR_EP: usize>(bufs: &mut [Self; NR_EP]) -> (*mut u8, usize) {
+        const {
+            assert!(validate_buffer_size(SIZE), "Invalid buffer size");
+            assert!(
+                core::mem::size_of::<[Self; NR_EP]>() == NR_EP * SIZE,
+                "EndpointDataBuffer array must have no padding"
+            );
+        };
+        (bufs.as_mut_ptr().cast::<u8>(), NR_EP * SIZE)
     }
 }
 
