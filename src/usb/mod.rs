@@ -96,7 +96,6 @@ impl<const SIZE: usize> EndpointDataBuffer<SIZE> {
     }
 
     /// View a contiguous array of `EndpointDataBuffer`s as a raw byte pool.
-    #[allow(dead_code)]
     pub(crate) fn slice_as_mut_ptr<const NR_EP: usize>(bufs: &mut [Self; NR_EP]) -> (*mut u8, usize) {
         const {
             assert!(validate_buffer_size(SIZE), "Invalid buffer size");
