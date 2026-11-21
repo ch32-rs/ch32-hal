@@ -207,7 +207,7 @@ mod imp {
 
     #[cfg(otg_v2)]
     pub(crate) fn ep_set_enabled(regs: Regs, ep: usize, dir: Direction, enabled: bool) {
-        match (ep, dir) {
+        critical_section::with(|_| match (ep, dir) {
             (4, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_uep4_tx_en(enabled)),
             (4, Direction::Out) => regs.uep4_1_mod().modify(|v| v.set_uep4_rx_en(enabled)),
             (1, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_uep1_tx_en(enabled)),
@@ -223,7 +223,7 @@ mod imp {
             (7, Direction::In) => regs.uep7_mod().modify(|v| v.set_uep7_tx_en(enabled)),
             (7, Direction::Out) => regs.uep7_mod().modify(|v| v.set_uep7_rx_en(enabled)),
             _ => panic!("setting non-existent endpoint"),
-        }
+        });
     }
 
     // `usb_v2fs` indexes the two endpoints of a mode register: 0 is the first
@@ -251,7 +251,7 @@ mod imp {
 
     #[cfg(usb_v2fs)]
     pub(crate) fn ep_set_enabled(regs: Regs, ep: usize, dir: Direction, enabled: bool) {
-        match (ep, dir) {
+        critical_section::with(|_| match (ep, dir) {
             (4, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_tx_en(0, enabled)),
             (4, Direction::Out) => regs.uep4_1_mod().modify(|v| v.set_rx_en(0, enabled)),
             (1, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_tx_en(1, enabled)),
@@ -267,7 +267,7 @@ mod imp {
             (7, Direction::In) => regs.uep7_mod().modify(|v| v.set_tx_en(enabled)),
             (7, Direction::Out) => regs.uep7_mod().modify(|v| v.set_rx_en(enabled)),
             _ => panic!("setting non-existent endpoint"),
-        }
+        });
     }
 }
 
@@ -436,7 +436,7 @@ mod imp {
     }
 
     pub(crate) fn ep_set_enabled(regs: Regs, ep: usize, dir: Direction, enabled: bool) {
-        match (ep, dir) {
+        critical_section::with(|_| match (ep, dir) {
             (4, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_uep4_tx_en(enabled)),
             (4, Direction::Out) => regs.uep4_1_mod().modify(|v| v.set_uep4_rx_en(enabled)),
             (1, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_uep1_tx_en(enabled)),
@@ -452,7 +452,7 @@ mod imp {
             (7, Direction::In) => regs.uep7_mod().modify(|v| v.set_uep7_tx_en(enabled)),
             (7, Direction::Out) => regs.uep7_mod().modify(|v| v.set_uep7_rx_en(enabled)),
             _ => panic!("setting non-existent endpoint"),
-        }
+        });
     }
 }
 
@@ -650,7 +650,7 @@ mod imp {
     }
 
     pub(crate) fn ep_set_enabled(regs: Regs, ep: usize, dir: Direction, enabled: bool) {
-        match (ep, dir) {
+        critical_section::with(|_| match (ep, dir) {
             (4, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_tx_en(0, enabled)),
             (4, Direction::Out) => regs.uep4_1_mod().modify(|v| v.set_rx_en(0, enabled)),
             (1, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_tx_en(1, enabled)),
@@ -666,15 +666,15 @@ mod imp {
             (7, Direction::In) => regs.uep567_mod().modify(|v| v.set_tx_en(2, enabled)),
             (7, Direction::Out) => regs.uep567_mod().modify(|v| v.set_rx_en(2, enabled)),
             _ => panic!("setting non-existent endpoint"),
-        }
+        });
     }
 
     fn modify_ep_ctrl(regs: Regs, ep: usize, f: impl FnOnce(&mut UepCtrl)) {
-        match ep {
+        critical_section::with(|_| match ep {
             0..=4 => regs.uep01234_ctrl(ep).modify(f),
             5..=7 => regs.uep567_ctrl(ep - 5).modify(f),
             _ => panic!("unsupported USBFS endpoint"),
-        }
+        });
     }
 }
 
