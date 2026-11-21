@@ -23,6 +23,47 @@ qingke = "0.8"
 panic-halt = "1.0"
 embedded-storage = "0.3.1"
 
+# SSD1306 128x64 OLED over I2C (async interface) + embedded-graphics drawing
+ssd1306 = { version = "0.10.0", features = ["async"] }
+embedded-graphics = "0.8.2"
+
+# Sensor drivers from our own embedded-drivers collection, all resolved from
+# crates.io. Each ships both an async and a blocking flavour, which is what the
+# `*_blocking` examples exercise.
+#
+# The floor is 0.1.1 rather than 0.1.0 for most of them, and 0.1.2 for spl06, and
+# it is a behavioural floor rather than a cosmetic one:
+#   * bme280  0.1.1 programs CTRL_HUM before CTRL_MEAS. In 0.1.0 the humidity
+#             oversampling was never applied, so humidity read a plausible but
+#             fake value in the sixties or low seventies.
+#   * adxl345, hmc5883l, l3g4200d, mpu6050  0.1.1 wait for the first sample, so
+#             the first read after init is a measurement rather than the output
+#             registers' reset value.
+#   * l3g4200d 0.1.1 also stops truncating the rate to whole degrees per second.
+#   * spl06   0.1.2 waits for COEF_RDY before reading the calibration block. Until
+#             then a cold-boot init could store an all-zero calibration, which
+#             every later measurement silently used: 0 Pa and 0.00 degC forever.
+edrv-mpu6050 = "0.1.1"
+edrv-mhz19 = "0.1.1"
+edrv-pmsx003 = "0.1.1"
+edrv-vl53l0x = "0.1.1"
+edrv-bme680 = "0.1.1"
+edrv-spl06 = "0.1.2"
+edrv-bme280 = "0.1.1"
+edrv-adxl345 = "0.1.1"
+edrv-hmc5883l = "0.1.1"
+edrv-l3g4200d = "0.1.1"
+edrv-bmp180 = "0.1.1"
+
+# The GY-80 puts four devices on one I2C bus, so the bus has to be shared: the
+# `gy-80` example hands each driver an `I2cDevice` built from one `Mutex`.
+embassy-embedded-hal = "0.6.0"
+embassy-sync = "0.8.0"
+
+# The edrv UART drivers are generic over these traits; see src/uart_io.rs for the
+# adapter that bridges them to ch32-hal's USART.
+embedded-io = "0.7"
+
 embassy-net = { version = "0.9.1", features = ["tcp", "udp", "dhcpv4", "medium-ethernet", "proto-ipv4"] }
 embassy-net-driver = "0.2.0"
 static_cell = "2.1"
