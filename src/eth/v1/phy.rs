@@ -37,8 +37,8 @@ pub trait Phy {
 }
 
 /// Reads of BCR while waiting for a PHY reset to complete. A PHY finishes its
-/// reset within 0.5 s (IEEE 802.3 22.2.4.1.1). At the fastest configured MDC
-/// (144 MHz / 42), 30 000 reads of 64 cycles take at least 560 ms.
+/// reset within 0.5 s (IEEE 802.3 22.2.4.1.1). Over external SMI, at the fastest
+/// configured MDC (144 MHz / 58), 30 000 reads of 64 cycles take at least 770 ms.
 const RESET_POLL_LIMIT: usize = 30_000;
 
 /// MII PHY register constants.
