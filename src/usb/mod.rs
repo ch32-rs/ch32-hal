@@ -1,8 +1,9 @@
 use embassy_usb_driver::EndpointAllocError;
 
 pub(crate) struct EndpointBufferAllocator<'d, const NR_EP: usize, const SIZE: usize> {
-    ep_buffer: &'d mut [EndpointDataBuffer<SIZE>; NR_EP],
-    ep_next: usize,
+    /// The buffers not handed out yet. Each allocation splits one off, so the endpoints get
+    /// disjoint `&mut` borrows.
+    free: &'d mut [EndpointDataBuffer<SIZE>],
 }
 
 /// Compile-time validation for buffer sizes
@@ -13,20 +14,18 @@ const fn validate_buffer_size(size: usize) -> bool {
 impl<'d, const NR_EP: usize, const SIZE: usize> EndpointBufferAllocator<'d, NR_EP, SIZE> {
     pub fn new(ep_buffer: &'d mut [EndpointDataBuffer<SIZE>; NR_EP]) -> Self {
         const { assert!(validate_buffer_size(SIZE), "Invalid buffer size") };
-        Self { ep_buffer, ep_next: 0 }
+        Self { free: ep_buffer }
     }
 
     pub fn alloc_endpoint(
         &mut self,
         max_packet_size: u16,
     ) -> Result<EndpointData<'d, SIZE>, embassy_usb_driver::EndpointAllocError> {
-        if self.ep_next >= NR_EP {
+        let Some((buffer, rest)) = core::mem::take(&mut self.free).split_first_mut() else {
             error!("out of endpoint buffers");
             return Err(EndpointAllocError);
-        }
-
-        let ep_buf_idx = self.ep_next;
-        self.ep_next += 1;
+        };
+        self.free = rest;
 
         assert!(
             max_packet_size as usize <= SIZE,
@@ -37,7 +36,7 @@ impl<'d, const NR_EP: usize, const SIZE: usize> EndpointBufferAllocator<'d, NR_E
 
         Ok(EndpointData {
             max_packet_size,
-            buffer: unsafe { core::mem::transmute(&self.ep_buffer[ep_buf_idx] as *const EndpointDataBuffer<SIZE>) },
+            buffer,
         })
     }
 }
