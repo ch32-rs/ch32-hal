@@ -106,8 +106,17 @@ impl DmaIndex {
     /// each full lap completed.
     fn advance(&mut self, cap: usize, steps: usize) {
         let next = self.pos + steps;
-        self.complete_count = self.complete_count.saturating_add(next / cap);
-        self.pos = next % cap;
+        // The reads advance by at most a lap from within a lap: no division then (a hardware
+        // divide takes tens of cycles on these cores).
+        if next < cap {
+            self.pos = next;
+        } else if next < 2 * cap {
+            self.complete_count = self.complete_count.saturating_add(1);
+            self.pos = next - cap;
+        } else {
+            self.complete_count = self.complete_count.saturating_add(next / cap);
+            self.pos = next % cap;
+        }
     }
 
     /// Subtract the smaller `complete_count` from both indices so that the

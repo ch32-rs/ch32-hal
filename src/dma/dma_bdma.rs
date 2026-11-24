@@ -817,6 +817,13 @@ impl<'a> DmaCtrl for DmaCtrlImpl<'a> {
 
     fn reset_complete_count(&mut self) -> usize {
         let state = &STATE[self.0.id as usize];
+        // Only the interrupt adds to the count, and only the channel's owner clears it (here, or
+        // when it sets the channel up): read as 0, there is nothing to clear, and a lap the
+        // interrupt counts right after stays counted. That is the common case, and it skips the
+        // critical section, which emulates the swap on cores without atomic instructions.
+        if state.complete_count.load(Ordering::Acquire) == 0 {
+            return 0;
+        }
         critical_section::with(|_| {
             let old_val = state.complete_count.load(Ordering::Acquire);
             state.complete_count.store(0, Ordering::Release);

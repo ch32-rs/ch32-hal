@@ -163,79 +163,61 @@ impl<'d, T: Instance> RingBufferedUartRx<'d, T> {
     /// not tied to a position in the buffer, and the bad byte may be among them).
     /// It must then manually be started again by calling `start_uart()` or by re-calling `read()`.
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        // An error the handler saw since the last read stopped the DMA request: report it before
-        // starting again.
-        let (error, _, receiving) = take_rx_events::<T>();
-        if let Some(error) = error {
-            self.stop_uart();
-            return Err(error);
-        }
-        if !receiving {
-            self.start_uart();
-        }
-
         let mut idle_woke = false;
         loop {
-            // Forget the idle lines seen so far before looking at the buffer: a burst that ends
-            // after this look wakes the wait below, and one that ended before it is in the buffer.
-            // The idle line interrupt is armed again if the handler had to disarm it, in the same
-            // critical section: an error latched after it has disarmed the interrupt again.
-            let error = critical_section::with(|_| {
-                let (error, _, _) = take_rx_events::<T>();
-                if error.is_none() {
+            // In one critical section: take the error the handler saw since the last look (it
+            // stopped the DMA request: reported before anything starts again), and forget the
+            // idle lines seen so far before looking at the buffer: a burst that ends after this
+            // look wakes the wait below, and one that ended before it is in the buffer. The idle
+            // line interrupt is armed again if the handler had to disarm it; an error latched
+            // after this disarms it again with the request.
+            let (error, receiving) = critical_section::with(|cs| {
+                let (error, _, receiving) = take_rx_events_in::<T>(cs);
+                if error.is_none() && receiving {
                     T::regs().ctlr1().modify(|w| w.set_idleie(true));
                 }
-                error
+                (error, receiving)
             });
             if let Some(error) = error {
                 self.stop_uart();
                 return Err(error);
             }
-            // Likewise for the DMA's half and full transfer interrupts: registered before the
-            // look, one that comes after it wakes this task, which then looks again.
+            if !receiving {
+                // Not started yet, or stopped by an error reported before: start, then take what
+                // came since, before the first look.
+                self.start_uart();
+                continue;
+            }
+            if let Some(result) = self.look(buf) {
+                return result;
+            }
+            // Woken by an idle line, yet nothing new: a byte the DMA has yet to take (busy with
+            // other channels) keeps IDLE set, and arming the interrupt again brings the handler
+            // straight back. Let the other tasks run, then start over.
+            if idle_woke {
+                idle_woke = false;
+                let mut yielded = false;
+                poll_fn(|cx| {
+                    if yielded {
+                        return Poll::Ready(());
+                    }
+                    yielded = true;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                })
+                .await;
+                continue;
+            }
+            // Nothing copied: register for the DMA's half and full transfer interrupts, then look
+            // again. One that came between the two looks shows in the second; one that comes after
+            // it wakes this task.
             poll_fn(|cx| {
                 self.ring_buf.set_waker(cx.waker());
                 Poll::Ready(())
             })
             .await;
-            match self.ring_buf.read(buf) {
-                Ok((0, _)) => {
-                    // Woken by an idle line, yet nothing new: a byte the DMA has yet to take (busy
-                    // with other channels) keeps IDLE set, and arming the interrupt again brings
-                    // the handler straight back. Let the other tasks run, then look again: a half
-                    // or full transfer interrupt meanwhile wakes this task while it yields, not the
-                    // wait below.
-                    if idle_woke {
-                        idle_woke = false;
-                        let mut yielded = false;
-                        poll_fn(|cx| {
-                            if yielded {
-                                return Poll::Ready(());
-                            }
-                            yielded = true;
-                            cx.waker().wake_by_ref();
-                            Poll::Pending
-                        })
-                        .await;
-                        continue;
-                    }
-                }
-                Ok((len, _)) => {
-                    // A bad byte can reach the buffer after the check above: the DMA reads it as
-                    // soon as it is complete, while its error interrupt is still to run. The
-                    // handler preempts this task, so by now it has latched the error, and the
-                    // copy is dropped with the rest of the reception.
-                    let (error, _, _) = take_rx_events::<T>();
-                    if let Some(error) = error {
-                        self.stop_uart();
-                        return Err(error);
-                    }
-                    return Ok(len);
-                }
-                Err(_) => {
-                    self.stop_uart();
-                    return Err(Error::Overrun);
-                }
+            if let Some(result) = self.look(buf) {
+                return result;
             }
 
             match self.wait_for_data_or_idle().await {
@@ -244,6 +226,29 @@ impl<'d, T: Instance> RingBufferedUartRx<'d, T> {
                     self.stop_uart();
                     return Err(err);
                 }
+            }
+        }
+    }
+
+    /// One look at the buffer: `None` if it copied nothing (the buffer empty, or `buf`); otherwise
+    /// the bytes copied, or the error that stopped reception.
+    fn look(&mut self, buf: &mut [u8]) -> Option<Result<usize, Error>> {
+        match self.ring_buf.read(buf) {
+            Ok((0, _)) => None,
+            Ok((len, _)) => {
+                // A bad byte can reach the buffer after the check at the top: the DMA reads it as
+                // soon as it is complete, while its error interrupt is still to run. The handler
+                // preempts this task, so by now it has latched the error, and the copy is dropped
+                // with the rest of the reception.
+                if let Some(error) = latched_error::<T>() {
+                    self.stop_uart();
+                    return Some(Err(error));
+                }
+                Some(Ok(len))
+            }
+            Err(_) => {
+                self.stop_uart();
+                Some(Err(Error::Overrun))
             }
         }
     }
@@ -310,12 +315,23 @@ impl<T: Instance> Drop for RingBufferedUartRx<'_, T> {
 /// STATR, then read DATAR" clear sequence, and the DMA's next DATAR read would end it and clear a
 /// PE, FE, NE or ORE before the handler sees it, as `UartRx::read_until_idle` already avoids.
 fn take_rx_events<T: Instance>() -> (Option<Error>, bool, bool) {
-    critical_section::with(|_| {
-        let s = T::state();
-        let r = T::regs();
-        let latched = s.rx_errors.load(Ordering::Acquire);
-        s.rx_errors.store(0, Ordering::Release);
-        let error = receive_error(ch32_metapac::usart::regs::Statr(latched));
-        (error, latched & IDLE_LATCHED != 0, r.ctlr3().read().dmar())
-    })
+    critical_section::with(|cs| take_rx_events_in::<T>(cs))
+}
+
+/// `take_rx_events` inside a critical section the caller holds.
+fn take_rx_events_in<T: Instance>(_cs: critical_section::CriticalSection<'_>) -> (Option<Error>, bool, bool) {
+    let s = T::state();
+    let r = T::regs();
+    let latched = s.rx_errors.load(Ordering::Acquire);
+    s.rx_errors.store(0, Ordering::Release);
+    let error = receive_error(ch32_metapac::usart::regs::Statr(latched));
+    (error, latched & IDLE_LATCHED != 0, r.ctlr3().read().dmar())
+}
+
+/// The receive error the handler latched, if any, left latched (`stop_uart` drops it): a load is
+/// enough for a check that does not take the idle lines.
+fn latched_error<T: Instance>() -> Option<Error> {
+    receive_error(ch32_metapac::usart::regs::Statr(
+        T::state().rx_errors.load(Ordering::Acquire),
+    ))
 }
