@@ -47,7 +47,7 @@ fn main() {
 
     // A CH32H4 feature names one hart (`…-v3f` or `…-v5f`). The V5F image
     // cannot own the SysTick time driver: its counter interrupts through
-    // vector 13, which `qingke-rt` does not expose. The V5F feature is
+    // vector 13, which `qingke-rt` does not expose. The feature is named like
     // `ch32h417qeu6-v5f`, so the env key carries the chip name, not `V5F`.
     println!("cargo:rustc-check-cfg=cfg(qingke_v5f)");
     if chip_name.ends_with("-v5f") {
