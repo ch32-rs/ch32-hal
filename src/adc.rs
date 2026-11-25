@@ -203,7 +203,7 @@ impl<'d, T: Instance> Adc<'d, T> {
 }
 
 #[allow(unused)]
-trait SealedInstance {
+pub(crate) trait SealedInstance {
     fn regs() -> crate::pac::adc::Adc;
     fn state() -> &'static State;
 }
