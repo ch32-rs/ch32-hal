@@ -112,6 +112,8 @@ pub mod adc;
 #[cfg(adc_h4)]
 #[path = "adc/v4x7.rs"]
 pub mod adc;
+#[cfg(adc_x0)]
+pub mod tkey;
 #[cfg(all(dac, not(ch32h4)))]
 pub mod dac;
 // H4's DAC uses per-channel registers (`R12BDHR1`, `EN1`, ...) instead of the
