@@ -305,7 +305,7 @@ pub(crate) unsafe fn init(config: Config) {
                     });
                 }
                 // FV203/V303
-                #[cfg(any(d6, d8))]
+                #[cfg(any(d6, all(d8, not(ch32v2))))]
                 PllSource::HSE => {
                     RCC.cfgr0().modify(|w| w.set_pllsrc(true));
                     match pll.prediv {
@@ -455,7 +455,7 @@ fn sysclk_hz(sw: Sysclk, hse: Option<Hertz>) -> Hertz {
                         let pre = RCC.cfgr2().read().prediv1();
                         hse / pre
                     }
-                    #[cfg(any(d6, d8))]
+                    #[cfg(any(d6, all(d8, not(ch32v2))))]
                     {
                         if cfgr.pllxtpre() {
                             hse / 2u32
