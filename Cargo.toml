@@ -13,10 +13,10 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# Generated from ch32-rs/ch32-data 16603cc62e62ac818746da7e98798b9dfad5a1c8.
+# Generated from ch32-rs/ch32-data a08eba916316f481022f27a1faa16a50226fe7e7.
 ch32-metapac = { features = [
     "rt",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "3e039108e0f9320aadc2f8f76a87556e7da50c75" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "0e9f817633235247605c0f8406462cb6be5b8aec" }
 
 # `unsafe-trust-wch-atomics`: qingke 0.8.2 refuses to build whenever the target
 # claims byte atomics unless this is set, and every A-extension target does.
@@ -65,7 +65,7 @@ pioc-programs = { version = "0.1.0", optional = true }
 # Same source as the `[dependencies]` entry.
 ch32-metapac = { features = [
     "metadata",
-], git = "https://github.com/ch32-rs/ch32-metapac", rev = "3e039108e0f9320aadc2f8f76a87556e7da50c75" }
+], git = "https://github.com/ch32-rs/ch32-metapac", rev = "0e9f817633235247605c0f8406462cb6be5b8aec" }
 
 proc-macro2 = "1.0"
 quote = "1.0"
