@@ -66,12 +66,16 @@ impl Registers {
         Self::reg(ptr)
     }
 
+    pub fn rx_auto_toggle(self) -> Reg<u16, RW> {
+        Self::reg(self.dev().uep_r_tog_auto().as_ptr().cast())
+    }
+
     pub fn initialize(self) {
         let dev = self.dev();
         self.enables(true).write_value(0);
         self.enables(false).write_value(0);
         Self::reg(dev.uep_t_tog_auto().as_ptr().cast::<u16>()).write_value(0);
-        Self::reg(dev.uep_r_tog_auto().as_ptr().cast::<u16>()).write_value(0);
+        self.rx_auto_toggle().write_value(0);
         Self::reg(dev.uep_t_burst().as_ptr().cast::<u8>()).write_value(0);
         Self::reg(dev.uep_t_burst_mode().as_ptr().cast::<u8>()).write_value(0);
         Self::reg(dev.uep_r_burst().as_ptr().cast::<u8>()).write_value(0);

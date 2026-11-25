@@ -574,7 +574,16 @@ fn set_endpoint_stalled<T: Instance>(address: EndpointAddress, stalled: bool) {
         endpoint.tx_busy = false;
         endpoint.tx_done = false;
         endpoint.overflow = false;
-        Registers(T::REGS).control(index, incoming).write_value(if stalled {
+        let regs = Registers(T::REGS);
+        let auto = !incoming && endpoint.config.is_some_and(|c| c.info.ep_type == EndpointType::Bulk);
+        if auto {
+            // Reset the expected PID with automatic toggling temporarily disabled.
+            regs.control(index, false).write_value(NAK);
+            regs.rx_auto_toggle().modify(|mask| *mask &= !(1 << index));
+            regs.control(index, false).write_value(NAK);
+            regs.rx_auto_toggle().modify(|mask| *mask |= 1 << index);
+        }
+        regs.control(index, incoming).write_value(if stalled {
             STALL
         } else if incoming {
             NAK
@@ -609,12 +618,19 @@ fn change_endpoint<T: Instance>(address: EndpointAddress, enabled: bool, stalled
         }
         let regs = Registers(T::REGS);
         regs.enables(incoming).modify(|value| *value &= !(1 << index));
+        if !incoming {
+            // In manual mode the PID stays writable while the endpoint is disabled.
+            regs.rx_auto_toggle().modify(|mask| *mask &= !(1 << index));
+        }
         endpoint.invalidate();
         endpoint.enabled = enabled;
         endpoint.stalled = stalled;
         regs.control(index, incoming)
             .write_value(if !enabled || incoming { NAK } else { ACK });
         if enabled {
+            if !incoming && endpoint.config.is_some_and(|c| c.info.ep_type == EndpointType::Bulk) {
+                regs.rx_auto_toggle().modify(|mask| *mask |= 1 << index);
+            }
             regs.enables(incoming).modify(|value| *value |= 1 << index);
         }
     });
@@ -625,6 +641,7 @@ fn reset_endpoints<T: Instance>(inner: &mut Inner) {
     let regs = Registers(T::REGS);
     regs.enables(true).write_value(1);
     regs.enables(false).write_value(1);
+    regs.rx_auto_toggle().write_value(0);
     T::REGS.usb_dev_ad().write_value(pac::usbhs::regs::UsbDevAd(0));
     inner.setup = None;
     inner.suspended = false;
@@ -732,8 +749,10 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                     } else if control & 0x10 != 0 || isochronous {
                         endpoint.rx_length = regs.rx_length(index).read();
                         endpoint.rx_ready = true;
-                        regs.control(index, false)
-                            .write_value(if isochronous { 0 } else { (control ^ 4) & 0x0c });
+                        // Bulk OUT advances DATA0/DATA1 in hardware at ACK time.
+                        let bulk = endpoint.config.is_some_and(|c| c.info.ep_type == EndpointType::Bulk);
+                        let next = if isochronous || bulk { 0 } else { (control ^ 4) & 0x0c };
+                        regs.control(index, false).write_value(next | NAK);
                     } else {
                         regs.control(index, false).write_value((control & 0x0c) | ACK);
                     }
