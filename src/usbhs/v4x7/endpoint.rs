@@ -94,30 +94,6 @@ pub(super) async fn read_packet<T: Instance>(
             }
             let config = endpoint.config.unwrap();
             let bulk = index > 0 && config.info.ep_type == embassy_usb_driver::EndpointType::Bulk;
-            if bulk {
-                if endpoint.rx_queue_count == 0 {
-                    regs.control(index, false)
-                        .modify(|value| *value = (*value & 0x0c) | ACK | PRESERVE_FLAGS);
-                    return Poll::Pending;
-                }
-                let slot = usize::from(endpoint.rx_queue_read);
-                let length = usize::from(endpoint.rx_queue_lengths[slot]);
-                let source = config.queue_buffer(slot).unwrap_or(config.buffer);
-                let result = if length > buffer.len() || length > usize::from(config.buffer.size) {
-                    Err(EndpointError::BufferOverflow)
-                } else {
-                    unsafe { source.read(&mut buffer[..length]) };
-                    Ok(length)
-                };
-                endpoint.rx_queue_read = (endpoint.rx_queue_read + 1) % config.out_queue_packets;
-                let was_full = endpoint.rx_queue_count == config.out_queue_packets;
-                endpoint.rx_queue_count -= 1;
-                if was_full && config.out_queue_packets > 1 {
-                    regs.control(index, false)
-                        .modify(|value| *value = (*value & 0x0c) | ACK | PRESERVE_FLAGS);
-                }
-                return Poll::Ready(result);
-            }
             if !endpoint.rx_ready {
                 regs.control(index, false)
                     .modify(|value| *value = (*value & 0x0c) | ACK | PRESERVE_FLAGS);
@@ -128,14 +104,15 @@ pub(super) async fn read_packet<T: Instance>(
             let result = if length > buffer.len() || length > usize::from(config.buffer.size) {
                 Err(EndpointError::BufferOverflow)
             } else {
-                unsafe { config.buffer.read(&mut buffer[..length]) };
+                unsafe { config.backup.unwrap_or(config.buffer).read(&mut buffer[..length]) };
                 Ok(length)
             };
-            regs.control(index, false).modify(|value| {
-                *value = (*value & 0x0c)
-                    | if index == 0 { NAK } else { ACK }
-                    | PRESERVE_FLAGS;
-            });
+            // Bulk OUT stays at NAK until the consumer asks for another packet.
+            if !bulk {
+                regs.control(index, false).modify(|value| {
+                    *value = (*value & 0x0c) | if index == 0 { NAK } else { ACK } | PRESERVE_FLAGS;
+                });
+            }
             Poll::Ready(result)
         })
     })
