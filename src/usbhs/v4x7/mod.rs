@@ -16,7 +16,7 @@
 use core::cell::RefCell;
 use core::future::poll_fn;
 use core::marker::PhantomData;
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::{fence, AtomicU32, Ordering};
 use core::task::Poll;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -60,16 +60,41 @@ const SUSPEND: u8 = 2;
 const RESUME: u8 = 4;
 const POWER: u8 = 8;
 const INTERRUPTS: u8 = 0xd7;
+const MAX_OUT_QUEUE_PACKETS: usize = 16;
+
+#[doc(hidden)]
+pub static DEBUG_BULK_OUT_PACKETS: AtomicU32 = AtomicU32::new(0);
+#[doc(hidden)]
+pub static DEBUG_BULK_OUT_OVERWRITES: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(usbhs_h4)]
+#[doc(hidden)]
+pub fn debug_bulk_out_queue_state() -> (u16, u16, u16, bool) {
+    <peripherals::USBHS as SealedInstance>::state().inner.lock(|inner| {
+        let inner = inner.borrow();
+        let endpoint = &inner.endpoints[slot(1, false)];
+        (
+            endpoint.rx_queue_count,
+            endpoint.rx_queue_read,
+            endpoint.rx_queue_write,
+            endpoint.overflow,
+        )
+    })
+}
 
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct Config {
     pub speed: Speed,
+    /// Software packet slots per bulk OUT endpoint (0–16). By default the reader
+    /// consumes the DMA buffer directly. With at most one slot, OUT stays at NAK
+    /// between reads.
+    pub out_queue_packets: u16,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { speed: Speed::Full }
+        Self { speed: Speed::Full, out_queue_packets: 0 }
     }
 }
 
@@ -98,12 +123,29 @@ impl Buffer {
         core::ptr::copy_nonoverlapping(source.as_ptr(), self.address as *mut u8, source.len());
         fence(Ordering::Release);
     }
+
+    unsafe fn copy_to(self, target: Buffer, length: usize) {
+        fence(Ordering::Acquire);
+        core::ptr::copy_nonoverlapping(self.address as *const u8, target.address as *mut u8, length);
+        fence(Ordering::Release);
+    }
 }
 
 #[derive(Clone, Copy)]
 struct EndpointConfig {
     info: EndpointInfo,
     buffer: Buffer,
+    backup: Option<Buffer>,
+    out_queue_packets: u16,
+}
+
+impl EndpointConfig {
+    fn queue_buffer(&self, slot: usize) -> Option<Buffer> {
+        self.backup.map(|backup| Buffer {
+            address: backup.address + slot * usize::from(backup.size),
+            size: backup.size,
+        })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -114,6 +156,10 @@ struct EndpointState {
     generation: u32,
     rx_ready: bool,
     rx_length: u16,
+    rx_queue_lengths: [u16; MAX_OUT_QUEUE_PACKETS],
+    rx_queue_read: u16,
+    rx_queue_write: u16,
+    rx_queue_count: u16,
     tx_busy: bool,
     tx_done: bool,
     overflow: bool,
@@ -128,6 +174,10 @@ impl EndpointState {
             generation: 0,
             rx_ready: false,
             rx_length: 0,
+            rx_queue_lengths: [0; MAX_OUT_QUEUE_PACKETS],
+            rx_queue_read: 0,
+            rx_queue_write: 0,
+            rx_queue_count: 0,
             tx_busy: false,
             tx_done: false,
             overflow: false,
@@ -302,10 +352,16 @@ impl<'d, T: Instance> Driver<'d, T> {
                         .is_none_or(|other| other.info.max_packet_size == max_packet_size)
             })
             .ok_or(EndpointAllocError)?;
+        let bulk_out = !IN && ep_type == EndpointType::Bulk;
+        let queue_packets = if bulk_out { self.config.out_queue_packets } else { 0 };
+        if usize::from(queue_packets) > MAX_OUT_QUEUE_PACKETS {
+            return Err(EndpointAllocError);
+        }
         let start = (self.used + 3) & !3;
-        let end = start
-            .checked_add(usize::from(max_packet_size))
+        let allocation = usize::from(max_packet_size)
+            .checked_mul(1 + usize::from(queue_packets))
             .ok_or(EndpointAllocError)?;
+        let end = start.checked_add(allocation).ok_or(EndpointAllocError)?;
         if end > self.capacity {
             return Err(EndpointAllocError);
         }
@@ -322,6 +378,11 @@ impl<'d, T: Instance> Driver<'d, T> {
                 address: self.memory + start,
                 size: max_packet_size,
             },
+            backup: (queue_packets != 0).then(|| Buffer {
+                address: self.memory + start + usize::from(max_packet_size),
+                size: max_packet_size,
+            }),
+            out_queue_packets: queue_packets.max(1),
         });
         self.used = end;
         Ok(Endpoint::new(info))
@@ -366,6 +427,8 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
                     address: self.memory,
                     size: 64,
                 },
+                backup: None,
+                out_queue_packets: 0,
             });
         }
         T::state().inner.lock(|inner| {
@@ -571,6 +634,9 @@ fn set_endpoint_stalled<T: Instance>(address: EndpointAddress, stalled: bool) {
         endpoint.generation = endpoint.generation.wrapping_add(1);
         endpoint.stalled = stalled;
         endpoint.rx_ready = false;
+        endpoint.rx_queue_read = 0;
+        endpoint.rx_queue_write = 0;
+        endpoint.rx_queue_count = 0;
         endpoint.tx_busy = false;
         endpoint.tx_done = false;
         endpoint.overflow = false;
@@ -693,68 +759,82 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 }
                 wake = u16::MAX;
             }
-            let rx0 = regs.control(0, false).read();
-            let setup = rx0 & (DONE | 8) == (DONE | 8);
-            if setup {
-                let mut bytes = [0; 8];
-                let length = regs.rx_length(0).read();
-                if let Some(config) = inner.endpoints[0].config {
-                    config.buffer.read(&mut bytes);
-                }
-                for incoming in [false, true] {
-                    let endpoint = &mut inner.endpoints[slot(0, incoming)];
-                    endpoint.invalidate();
-                    endpoint.enabled = true;
-                    regs.control(0, incoming).write_value(4);
-                }
-                inner.setup = if length == 8 { Some(bytes) } else { None };
-                if length != 8 {
-                    regs.control(0, true).write_value(STALL);
-                    regs.control(0, false).write_value(STALL);
-                }
-                wake |= 3;
-            }
-            for index in 0..ENDPOINTS {
-                if index == 0 && setup {
-                    continue;
-                }
-                for incoming in [false, true] {
-                    let control = if index == 0 && !incoming {
-                        rx0
-                    } else {
-                        regs.control(index, incoming).read()
-                    };
-                    if control & DONE == 0 {
-                        if control & 0x40 != 0 {
-                            regs.control(index, incoming).write_value((control & !0x40) | DONE);
-                        }
-                        continue;
-                    }
+            if flags & 0x10 != 0 {
+                // INT_ST identifies the transaction owning this DONE flag.
+                // Leave the handshake on every other endpoint untouched.
+                let transaction = T::REGS.usb_int_st().read().0;
+                let index = usize::from(transaction & 7);
+                let incoming = transaction & 0x10 != 0;
+                let ctrl = regs.control(index, incoming);
+                let control = ctrl.read();
+                if control & DONE != 0 {
+                    let toggle = control & 0x0c;
                     let endpoint = &mut inner.endpoints[slot(index, incoming)];
-                    let isochronous = endpoint
-                        .config
-                        .is_some_and(|config| config.info.ep_type == EndpointType::Isochronous);
-                    if !endpoint.enabled || endpoint.stalled {
-                        regs.control(index, incoming)
-                            .write_value((control & 0x0c) | if endpoint.stalled { STALL } else { NAK });
-                        continue;
-                    }
-                    if incoming {
+                    if index == 0 && !incoming && control & 8 != 0 {
+                        let mut bytes = [0; 8];
+                        let length = regs.rx_length(0).read();
+                        if let Some(config) = inner.endpoints[0].config {
+                            config.buffer.read(&mut bytes);
+                        }
+                        for incoming in [false, true] {
+                            let endpoint = &mut inner.endpoints[slot(0, incoming)];
+                            endpoint.invalidate();
+                            endpoint.enabled = true;
+                            regs.control(0, incoming).write_value(4);
+                        }
+                        inner.setup = if length == 8 { Some(bytes) } else { None };
+                        if length != 8 {
+                            regs.control(0, true).write_value(STALL);
+                            regs.control(0, false).write_value(STALL);
+                        }
+                        wake |= 3;
+                    } else if !endpoint.enabled || endpoint.stalled {
+                        ctrl.write_value(toggle | if endpoint.stalled { STALL } else { NAK });
+                    } else if incoming {
+                        let iso = endpoint.config.unwrap().info.ep_type == EndpointType::Isochronous;
                         if endpoint.tx_busy {
                             endpoint.tx_busy = false;
                             endpoint.tx_done = true;
                         }
-                        regs.control(index, true)
-                            .write_value(if isochronous { 0 } else { (control ^ 4) & 0x0c });
-                    } else if control & 0x10 != 0 || isochronous {
-                        endpoint.rx_length = regs.rx_length(index).read();
-                        endpoint.rx_ready = true;
-                        // Bulk OUT advances DATA0/DATA1 in hardware at ACK time.
-                        let bulk = endpoint.config.is_some_and(|c| c.info.ep_type == EndpointType::Bulk);
-                        let next = if isochronous || bulk { 0 } else { (control ^ 4) & 0x0c };
-                        regs.control(index, false).write_value(next | NAK);
+                        ctrl.write_value(if iso { 0 } else { (control ^ 4) & 0x0c });
                     } else {
-                        regs.control(index, false).write_value((control & 0x0c) | ACK);
+                        let config = endpoint.config.unwrap();
+                        let bulk = config.info.ep_type == EndpointType::Bulk;
+                        let iso = config.info.ep_type == EndpointType::Isochronous;
+                        if bulk {
+                            // Close the single DMA buffer and acknowledge this DONE together.
+                            // A subsequent ACK is only issued after the bytes are safe.
+                            ctrl.write_value(toggle | NAK);
+                            if control & 0x10 != 0 {
+                                if index == 1 {
+                                    DEBUG_BULK_OUT_PACKETS.fetch_add(1, Ordering::Relaxed);
+                                    if endpoint.rx_queue_count != 0 {
+                                        DEBUG_BULK_OUT_OVERWRITES.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
+                                let length = regs.rx_length(index).read();
+                                if length > config.buffer.size || endpoint.rx_queue_count == config.out_queue_packets {
+                                    endpoint.overflow = true;
+                                } else {
+                                    let slot = usize::from(endpoint.rx_queue_write);
+                                    if let Some(backup) = config.queue_buffer(slot) {
+                                        config.buffer.copy_to(backup, usize::from(length));
+                                    }
+                                    endpoint.rx_queue_lengths[slot] = length;
+                                    endpoint.rx_queue_write = (endpoint.rx_queue_write + 1) % config.out_queue_packets;
+                                    endpoint.rx_queue_count += 1;
+                                }
+                            }
+                            if !endpoint.overflow && endpoint.rx_queue_count < config.out_queue_packets {
+                                ctrl.write_value(toggle | ACK | PRESERVE_FLAGS);
+                            }
+                        } else if control & 0x10 != 0 || iso {
+                            endpoint.rx_length = regs.rx_length(index).read();
+                            endpoint.rx_ready = true;
+                            ctrl.write_value(if iso { NAK } else { ((control ^ 4) & 0x0c) | NAK });
+                        } else {
+                            ctrl.write_value(toggle | ACK);
+                        }
                     }
                     wake |= 1 << slot(index, incoming);
                 }
