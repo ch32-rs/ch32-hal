@@ -473,7 +473,10 @@ fn sysclk_hz(sw: Sysclk, hse: Option<Hertz>) -> Hertz {
                     }
                     #[cfg(d8w)]
                     {
-                        if cfgr.pllxtpre() {
+                        // USBPRE = 0b11, set for a 240 MHz PLL, also feeds the PLL with HSE/2.
+                        if cfgr.usbpre() == Usbpre::DIV5 {
+                            hse / 2u32
+                        } else if cfgr.pllxtpre() {
                             hse / 8u32
                         } else {
                             hse / 4u32
