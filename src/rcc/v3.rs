@@ -211,10 +211,21 @@ impl Default for Config {
     }
 }
 
+/// Polls a clock ready or switch flag, with the bound `rcc::v4x7` uses: a crystal that does not
+/// start, or an HSE mode that does not match the board, panics instead of hanging `init`.
+fn wait_for(mut ready: impl FnMut() -> bool) {
+    for _attempt in 0..1_000_000 {
+        if ready() {
+            return;
+        }
+    }
+    panic!("RCC: clock startup or switch timed out");
+}
+
 #[allow(unused_variables)]
 pub(crate) unsafe fn init(config: Config) {
     // Configure HSI
-    while !RCC.ctlr().read().hsirdy() {}
+    wait_for(|| RCC.ctlr().read().hsirdy());
 
     #[cfg(pwr_v3)]
     super::ls::init_ls(&config.ls);
@@ -229,7 +240,7 @@ pub(crate) unsafe fn init(config: Config) {
         Some(hse) => {
             RCC.ctlr().modify(|w| w.set_hsebyp(hse.mode != super::HseMode::Oscillator));
             RCC.ctlr().modify(|w| w.set_hseon(true));
-            while !RCC.ctlr().read().hserdy() {}
+            wait_for(|| RCC.ctlr().read().hserdy());
             Some(hse.freq)
         }
     };
@@ -329,7 +340,7 @@ pub(crate) unsafe fn init(config: Config) {
 
             // Enable PLL
             RCC.ctlr().modify(|w| w.set_pllon(true));
-            while !RCC.ctlr().read().pllrdy() {}
+            wait_for(|| RCC.ctlr().read().pllrdy());
 
             Some(vco_freq)
         } else {
@@ -393,7 +404,7 @@ pub(crate) unsafe fn init(config: Config) {
         w.set_ppre1(config.apb1_pre);
         w.set_ppre2(config.apb2_pre);
     });
-    while RCC.cfgr0().read().sws() != config.sys {}
+    wait_for(|| RCC.cfgr0().read().sws() == config.sys);
 
     refresh_clocks(config.hse.map(|h| h.freq));
 }
