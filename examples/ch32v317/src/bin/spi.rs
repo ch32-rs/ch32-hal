@@ -1,0 +1,46 @@
+#![no_std]
+#![no_main]
+
+use ch32_hal as hal;
+use ch32_hal::spi;
+use embassy_executor::Spawner;
+use embassy_time::{Duration, Timer};
+use hal::gpio::{AnyPin, Level, Output};
+use hal::time::Hertz;
+use hal::{println, Peri};
+use panic_halt as _;
+
+#[embassy_executor::task]
+async fn blink(pin: Peri<'static, AnyPin>) {
+    let mut led = Output::new(pin, Level::Low, Default::default());
+
+    loop {
+        led.set_high();
+        Timer::after(Duration::from_millis(1000)).await;
+        led.set_low();
+        Timer::after(Duration::from_millis(1000)).await;
+    }
+}
+
+#[embassy_executor::main(entry = "ch32_hal::entry")]
+async fn main(spawner: Spawner) -> ! {
+    hal::debug::SDIPrint::enable();
+    let p = hal::init(Default::default());
+
+    // GPIO
+    spawner.spawn(blink(p.PA0.into()).unwrap());
+    let (sck, miso, mosi) = (p.PA5, p.PA6, p.PA7);
+
+    let mut spi_config = spi::Config::default();
+    spi_config.frequency = Hertz::khz(375);
+    let mut spi = spi::Spi::new_blocking(p.SPI1, sck, mosi, miso, spi_config);
+
+    loop {
+        Timer::after_millis(2000).await;
+        let mut data: [u8; 4] = [0xde, 0xad, 0xbe, 0xef];
+        println!("Transmitting data: {:?}", data);
+        let res = spi.blocking_transfer_in_place(&mut data);
+        println!("Got result: {:?}", res);
+        println!("Data: {:?}", data);
+    }
+}

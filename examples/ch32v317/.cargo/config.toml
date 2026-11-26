@@ -1,0 +1,17 @@
+[build]
+target = "riscv32imfc-unknown-none-elf.json"
+
+[unstable]
+build-std = ["core"]
+json-target-spec = true
+
+[target.riscv32imfc-unknown-none-elf]
+runner = "wlink flash --enable-sdi-print --watch-serial"
+# runner = "wlink -v flash --no-erase --dry-run"
+# runner = "probe-rs run --chip CH32V317"
+# runner = "wlink -v flash"
+
+# Use the following or build.rs
+#rustflags = [
+#  "-C", "link-arg=-Tlink.x",
+#]

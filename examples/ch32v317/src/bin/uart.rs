@@ -1,0 +1,41 @@
+#![no_std]
+#![no_main]
+
+
+
+use ch32_hal::usart;
+use embassy_executor::Spawner;
+use embassy_time::{Duration, Timer};
+use hal::gpio::{AnyPin, Level, Output};
+use hal::usart::UartTx;
+use hal::Peri;
+use {ch32_hal as hal, panic_halt as _};
+
+#[embassy_executor::task]
+async fn blink(pin: Peri<'static, AnyPin>) {
+    let mut led = Output::new(pin, Level::Low, Default::default());
+
+    loop {
+        led.set_high();
+        Timer::after(Duration::from_millis(1000)).await;
+        led.set_low();
+        Timer::after(Duration::from_millis(1000)).await;
+    }
+}
+
+#[embassy_executor::main(entry = "ch32_hal::entry")]
+async fn main(spawner: Spawner) -> ! {
+    let p = hal::init(Default::default());
+
+    // GPIO
+    spawner.spawn(blink(p.PA0.into()).unwrap());
+
+    let cfg = usart::Config::default();
+    let mut uart = UartTx::new_blocking(p.USART1, p.PA9, cfg).unwrap();
+
+    loop {
+        Timer::after_millis(2000).await;
+
+        let _ = uart.blocking_write(b"hello world from embassy main\r\n");
+    }
+}
