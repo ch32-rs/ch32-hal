@@ -25,18 +25,22 @@
 //! - [x] Bulk In (same)
 //!
 //! Other Features:
-//! - [ ] Set endpoint stall
-//! - [ ] Get endpoint stall status
+//! - [ ] Set endpoint stall (Expected to work but not tested)
+//! - [ ] Get endpoint stall status (Expected to work but not tested)
 //! - [ ] Remote wakeup
 //!
 
 use core::future::poll_fn;
 use core::marker::PhantomData;
+use core::sync::atomic::{AtomicU16, Ordering};
 use core::task::Poll;
 
 use bitmaps::Bitmap;
 use embassy_sync::waitqueue::AtomicWaker;
-use embassy_usb_driver::{Direction, EndpointAddress, EndpointInfo, EndpointType, Event};
+use embassy_usb_driver::{
+    Direction, EndpointAddress, EndpointDisabledError, EndpointError, EndpointInfo, EndpointInterval, EndpointType,
+    Event,
+};
 use endpoint::{ControlPipe, Endpoint};
 use regs::{EpRxResponse, EpTxResponse, Regs, UsbToken};
 
@@ -58,6 +62,79 @@ const EP_MAX_PACKET_SIZE: u16 = 64;
 const NEW_AW: AtomicWaker = AtomicWaker::new();
 static BUS_WAKER: AtomicWaker = NEW_AW;
 static EP_WAKERS: [AtomicWaker; MAX_NR_EP] = [NEW_AW; MAX_NR_EP];
+
+/// STALL handshakes of endpoints 1–7: OUT at bit `2 * index`, IN at bit
+/// `2 * index + 1`. Updated in critical sections, as not every core has
+/// atomic read-modify-write.
+static STALLED: AtomicU16 = AtomicU16::new(0);
+
+fn stall_bit(address: EndpointAddress) -> u16 {
+    1 << (2 * address.index() + usize::from(address.is_in()))
+}
+
+fn mark_stalled(address: EndpointAddress, stalled: bool) {
+    critical_section::with(|_| {
+        let bits = STALLED.load(Ordering::Relaxed);
+        let bit = stall_bit(address);
+        STALLED.store(if stalled { bits | bit } else { bits & !bit }, Ordering::Relaxed);
+    });
+}
+
+fn is_endpoint_stalled(address: EndpointAddress) -> bool {
+    address.index() < MAX_NR_EP && STALLED.load(Ordering::Relaxed) & stall_bit(address) != 0
+}
+
+/// Sets or clears the STALL handshake of endpoints 1–7. Clearing it resets the
+/// data toggle and NAKs the endpoint until a pending transfer arms it again.
+fn set_endpoint_stalled<T: Instance>(address: EndpointAddress, stalled: bool) {
+    let index = address.index();
+    if index == 0 || index >= MAX_NR_EP {
+        return;
+    }
+    let regs = T::regs();
+    mark_stalled(address, stalled);
+    match address.direction() {
+        Direction::In => {
+            let response = if stalled {
+                EpTxResponse::STALL
+            } else {
+                EpTxResponse::NAK
+            };
+            regs::ep_tx_ctrl_write(regs, index, false, response);
+        }
+        Direction::Out => {
+            let response = if stalled {
+                EpRxResponse::STALL
+            } else {
+                EpRxResponse::NAK
+            };
+            regs::ep_rx_ctrl_write(regs, index, false, response);
+        }
+    }
+    EP_WAKERS[index].wake();
+}
+
+/// Enables or disables endpoints 1–7, with DATA0 next and no STALL.
+fn set_endpoint_enabled<T: Instance>(ep_addr: EndpointAddress, enabled: bool) {
+    #[cfg(feature = "defmt")]
+    trace!(
+        "[USBFS] Endpoint: {}, {}: Set enable={}",
+        ep_addr.index(),
+        ep_addr.direction(),
+        enabled
+    );
+    let regs = T::regs();
+
+    // Reset data toggle to DATA0, and NAK until a transfer arms the endpoint.
+    match ep_addr.direction() {
+        Direction::In => regs::ep_tx_ctrl_write(regs, ep_addr.index(), false, EpTxResponse::NAK),
+        Direction::Out => regs::ep_rx_ctrl_write(regs, ep_addr.index(), false, EpRxResponse::NAK),
+    }
+    mark_stalled(ep_addr, false);
+
+    regs::ep_set_enabled(regs, ep_addr.index(), ep_addr.direction(), enabled);
+    EP_WAKERS[ep_addr.index() as usize].wake();
+}
 
 /// USB PHY configuration (X035 only).
 #[derive(Clone, Copy, Debug)]
@@ -99,9 +176,10 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
         if int_fg.suspend || int_fg.transfer || int_fg.bus_rst {
             T::Interrupt::disable();
 
-            // Bus stuff we wakup bus
+            // Bus stuff we wakup bus. It aborts the control transfer in progress.
             if int_fg.bus_rst || int_fg.suspend {
                 BUS_WAKER.wake();
+                EP_WAKERS[0].wake();
             }
 
             if int_fg.transfer {
@@ -118,7 +196,9 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                             EP_WAKERS[ep as usize].wake();
                         }
                     }
+                    // `Bus::poll` takes it, and it aborts the control transfer in progress.
                     UsbToken::SETUP => {
+                        BUS_WAKER.wake();
                         EP_WAKERS[0].wake();
                     }
                     // X0 names bit 0 of the token field `SOF`, not `RSVD`.
@@ -230,7 +310,7 @@ where
         ep_type: EndpointType,
         ep_addr: Option<EndpointAddress>,
         max_packet_size: u16,
-        interval_ms: u8,
+        interval: EndpointInterval,
         dir: Direction,
     ) -> Result<Endpoint<'d, T, D, SIZE>, embassy_usb_driver::EndpointAllocError> {
         let addr = match ep_addr {
@@ -270,13 +350,7 @@ where
         let data = self.allocator.alloc_endpoint(max_packet_size)?;
 
         Ok(Endpoint::new(
-            EndpointInfo {
-                addr,
-                ep_type,
-                max_packet_size,
-                interval_ms,
-                max_burst: 0,
-            },
+            EndpointInfo::new(addr, ep_type, max_packet_size, interval),
             data,
         ))
     }
@@ -289,9 +363,7 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
 
     type EndpointIn = Endpoint<'d, T, In, SIZE>;
 
-    type ControlPipe = ControlPipe<'d, T, SIZE>;
-
-    type Bus = Bus<'d, T>;
+    type Bus = Bus<'d, T, SIZE>;
 
     fn alloc_endpoint_out(
         &mut self,
@@ -301,7 +373,7 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
             config.ep_type,
             config.addr,
             config.max_packet_size,
-            config.interval_ms,
+            config.interval,
             Direction::Out,
         )
     }
@@ -314,12 +386,12 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
             config.ep_type,
             config.addr,
             config.max_packet_size,
-            config.interval_ms,
+            config.interval,
             Direction::In,
         )
     }
 
-    fn start(mut self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
+    fn start(mut self, control_max_packet_size: u16) -> Self::Bus {
         assert!(control_max_packet_size <= EP_MAX_PACKET_SIZE);
         let regs = T::regs();
 
@@ -350,22 +422,21 @@ impl<'d, T: Instance, const NR_EP: usize, const SIZE: usize> embassy_usb_driver:
             }
         });
 
-        (
-            Bus {
-                _phantom: PhantomData,
-                inited: false,
-            },
-            ControlPipe::new(ep0_buf),
-        )
+        Bus {
+            _phantom: PhantomData,
+            inited: false,
+            control: ControlPipe::new(ep0_buf),
+        }
     }
 }
 
-pub struct Bus<'d, T> {
+pub struct Bus<'d, T, const SIZE: usize> {
     _phantom: PhantomData<&'d T>,
     inited: bool,
+    control: ControlPipe<'d, T, SIZE>,
 }
 
-impl<'d, T: Instance> Bus<'d, T> {
+impl<'d, T: Instance, const SIZE: usize> Bus<'d, T, SIZE> {
     fn bus_reset(&mut self) {
         let regs = T::regs();
 
@@ -379,19 +450,15 @@ impl<'d, T: Instance> Bus<'d, T> {
 
         // Mark all other EPs as NAK
         for i in 1..=7 {
-            use embassy_usb_driver::Bus;
-            regs::ep_rx_ctrl_write(regs, i, false, EpRxResponse::NAK);
-            regs::ep_tx_ctrl_write(regs, i, false, EpTxResponse::NAK);
-
             // It looks like the HW has a bug, after reset, all EP Tx/Rx
             // are set to enabled. So we disable them here after bus reset.
-            self.endpoint_set_enabled(EndpointAddress::from_parts(i, Direction::In), false);
-            self.endpoint_set_enabled(EndpointAddress::from_parts(i, Direction::Out), false);
+            set_endpoint_enabled::<T>(EndpointAddress::from_parts(i, Direction::In), false);
+            set_endpoint_enabled::<T>(EndpointAddress::from_parts(i, Direction::Out), false);
         }
     }
 }
 
-impl<'d, T> embassy_usb_driver::Bus for Bus<'d, T>
+impl<'d, T, const SIZE: usize> embassy_usb_driver::Bus for Bus<'d, T, SIZE>
 where
     T: Instance,
 {
@@ -427,6 +494,8 @@ where
                 let regs = T::regs();
                 let interrupt_flags = regs::int_fg(regs);
 
+                // Bus events go first: they abort the control transfer of a
+                // SETUP packet taken while one is pending.
                 // Either Suspend or Resume has happened
                 if interrupt_flags.suspend {
                     // Clear suspend flag
@@ -443,7 +512,9 @@ where
 
                     regs::clear_bus_rst(regs);
 
-                    Poll::Ready(Event::Reset)
+                    Poll::Ready(Event::Reset(embassy_usb_driver::Speed::Full))
+                } else if let Some(setup) = self.control.take_setup(regs) {
+                    Poll::Ready(Event::Setup(setup))
                 } else {
                     Poll::Pending
                 }
@@ -454,32 +525,48 @@ where
         .await
     }
 
-    fn endpoint_set_enabled(&mut self, ep_addr: EndpointAddress, enabled: bool) {
-        #[cfg(feature = "defmt")]
-        trace!(
-            "[USBFS] Endpoint: {}, {}: Set enable={}",
-            ep_addr.index(),
-            ep_addr.direction(),
-            enabled
-        );
-        let regs = T::regs();
+    fn control_max_packet_size(&self) -> usize {
+        self.control.max_packet_size()
+    }
 
-        // Reset data toggle to DATA0
-        match ep_addr.direction() {
-            Direction::In => regs::ep_tx_ctrl_set_tog(regs, ep_addr.index(), false),
-            Direction::Out => regs::ep_rx_ctrl_set_tog(regs, ep_addr.index(), false),
+    async fn control_data_out(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
+        self.control.data_out(buf).await
+    }
+
+    async fn control_data_in(&mut self, data: &[u8], needs_zlp: bool) -> Result<(), EndpointDisabledError> {
+        self.control.data_in(data, needs_zlp).await
+    }
+
+    async fn control_accept(&mut self) {
+        self.control.accept().await
+    }
+
+    async fn control_reject(&mut self) {
+        self.control.reject()
+    }
+
+    async fn control_accept_set_address(&mut self, addr: u8) {
+        self.control.accept_set_address(addr).await
+    }
+
+    async fn endpoint_set_enabled(&mut self, ep_addr: EndpointAddress, enabled: bool) {
+        set_endpoint_enabled::<T>(ep_addr, enabled);
+    }
+
+    fn endpoint_is_enabled(&mut self, ep_addr: EndpointAddress) -> bool {
+        match ep_addr.index() {
+            0 => true,
+            index if index < MAX_NR_EP => regs::ep_is_enabled(T::regs(), index, ep_addr.direction()),
+            _ => false,
         }
-
-        regs::ep_set_enabled(regs, ep_addr.index(), ep_addr.direction(), enabled);
-        EP_WAKERS[ep_addr.index() as usize].wake();
     }
 
-    fn endpoint_set_stalled(&mut self, _ep_addr: EndpointAddress, _stalled: bool) {
-        todo!()
+    async fn endpoint_set_stalled(&mut self, ep_addr: EndpointAddress, stalled: bool) {
+        set_endpoint_stalled::<T>(ep_addr, stalled);
     }
 
-    fn endpoint_is_stalled(&mut self, _ep_addr: EndpointAddress) -> bool {
-        todo!()
+    fn endpoint_is_stalled(&mut self, ep_addr: EndpointAddress) -> bool {
+        is_endpoint_stalled(ep_addr)
     }
 
     async fn remote_wakeup(&mut self) -> Result<(), embassy_usb_driver::Unsupported> {

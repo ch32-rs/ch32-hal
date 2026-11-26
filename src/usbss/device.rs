@@ -1,21 +1,23 @@
 use core::cell::RefCell;
 use core::future::poll_fn;
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::Ordering;
 use core::task::Poll;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_usb_driver::{
-    Direction, EndpointAddress, EndpointAllocError, EndpointInfo, EndpointType, Event, Unsupported,
+    Direction, EndpointAddress, EndpointAllocError, EndpointDisabledError, EndpointError, EndpointInfo, EndpointType,
+    Event, Speed, Unsupported,
 };
 
 use super::control::ControlPipe;
 use super::endpoint::Endpoint;
-use super::regs::{Regs, LINK_HOT_RESET};
+use super::regs::{Regs, Role};
 use super::{
-    delay_cycles, init_clocks, Instance, InterruptHandler, LinkInterruptHandler, LinkState, LMP_PORT_CAP, LMP_PORT_CFG,
-    LMP_PORT_CFG_RES, LMP_SET_LINK_FUNC, LMP_SUBTYPE_MASK, LMP_U2_INACT_TOUT, MODE_DEVICE,
+    delay_cycles, dma_memory, enable_interrupts, init_clocks, Buffer, Error, Instance, InterruptHandler,
+    LinkInterruptHandler, LinkState, EP0_SIZE, LMP_PORT_CAP, LMP_PORT_CFG, LMP_PORT_CFG_RES, LMP_SET_LINK_FUNC,
+    LMP_SUBTYPE_MASK, LMP_U2_INACT_TOUT, MODE_DEVICE,
 };
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::usbss::regs;
@@ -24,62 +26,25 @@ use crate::{interrupt, pac, Peri};
 
 pub(super) const ENDPOINTS: usize = 8;
 const SLOTS: usize = ENDPOINTS * 2;
-pub(super) const EP0_SIZE: usize = 512;
 
 /// Most packets in one chain; the count registers are 8 bits wide. A chain
 /// longer than a burst keeps the endpoint out of flow control in between.
 const CHAIN_PACKETS: usize = 255;
 
-/// `ERDY_NUMP` of an OUT endpoint while it is the only data endpoint with a
-/// transfer queued, and while it is not. The host keeps one packet fewer
-/// than this waiting for its ACK.
+/// `ERDY_NUMP` of an OUT endpoint alone, and next to other queued transfers;
+/// the host keeps one packet fewer awaiting its ACK.
 ///
-/// The controller buffers only three or four header packets for replay after
-/// a link error. With more pending, counting the ACKs of OUT packets and the
-/// headers of IN packets, it loses ACKs, which stalls the OUT endpoint, or
-/// sends an IN packet with wrong data. `[3, 4]` keeps OUT at full speed next
-/// to other traffic, where it exceeds that budget. In case of such issues,
-/// change it to `[3, 2]`, which roughly halves OUT throughput while another
-/// data endpoint has a transfer queued.
+/// After a link error the controller replays only three or four pending
+/// header packets, OUT ACKs and IN headers together. Beyond that it loses
+/// ACKs, stalling OUT, or sends an IN packet with wrong data. `[3, 4]` keeps
+/// OUT at full speed but can exceed the budget next to other traffic; `[3, 2]`
+/// stays within it at about half the OUT throughput.
 const OUT_WINDOW: [u8; 2] = [3, 4];
 
 const RESET: u8 = 1;
 const SUSPEND: u8 = 2;
 const RESUME: u8 = 4;
 const POWER: u8 = 8;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum Error {
-    InvalidMemory,
-    BufferTooSmall,
-}
-
-/// A piece of the endpoint memory.
-#[derive(Clone, Copy)]
-pub(super) struct Buffer {
-    pub address: usize,
-    pub size: usize,
-}
-
-impl Buffer {
-    pub unsafe fn read(self, target: &mut [u8]) {
-        fence(Ordering::Acquire);
-        core::ptr::copy_nonoverlapping(self.address as *const u8, target.as_mut_ptr(), target.len());
-    }
-
-    pub unsafe fn write(self, source: &[u8]) {
-        core::ptr::copy_nonoverlapping(source.as_ptr(), self.address as *mut u8, source.len());
-        fence(Ordering::Release);
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct EndpointConfig {
-    pub info: EndpointInfo,
-    /// For transfers the controller can't DMA directly.
-    pub buffer: Buffer,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Phase {
@@ -103,7 +68,6 @@ pub(super) struct Transfer {
 }
 
 impl Transfer {
-    /// Packets in the next chain.
     fn chain_packets(&self, mps: usize) -> usize {
         (self.length - self.progress).div_ceil(mps).clamp(1, CHAIN_PACKETS)
     }
@@ -111,7 +75,7 @@ impl Transfer {
 
 #[derive(Clone, Copy)]
 pub(super) struct EndpointState {
-    pub config: Option<EndpointConfig>,
+    pub config: Option<EndpointInfo>,
     pub enabled: bool,
     pub stalled: bool,
     pub phase: Phase,
@@ -142,21 +106,22 @@ impl EndpointState {
         self.phase = Phase::Idle;
     }
 
-    /// Hands the next chain of the transfer to the controller.
-    pub fn queue(&mut self, regs: Regs) {
-        let config = self.config.unwrap();
-        let index = config.info.addr.index();
-        let mps = usize::from(config.info.max_packet_size);
+    /// Arms the next chain. A ZLP chain points at `ep0`, a valid DMA address
+    /// the controller reads nothing from.
+    pub fn queue(&mut self, regs: Regs, ep0: usize) {
+        let info = self.config.unwrap();
+        let index = info.addr.index();
+        let mps = usize::from(info.max_packet_size);
         let transfer = &mut self.transfer;
         let packets = transfer.chain_packets(mps);
         let remaining = transfer.length - transfer.progress;
         let address = (transfer.address + transfer.progress) as u32;
-        if config.info.addr.is_in() {
+        if info.addr.is_in() {
             let bytes = remaining.min(packets * mps);
             let tx = regs.tx(index);
             if bytes == 0 {
                 transfer.zlp = false;
-                tx.dma().write_value(config.buffer.address as u32);
+                tx.dma().write_value(ep0 as u32);
             } else {
                 tx.dma().write_value(address);
             }
@@ -213,10 +178,7 @@ impl State {
             inner: Mutex::new(RefCell::new(Inner {
                 regs,
                 endpoints: [EndpointState::new(); SLOTS],
-                ep0: Buffer {
-                    address: 0,
-                    size: EP0_SIZE,
-                },
+                ep0: Buffer { address: 0 },
                 powered: false,
                 suspended: false,
                 events: 0,
@@ -255,69 +217,40 @@ pub(super) fn slot(index: usize, incoming: bool) -> usize {
     index * 2 + incoming as usize
 }
 
-fn packet_size_valid(kind: EndpointType, size: u16, interval: u8) -> bool {
+fn packet_size_valid(kind: EndpointType, size: u16) -> bool {
     match kind {
         EndpointType::Bulk => size == 1024,
-        EndpointType::Interrupt | EndpointType::Isochronous => (1..=1024).contains(&size) && interval != 0,
+        EndpointType::Interrupt | EndpointType::Isochronous => (1..=1024).contains(&size),
         EndpointType::Control => false,
     }
 }
 
-/// ITCM at `0x200A_0000` through the end of the shared SRAM.
-fn dma_range(address: usize, length: usize) -> bool {
-    const RAM_START: usize = 0x200A_0000;
-    const RAM_END: usize = 0x2018_0000;
-    address >= RAM_START && address.checked_add(length).is_some_and(|end| end <= RAM_END)
-}
-
-/// Whether the controller can DMA straight to or from `buffer`.
-pub(super) fn dma_capable(buffer: &[u8]) -> bool {
-    let address = buffer.as_ptr() as usize;
-    !buffer.is_empty() && address % 4 == 0 && dma_range(address, buffer.len())
-}
-
 /// Silicon revision, `CHIP_ID[7:4]`.
 fn revision() -> u8 {
-    // The EVT `FLASH_BOOT_GetMode` reads flash before the ESIG area.
+    // Undocumented: the vendor code reads flash before ESIG.
     unsafe { core::ptr::read_volatile(0x0800_0000 as *const u32) };
     ((crate::signature::chip_id().dev_id() >> 4) & 0xf) as u8
 }
 
 pub struct Driver<'d, T: Instance> {
     peri: Peri<'d, T>,
-    memory: usize,
-    capacity: usize,
-    used: usize,
-    endpoints: [Option<EndpointConfig>; SLOTS],
+    ep0: usize,
+    endpoints: [Option<EndpointInfo>; SLOTS],
 }
 
 impl<'d, T: Instance> Driver<'d, T> {
-    /// `endpoint_memory` holds 512 bytes for EP0 plus one burst per endpoint,
-    /// used when a transfer buffer is outside the controller's DMA range
-    /// (`0x200A_0000..0x2018_0000`) or not 4-byte aligned. A burst is
-    /// `max_burst + 1` packets of a bulk endpoint, with the `max_burst` of its
-    /// `EndpointOptions`, and one packet of any other endpoint.
+    /// `ep0_memory` needs to be 512 bytes aligned to 4 bytes, inside the
+    /// controller's DMA range `0x200A_0000..0x2018_0000`.
     pub fn new(
         peri: Peri<'d, T>,
         _irqs: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>
             + interrupt::typelevel::Binding<T::LinkInterrupt, LinkInterruptHandler<T>>
             + 'd,
-        endpoint_memory: &'d mut [u8],
+        ep0_memory: &'d mut [u8],
     ) -> Result<Self, Error> {
-        let address = endpoint_memory.as_mut_ptr() as usize;
-        if !dma_range(address, endpoint_memory.len()) {
-            return Err(Error::InvalidMemory);
-        }
-        let aligned = (address + 3) & !3;
-        let capacity = endpoint_memory.len().saturating_sub(aligned - address);
-        if capacity < EP0_SIZE {
-            return Err(Error::BufferTooSmall);
-        }
         Ok(Self {
             peri,
-            memory: aligned,
-            capacity,
-            used: EP0_SIZE,
+            ep0: dma_memory(ep0_memory, EP0_SIZE)?,
             endpoints: [None; SLOTS],
         })
     }
@@ -331,14 +264,13 @@ impl<'d, T: Instance> Driver<'d, T> {
             addr: requested,
             ep_type,
             max_packet_size,
-            interval_ms,
-            max_burst,
+            interval,
+            companion,
             ..
         } = *config;
-        if !packet_size_valid(ep_type, max_packet_size, interval_ms)
-            || max_burst > 15
-            || config.max_streams != 0
-            || config.mult != 0
+        if !packet_size_valid(ep_type, max_packet_size)
+            || companion
+                .is_some_and(|companion| companion.max_burst > 15 || companion.max_streams != 0 || companion.mult != 0)
         {
             return Err(EndpointAllocError);
         }
@@ -351,32 +283,22 @@ impl<'d, T: Instance> Driver<'d, T> {
                 requested.is_none_or(|address| address.index() == *index) && self.endpoints[slot(*index, IN)].is_none()
             })
             .ok_or(EndpointAllocError)?;
-        let size = usize::from(max_packet_size) * (usize::from(max_burst) + 1);
-        let start = (self.used + 3) & !3;
-        if start + size > self.capacity {
-            return Err(EndpointAllocError);
-        }
-        let info = EndpointInfo {
-            addr: EndpointAddress::from_parts(index, direction),
+        let mut info = EndpointInfo::new(
+            EndpointAddress::from_parts(index, direction),
             ep_type,
             max_packet_size,
-            interval_ms,
-            max_burst,
-        };
-        let buffer = Buffer {
-            address: self.memory + start,
-            size,
-        };
-        self.endpoints[slot(index, IN)] = Some(EndpointConfig { info, buffer });
-        self.used = start + size;
-        Ok(Endpoint::new(info, buffer))
+            interval,
+        );
+        info.bytes_per_interval = config.bytes_per_interval;
+        info.companion = companion;
+        self.endpoints[slot(index, IN)] = Some(info);
+        Ok(Endpoint::new(info))
     }
 }
 
 impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
     type EndpointOut = Endpoint<'d, T, false>;
     type EndpointIn = Endpoint<'d, T, true>;
-    type ControlPipe = ControlPipe<'d, T>;
     type Bus = Bus<'d, T>;
 
     fn alloc_endpoint_out(
@@ -393,7 +315,7 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
         self.allocate(config)
     }
 
-    fn start(self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
+    fn start(self, control_max_packet_size: u16) -> Self::Bus {
         assert_eq!(
             usize::from(control_max_packet_size),
             EP0_SIZE,
@@ -405,17 +327,21 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
                 state.reset(false);
                 state.config = config;
             }
-            inner.ep0.address = self.memory;
+            inner.ep0.address = self.ep0;
             inner.powered = false;
             inner.events = POWER;
             inner.setup = None;
         });
-        (Bus { _peri: self.peri }, ControlPipe::new())
+        Bus {
+            _peri: self.peri,
+            control: ControlPipe::new(),
+        }
     }
 }
 
 pub struct Bus<'d, T: Instance> {
     _peri: Peri<'d, T>,
+    control: ControlPipe<T>,
 }
 
 impl<T: Instance> Bus<'_, T> {
@@ -433,16 +359,13 @@ impl<T: Instance> Bus<'_, T> {
             T::state().mode.store(MODE_DEVICE, Ordering::Relaxed);
             inner.revision = revision();
             unsafe { init_clocks::<T>() };
-            inner.regs.init(inner.revision);
+            inner.regs.init(Role::Device {
+                revision: inner.revision,
+            });
             inner.powered = true;
             inner.bus_reset();
             inner.reset_seen = false;
-            T::Interrupt::unpend();
-            T::LinkInterrupt::unpend();
-            unsafe {
-                T::Interrupt::enable();
-                T::LinkInterrupt::enable();
-            }
+            unsafe { enable_interrupts::<T>() };
         });
         state::<T>().wake(true, !0);
     }
@@ -471,7 +394,7 @@ impl<T: Instance> Bus<'_, T> {
 
     /// Runs `f` on a data endpoint of the powered controller, then wakes its
     /// task.
-    fn with_endpoint(address: EndpointAddress, f: impl FnOnce(Regs, &mut EndpointState, EndpointConfig)) {
+    fn with_endpoint(address: EndpointAddress, f: impl FnOnce(Regs, &mut EndpointState, EndpointInfo)) {
         if address.index() == 0 || address.index() >= ENDPOINTS {
             return;
         }
@@ -487,10 +410,9 @@ impl<T: Instance> Bus<'_, T> {
         state::<T>().endpoint_wakers[slot].wake();
     }
 
-    /// Sets or clears the STALL handshake of an endpoint, for the bus and
-    /// the endpoint alike.
+    /// Sets or clears the STALL handshake of a data endpoint. EP0 needs none:
+    /// its stall is a protocol stall that the next SETUP clears.
     pub(super) fn set_endpoint_stalled(address: EndpointAddress, stalled: bool) {
-        // An EP0 stall is a protocol stall that the next SETUP clears.
         let (index, incoming) = (address.index(), address.is_in());
         Self::with_endpoint(address, |regs, endpoint, _| {
             if !endpoint.enabled {
@@ -515,6 +437,14 @@ impl<T: Instance> Bus<'_, T> {
                 .inner
                 .lock(|inner| inner.borrow().endpoints[slot(address.index(), address.is_in())].stalled)
     }
+
+    pub(super) fn is_endpoint_enabled(address: EndpointAddress) -> bool {
+        address.index() < ENDPOINTS
+            && state::<T>().inner.lock(|inner| {
+                let inner = inner.borrow();
+                inner.powered && inner.endpoints[slot(address.index(), address.is_in())].enabled
+            })
+    }
 }
 
 impl<T: Instance> Drop for Bus<'_, T> {
@@ -535,11 +465,12 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
     async fn poll(&mut self) -> Event {
         poll_fn(|context| {
             state::<T>().bus_waker.register(context.waker());
+            state::<T>().endpoint_wakers[0].register(context.waker());
             state::<T>().inner.lock(|inner| {
                 let mut inner = inner.borrow_mut();
                 for (flag, event) in [
                     (POWER, Event::PowerDetected),
-                    (RESET, Event::Reset),
+                    (RESET, Event::Reset(Speed::Super)),
                     (SUSPEND, Event::Suspend),
                     (RESUME, Event::Resume),
                 ] {
@@ -548,19 +479,48 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
                         return Poll::Ready(event);
                     }
                 }
-                Poll::Pending
+                // Bus events go first: `control_aborted` fails the control
+                // transfer of a SETUP taken while one is pending.
+                match self.control.take_setup(&mut inner) {
+                    Some(setup) => Poll::Ready(Event::Setup(setup)),
+                    None => Poll::Pending,
+                }
             })
         })
         .await
     }
 
-    fn endpoint_set_enabled(&mut self, address: EndpointAddress, enabled: bool) {
+    fn control_max_packet_size(&self) -> usize {
+        EP0_SIZE
+    }
+
+    async fn control_data_out(&mut self, buffer: &mut [u8]) -> Result<usize, EndpointError> {
+        self.control.data_out(buffer).await
+    }
+
+    async fn control_data_in(&mut self, data: &[u8], needs_zlp: bool) -> Result<(), EndpointDisabledError> {
+        self.control.data_in(data, needs_zlp).await
+    }
+
+    async fn control_accept(&mut self) {
+        self.control.accept().await
+    }
+
+    async fn control_reject(&mut self) {
+        self.control.reject()
+    }
+
+    async fn control_accept_set_address(&mut self, address: u8) {
+        self.control.accept_set_address(address).await
+    }
+
+    async fn endpoint_set_enabled(&mut self, address: EndpointAddress, enabled: bool) {
         let (index, incoming) = (address.index(), address.is_in());
         Self::with_endpoint(address, |regs, endpoint, config| {
             endpoint.reset(enabled);
             regs.set_enabled(index, incoming, false);
             if enabled {
-                let iso = config.info.ep_type == EndpointType::Isochronous;
+                let iso = config.ep_type == EndpointType::Isochronous;
                 regs.configure(index, incoming, iso);
                 regs.set_enabled(index, incoming, true);
             } else {
@@ -569,7 +529,11 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
         });
     }
 
-    fn endpoint_set_stalled(&mut self, address: EndpointAddress, stalled: bool) {
+    fn endpoint_is_enabled(&mut self, address: EndpointAddress) -> bool {
+        Self::is_endpoint_enabled(address)
+    }
+
+    async fn endpoint_set_stalled(&mut self, address: EndpointAddress, stalled: bool) {
         Self::set_endpoint_stalled(address, stalled);
     }
 
@@ -605,7 +569,7 @@ impl Inner {
                 self.regs.set_out_window(index, window);
             }
         }
-        self.endpoints[slot].queue(self.regs);
+        self.endpoints[slot].queue(self.regs, self.ep0.address);
     }
 
     /// A reset supersedes pending suspend/resume events, and a suspend and
@@ -617,6 +581,15 @@ impl Inner {
             RESUME if self.events & SUSPEND != 0 => self.events &= !SUSPEND,
             _ => self.events |= event,
         }
+        // The control transfer in progress checks for bus events.
+        self.wake |= 1;
+    }
+
+    /// Whether the control transfer of the SETUP counted `generation` can no
+    /// longer complete: a newer SETUP or a reset replaced it, or a pending
+    /// reset or suspend that `Bus::poll` has to report first.
+    pub fn control_aborted(&self, generation: u32) -> bool {
+        !self.powered || self.control_generation != generation || self.events & (RESET | SUSPEND) != 0
     }
 
     /// Ends the control transfer in progress.
@@ -704,8 +677,7 @@ impl Inner {
                 }
                 LinkState::HOTRST => {
                     self.link_reset();
-                    r.link_ctrl()
-                        .modify(|w| w.set_link_tx_ts_cfg(w.link_tx_ts_cfg() & !LINK_HOT_RESET));
+                    r.end_hot_reset();
                 }
                 _ => {}
             }
@@ -732,7 +704,7 @@ impl Inner {
             match data0 & LMP_SUBTYPE_MASK {
                 LMP_PORT_CAP => r.tx_port_cap(),
                 LMP_PORT_CFG => r.tx_port_cfg_res(),
-                LMP_PORT_CFG_RES => r.link_lmp_port_cap().modify(|w| w.set_link_lmp_tx_cap_vld(true)),
+                LMP_PORT_CFG_RES => r.port_configured(),
                 LMP_U2_INACT_TOUT => r
                     .link_u2_inact_timer()
                     .write(|w| w.set_u2_inactive_timer((data0 >> 9) as u8)),
@@ -744,8 +716,7 @@ impl Inner {
 
         if flags.link_if_rx_lmp_tout() {
             r.link_int_flag().write(|w| w.set_link_if_rx_lmp_tout(true));
-            r.link_ctrl().modify(|w| w.set_link_go_disabled(true));
-            r.link_ctrl().modify(|w| w.set_link_go_rx_det(true));
+            r.redetect();
             return false;
         }
 
@@ -802,7 +773,6 @@ impl Inner {
     fn complete(&mut self, slot: usize) {
         if self.endpoints[slot].phase == Phase::Busy {
             self.endpoints[slot].phase = Phase::Done;
-            // EP0 waits on slot 0 for both directions.
             self.wake |= 1 << if slot < 2 { 0 } else { slot };
         }
     }
@@ -830,7 +800,7 @@ impl Inner {
 
     /// A chain ended: starts the transfer's next one or completes it.
     fn data_irq(&mut self, index: usize, incoming: bool) {
-        let r = self.regs;
+        let (r, ep0) = (self.regs, self.ep0.address);
         let (packets, last) = if incoming {
             r.tx(index).chain_st().write(|w| w.set_chain_if(true));
             (0, 0)
@@ -846,7 +816,7 @@ impl Inner {
         let Some(config) = endpoint.config.filter(|_| endpoint.phase == Phase::Busy) else {
             return;
         };
-        let mps = usize::from(config.info.max_packet_size);
+        let mps = usize::from(config.max_packet_size);
         let transfer = &mut endpoint.transfer;
         let more = if incoming {
             transfer.progress < transfer.length || transfer.zlp
@@ -859,7 +829,7 @@ impl Inner {
             last >= mps && transfer.progress < transfer.length
         };
         if more {
-            endpoint.queue(r);
+            endpoint.queue(r, ep0);
             if !incoming {
                 r.set_out_window(index, self.out_window());
             }

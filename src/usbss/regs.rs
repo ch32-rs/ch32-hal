@@ -3,14 +3,30 @@
 use core::ops::Deref;
 
 use super::device::ENDPOINTS;
-use super::{LMP_LINK_SPEED, LMP_PORT_CAP, LMP_PORT_CFG_RES, NUM_HP_BUF, UP_STREAM};
+use super::{LMP_LINK_SPEED, LMP_PORT_CAP, LMP_PORT_CFG_RES, NUM_HP_BUF};
 use crate::pac::usbss::vals::{Ep0RxRes, Ep0TxRes, PdMode, TxDeemph};
+#[cfg(feature = "embassy")]
+use crate::pac::usbss::UsbssHost;
 use crate::pac::usbss::{regs, EpRx, EpTx, UsbssDevice};
 
 /// Hot Reset bit of `LINK_CTRL.LINK_TX_TS_CFG`.
-pub(super) const LINK_HOT_RESET: u8 = 1;
+const LINK_HOT_RESET: u8 = 1;
+/// Port types of a Port Capability LMP.
+const UP_STREAM: u32 = 2 << 16;
+const DOWN_STREAM: u32 = 1 << 16;
 
-/// The device register block.
+/// Which end of the link the controller is.
+#[derive(Clone, Copy)]
+pub(super) enum Role {
+    Device {
+        revision: u8,
+    },
+    #[cfg(feature = "embassy")]
+    Host,
+}
+
+/// The register block through its device view. The link layer is the same in
+/// both modes, so the host driver uses it too.
 #[derive(Clone, Copy)]
 pub(super) struct Regs(pub UsbssDevice);
 
@@ -23,6 +39,11 @@ impl Deref for Regs {
 }
 
 impl Regs {
+    #[cfg(feature = "embassy")]
+    pub fn host(self) -> UsbssHost {
+        unsafe { UsbssHost::from_ptr(self.0.as_ptr()) }
+    }
+
     /// IN registers of endpoint `n` (1..=7).
     pub fn tx(self, n: usize) -> EpTx {
         self.ep_tx(n - 1)
@@ -156,8 +177,8 @@ impl Regs {
         self.phy_cfg_dat().write(|w| w.set_phy_cfg_data(1));
     }
 
-    /// PHY values from the EVT examples. The RM documents neither the indirect
-    /// PHY interface nor the `0x5003_C018` write.
+    /// Undocumented PHY values: the RM documents neither the indirect PHY
+    /// interface nor the `0x5003_C018` write.
     ///
     /// Call this after `LINK_PHY_RESET` has been released. Values written
     /// before it do not survive a cold boot, and the link then drops into
@@ -171,13 +192,14 @@ impl Regs {
         unsafe { core::ptr::write_volatile(0x5003_C018 as *mut u32, 0xB005_4000) };
     }
 
-    /// Brings the link layer up as a device. `LINK_IE_RX_SET_FC` exists from
-    /// silicon revision 3. The de-emphasis is the 3.5 dB of USB 3.0, where the
-    /// EVT examples write the reserved value 3.
-    pub fn init(self, revision: u8) {
+    /// Brings the link layer up. The de-emphasis is the 3.5 dB of USB 3.0,
+    /// where the EVT writes the reserved value 3.
+    pub fn init(self, role: Role) {
+        let host = !matches!(role, Role::Device { .. });
         self.link_cfg().write(|w| {
             w.set_link_rx_eq_en(true);
             w.set_link_tx_deemph(TxDeemph::DB3_5);
+            w.set_link_down_mode(host);
             w.set_link_phy_reset(true);
         });
         self.link_ctrl().write(|w| {
@@ -187,10 +209,20 @@ impl Regs {
         self.link_cfg().write(|w| {
             w.set_link_rx_eq_en(true);
             w.set_link_tx_deemph(TxDeemph::DB3_5);
+            w.set_link_down_mode(host);
             w.set_link_ltssm_mode(true);
-            w.set_link_tout_mode(true);
+            w.set_link_u2_det_en(host);
+            w.set_link_tout_mode(!host);
         });
         self.link_lpm_cr().modify(|w| w.set_lpm_en(true));
+        if host {
+            // The EVT waits without a bound.
+            for _ in 0..1_000_000 {
+                if !self.link_status().read().link_busy() {
+                    break;
+                }
+            }
+        }
         self.link_cfg().modify(|w| w.set_link_rx_term_en(true));
         self.link_int_ctrl().write(|w| {
             w.set_link_ie_tx_lmp(true);
@@ -198,14 +230,26 @@ impl Regs {
             w.set_link_ie_rx_lmp_tout(true);
             w.set_link_ie_state_chg(true);
             w.set_link_ie_warm_rst(true);
-            w.set_link_ie_term_pres(true);
-            w.set_link_ie_rx_set_fc(revision >= 3);
+            match role {
+                Role::Device { revision } => {
+                    w.set_link_ie_term_pres(true);
+                    // Exists from silicon revision 3.
+                    w.set_link_ie_rx_set_fc(revision >= 3);
+                }
+                #[cfg(feature = "embassy")]
+                Role::Host => {}
+            }
         });
         self.link_ctrl().write(|w| w.set_link_pd_mode(PdMode::P2));
-        self.link_u1_wkup_tmr().write(|w| w.set_u1_wkup_tmr(120));
-        self.link_u1_wkup_filter().write(|w| w.set_u1_wkup_filter(50));
-        self.link_u2_wkup_filter().write(|w| w.set_u2_wkup_filter(0));
-        self.link_u3_wkup_filter().write(|w| w.set_u3_wkup_filter(0));
+        if host {
+            self.link_itp_pre().write(|w| w.set_itp_pre(122));
+            self.link_tx_route().write_value(0);
+        } else {
+            self.link_u1_wkup_tmr().write(|w| w.set_u1_wkup_tmr(120));
+            self.link_u1_wkup_filter().write(|w| w.set_u1_wkup_filter(50));
+            self.link_u2_wkup_filter().write(|w| w.set_u2_wkup_filter(0));
+            self.link_u3_wkup_filter().write(|w| w.set_u3_wkup_filter(0));
+        }
         self.phy_tuning();
     }
 
@@ -271,16 +315,45 @@ impl Regs {
         });
     }
 
+    fn tx_lmp(self, words: [u32; 3]) {
+        for (index, word) in words.into_iter().enumerate() {
+            self.link_lmp_tx_data(index).write_value(word);
+        }
+    }
+
     pub fn tx_port_cap(self) {
-        self.link_lmp_tx_data(0).write_value(LMP_LINK_SPEED | LMP_PORT_CAP);
-        self.link_lmp_tx_data(1).write_value(UP_STREAM | NUM_HP_BUF);
-        self.link_lmp_tx_data(2).write_value(0);
+        let port_type = if self.link_cfg().read().link_down_mode() {
+            DOWN_STREAM
+        } else {
+            UP_STREAM
+        };
+        self.tx_lmp([LMP_LINK_SPEED | LMP_PORT_CAP, port_type | NUM_HP_BUF, 0]);
+    }
+
+    #[cfg(feature = "embassy")]
+    pub fn tx_port_cfg(self) {
+        self.tx_lmp([LMP_LINK_SPEED | super::LMP_PORT_CFG, 0, 0]);
     }
 
     pub fn tx_port_cfg_res(self) {
-        self.link_lmp_tx_data(0).write_value(LMP_LINK_SPEED | LMP_PORT_CFG_RES);
-        self.link_lmp_tx_data(1).write_value(0);
-        self.link_lmp_tx_data(2).write_value(0);
+        self.tx_lmp([LMP_LINK_SPEED | LMP_PORT_CFG_RES, 0, 0]);
+        self.port_configured();
+    }
+
+    /// Ends the Port Configuration handshake.
+    pub fn port_configured(self) {
         self.link_lmp_port_cap().modify(|w| w.set_link_lmp_tx_cap_vld(true));
+    }
+
+    /// Completes a Hot Reset, which waits for `TX_TS_CFG[0]` to clear.
+    pub fn end_hot_reset(self) {
+        self.link_ctrl()
+            .modify(|w| w.set_link_tx_ts_cfg(w.link_tx_ts_cfg() & !LINK_HOT_RESET));
+    }
+
+    /// Retrains from Rx.Detect, for a partner that stopped answering LMPs.
+    pub fn redetect(self) {
+        self.link_ctrl().modify(|w| w.set_link_go_disabled(true));
+        self.link_ctrl().modify(|w| w.set_link_go_rx_det(true));
     }
 }

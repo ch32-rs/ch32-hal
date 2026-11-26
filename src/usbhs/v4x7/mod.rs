@@ -23,7 +23,8 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_usb_driver::{
-    Direction, EndpointAddress, EndpointAllocError, EndpointInfo, EndpointType, Event, Unsupported,
+    Direction, EndpointAddress, EndpointAllocError, EndpointDisabledError, EndpointError, EndpointInfo,
+    EndpointInterval, EndpointType, Event, Unsupported,
 };
 
 use crate::gpio::AnyPin;
@@ -36,7 +37,7 @@ mod control;
 mod endpoint;
 mod regs;
 
-pub use control::ControlPipe;
+use control::ControlPipe;
 pub use embassy_usb_driver::Speed;
 pub use endpoint::Endpoint;
 use regs::Registers;
@@ -60,6 +61,8 @@ const SUSPEND: u8 = 2;
 const RESUME: u8 = 4;
 const POWER: u8 = 8;
 const INTERRUPTS: u8 = 0xd7;
+/// `RB_UDIE_SOF_ACT` / `RB_UDIF_RX_SOF`.
+const SOF: u8 = 0x20;
 
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -149,6 +152,9 @@ struct Inner {
     suspended: bool,
     events: u8,
     setup: Option<[u8; 8]>,
+    /// A bus reset waits for the first SOF to report the negotiated speed.
+    reset_pending: bool,
+    speed: Speed,
 }
 
 impl Inner {
@@ -159,8 +165,22 @@ impl Inner {
             suspended: false,
             events: 0,
             setup: None,
+            reset_pending: false,
+            speed: Speed::Full,
         }
     }
+}
+
+/// Whether the control transfer of the SETUP packet taken at EP0 `generation`
+/// was aborted: by a bus event `Bus::poll` has yet to return, or by a new
+/// SETUP packet.
+fn control_aborted<T: Instance>(inner: &Inner, generation: u32) -> bool {
+    !inner.powered
+        || inner.events & (RESET | SUSPEND) != 0
+        || inner.endpoints[..2]
+            .iter()
+            .any(|endpoint| !endpoint.enabled || endpoint.generation != generation)
+        || Registers(T::REGS).control(0, false).read() & 0x88 == 0x88
 }
 
 struct State {
@@ -183,14 +203,14 @@ fn slot(index: usize, incoming: bool) -> usize {
     index * 2 + incoming as usize
 }
 
-fn packet_size_valid(speed: Speed, kind: EndpointType, size: u16, interval: u8) -> bool {
+/// Every polling interval is valid: the stack encodes it for the bus speed.
+fn packet_size_valid(speed: Speed, kind: EndpointType, size: u16) -> bool {
     match (speed, kind) {
         (Speed::Full, EndpointType::Bulk) => matches!(size, 8 | 16 | 32 | 64),
         (Speed::High, EndpointType::Bulk) => size == 512,
-        (Speed::Full, EndpointType::Interrupt) => (1..=64).contains(&size) && interval != 0,
-        (Speed::High, EndpointType::Interrupt) => (1..=1024).contains(&size) && (1..=16).contains(&interval),
-        (Speed::Full, EndpointType::Isochronous) => (1..=1023).contains(&size) && (1..=16).contains(&interval),
-        (Speed::High, EndpointType::Isochronous) => (1..=1024).contains(&size) && (1..=16).contains(&interval),
+        (Speed::Full, EndpointType::Interrupt) => (1..=64).contains(&size),
+        (Speed::Full, EndpointType::Isochronous) => (1..=1023).contains(&size),
+        (Speed::High, EndpointType::Interrupt | EndpointType::Isochronous) => (1..=1024).contains(&size),
         _ => false,
     }
 }
@@ -246,7 +266,7 @@ impl<'d, T: Instance> Driver<'d, T> {
         endpoint_memory: &'d mut [u8],
         config: Config,
     ) -> Result<Self, Error> {
-        if config.speed == Speed::Low {
+        if !matches!(config.speed, Speed::Full | Speed::High) {
             return Err(Error::UnsupportedSpeed);
         }
         if !pac::RCC.ctlr().read().usbhs_pllrdy() {
@@ -285,9 +305,9 @@ impl<'d, T: Instance> Driver<'d, T> {
         ep_type: EndpointType,
         requested: Option<EndpointAddress>,
         max_packet_size: u16,
-        interval_ms: u8,
+        interval: EndpointInterval,
     ) -> Result<Endpoint<'d, T, IN>, EndpointAllocError> {
-        if !packet_size_valid(self.config.speed, ep_type, max_packet_size, interval_ms) {
+        if !packet_size_valid(self.config.speed, ep_type, max_packet_size) {
             return Err(EndpointAllocError);
         }
         let direction = if IN { Direction::In } else { Direction::Out };
@@ -309,13 +329,12 @@ impl<'d, T: Instance> Driver<'d, T> {
         if end > self.capacity {
             return Err(EndpointAllocError);
         }
-        let info = EndpointInfo {
-            addr: EndpointAddress::from_parts(index, direction),
+        let info = EndpointInfo::new(
+            EndpointAddress::from_parts(index, direction),
             ep_type,
             max_packet_size,
-            interval_ms,
-            max_burst: 0,
-        };
+            interval,
+        );
         self.endpoints[slot(index, IN)] = Some(EndpointConfig {
             info,
             buffer: Buffer {
@@ -331,37 +350,35 @@ impl<'d, T: Instance> Driver<'d, T> {
 impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
     type EndpointOut = Endpoint<'d, T, false>;
     type EndpointIn = Endpoint<'d, T, true>;
-    type ControlPipe = ControlPipe<'d, T>;
     type Bus = Bus<'d, T>;
 
     fn alloc_endpoint_out(
         &mut self,
         config: &embassy_usb_driver::EndpointConfig,
     ) -> Result<Self::EndpointOut, EndpointAllocError> {
-        self.allocate(config.ep_type, config.addr, config.max_packet_size, config.interval_ms)
+        self.allocate(config.ep_type, config.addr, config.max_packet_size, config.interval)
     }
 
     fn alloc_endpoint_in(
         &mut self,
         config: &embassy_usb_driver::EndpointConfig,
     ) -> Result<Self::EndpointIn, EndpointAllocError> {
-        self.allocate(config.ep_type, config.addr, config.max_packet_size, config.interval_ms)
+        self.allocate(config.ep_type, config.addr, config.max_packet_size, config.interval)
     }
 
-    fn start(mut self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
+    fn start(mut self, control_max_packet_size: u16) -> Self::Bus {
         assert!(
             matches!(control_max_packet_size, 8 | 16 | 32 | 64)
                 && (self.config.speed != Speed::High || control_max_packet_size == 64)
         );
         for incoming in [false, true] {
             self.endpoints[slot(0, incoming)] = Some(EndpointConfig {
-                info: EndpointInfo {
-                    addr: EndpointAddress::from_parts(0, if incoming { Direction::In } else { Direction::Out }),
-                    ep_type: EndpointType::Control,
-                    max_packet_size: control_max_packet_size,
-                    interval_ms: 0,
-                    max_burst: 0,
-                },
+                info: EndpointInfo::new(
+                    EndpointAddress::from_parts(0, if incoming { Direction::In } else { Direction::Out }),
+                    EndpointType::Control,
+                    control_max_packet_size,
+                    EndpointInterval::NONE,
+                ),
                 buffer: Buffer {
                     address: self.memory,
                     size: 64,
@@ -378,16 +395,14 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
             inner.events = POWER;
             inner.setup = None;
         });
-        (
-            Bus {
-                _peri: self.peri,
-                dp: self.dp,
-                dm: self.dm,
-                config: self.config,
-                _memory: PhantomData,
-            },
-            ControlPipe::new(control_max_packet_size),
-        )
+        Bus {
+            _peri: self.peri,
+            dp: self.dp,
+            dm: self.dm,
+            config: self.config,
+            control: ControlPipe::new(control_max_packet_size),
+            _memory: PhantomData,
+        }
     }
 }
 
@@ -400,6 +415,7 @@ pub struct Bus<'d, T: Instance> {
     #[cfg_attr(usbhs_h4, allow(dead_code))]
     dm: Peri<'d, AnyPin>,
     config: Config,
+    control: ControlPipe<T>,
     _memory: PhantomData<&'d mut [u8]>,
 }
 
@@ -443,6 +459,7 @@ impl<T: Instance> Bus<'_, T> {
                     .write(|reg| reg.set_ud_speed_type(if self.config.speed == Speed::High { 1 } else { 0 }));
                 inner.powered = true;
                 inner.suspended = false;
+                inner.reset_pending = false;
                 reset_endpoints::<T>(&mut inner);
                 T::REGS.usb_int_fg().write_value(pac::usbhs::regs::UsbIntFg(0xef));
                 T::REGS.usb_int_en().write_value(pac::usbhs::regs::UsbIntEn(INTERRUPTS));
@@ -474,6 +491,7 @@ impl<T: Instance> Bus<'_, T> {
                 }
                 inner.powered = false;
                 inner.suspended = false;
+                inner.reset_pending = false;
                 inner.setup = None;
                 for endpoint in &mut inner.endpoints {
                     endpoint.invalidate();
@@ -504,9 +522,11 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
             T::state().bus_waker.register(context.waker());
             T::state().inner.lock(|inner| {
                 let mut inner = inner.borrow_mut();
+                // Bus events go first: they abort the control transfer of a
+                // SETUP packet taken while one is pending.
                 for (flag, event) in [
                     (POWER, Event::PowerDetected),
-                    (RESET, Event::Reset),
+                    (RESET, Event::Reset(inner.speed)),
                     (SUSPEND, Event::Suspend),
                     (RESUME, Event::Resume),
                 ] {
@@ -515,17 +535,52 @@ impl<T: Instance> embassy_usb_driver::Bus for Bus<'_, T> {
                         return Poll::Ready(event);
                     }
                 }
-                Poll::Pending
+                match self.control.take_setup(&mut inner) {
+                    Some(setup) => Poll::Ready(Event::Setup(setup)),
+                    None => Poll::Pending,
+                }
             })
         })
         .await
     }
 
-    fn endpoint_set_enabled(&mut self, address: EndpointAddress, enabled: bool) {
+    fn control_max_packet_size(&self) -> usize {
+        self.control.max_packet_size()
+    }
+
+    async fn control_data_out(&mut self, buffer: &mut [u8]) -> Result<usize, EndpointError> {
+        self.control.data_out(buffer).await
+    }
+
+    async fn control_data_in(&mut self, data: &[u8], needs_zlp: bool) -> Result<(), EndpointDisabledError> {
+        self.control.data_in(data, needs_zlp).await
+    }
+
+    async fn control_accept(&mut self) {
+        self.control.accept().await
+    }
+
+    async fn control_reject(&mut self) {
+        self.control.reject()
+    }
+
+    async fn control_accept_set_address(&mut self, address: u8) {
+        self.control.accept_set_address(address).await
+    }
+
+    async fn endpoint_set_enabled(&mut self, address: EndpointAddress, enabled: bool) {
         change_endpoint::<T>(address, enabled, false);
     }
 
-    fn endpoint_set_stalled(&mut self, address: EndpointAddress, stalled: bool) {
+    fn endpoint_is_enabled(&mut self, address: EndpointAddress) -> bool {
+        address.index() < ENDPOINTS
+            && T::state().inner.lock(|inner| {
+                let inner = inner.borrow();
+                inner.powered && inner.endpoints[slot(address.index(), address.is_in())].enabled
+            })
+    }
+
+    async fn endpoint_set_stalled(&mut self, address: EndpointAddress, stalled: bool) {
         set_endpoint_stalled::<T>(address, stalled);
     }
 
@@ -662,14 +717,31 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             let flags = T::REGS.usb_int_fg().read().0;
             if flags & 1 != 0 {
                 reset_endpoints::<T>(&mut inner);
-                T::REGS.usb_int_fg().write_value(pac::usbhs::regs::UsbIntFg(1));
-                inner.events |= RESET;
+                // The speed is negotiated during the reset, so the reset is
+                // reported at the first SOF after it, as TinyUSB does.
+                T::REGS.usb_int_fg().write_value(pac::usbhs::regs::UsbIntFg(1 | SOF));
+                T::REGS
+                    .usb_int_en()
+                    .write_value(pac::usbhs::regs::UsbIntEn(INTERRUPTS | SOF));
+                inner.reset_pending = true;
                 wake = u16::MAX;
-                bus = true;
                 return;
             }
+            if flags & SOF != 0 && inner.reset_pending {
+                T::REGS.usb_int_en().write_value(pac::usbhs::regs::UsbIntEn(INTERRUPTS));
+                inner.reset_pending = false;
+                inner.speed = if T::REGS.usb_mis_st().read().udms_hs_mod() {
+                    Speed::High
+                } else {
+                    Speed::Full
+                };
+                inner.events |= RESET;
+                bus = true;
+            }
             if flags & 0x80 != 0 {
-                for endpoint in &mut inner.endpoints {
+                // A FIFO overflow loses received data.
+                for index in 0..ENDPOINTS {
+                    let endpoint = &mut inner.endpoints[slot(index, false)];
                     if endpoint.enabled {
                         endpoint.overflow = true;
                     }
@@ -696,6 +768,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                     regs.control(0, false).write_value(STALL);
                 }
                 wake |= 3;
+                bus = true;
             }
             for index in 0..ENDPOINTS {
                 if index == 0 && setup {
@@ -747,6 +820,8 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 if suspended != inner.suspended {
                     inner.suspended = suspended;
                     inner.events |= if suspended { SUSPEND } else { RESUME };
+                    // A suspend aborts the control transfer in progress.
+                    wake |= 3;
                     bus = true;
                 }
             }

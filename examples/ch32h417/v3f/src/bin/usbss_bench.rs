@@ -4,7 +4,7 @@
 //! cargo xtask run --example usbss_bench
 //! ```
 //!
-//! Bulk OUT data is discarded. Bulk IN sends the same 128 KiB buffer forever;
+//! Bulk OUT data is discarded. Bulk IN sends the same 64 KiB buffer forever;
 //! every 1024-byte packet in it holds the bytes 0..=255 four times.
 //!
 //! The vendor request 1 (OUT, no data) stops the IN source with wValue 0 and
@@ -28,6 +28,7 @@ use embassy_usb::control::{OutResponse, Request, RequestType};
 use embassy_usb::driver::{Endpoint, EndpointIn, EndpointOut};
 use embassy_usb::{Builder, EndpointOptions, Handler, UsbDeviceSpeed, UsbVersion};
 use panic_halt as _;
+use static_cell::ConstStaticCell;
 
 bind_interrupts!(struct Irqs {
     USBSS => InterruptHandler<peripherals::USBSS>;
@@ -41,23 +42,17 @@ type BulkOut = <UsbDriver as embassy_usb::driver::Driver<'static>>::EndpointOut;
 const PACKET: usize = 1024;
 const MAX_BURST: u8 = 15;
 const BURST: usize = PACKET * (MAX_BURST as usize + 1);
-/// Eight bursts per transfer; the controller DMAs straight from these buffers.
-const TRANSFER: usize = 8 * BURST;
+const TRANSFER: usize = 4 * BURST;
 
-/// 512 bytes for EP0 and one burst for each bulk endpoint.
 #[repr(align(4))]
-struct EndpointMemory([u8; 512 + 2 * BURST]);
+struct Ep0Memory([u8; 512]);
 
-static mut ENDPOINT_MEMORY: EndpointMemory = EndpointMemory([0; 512 + 2 * BURST]);
-#[repr(align(4))]
-struct TransferBuffer([u8; TRANSFER]);
-
-static mut SINK: TransferBuffer = TransferBuffer([0; TRANSFER]);
-static mut SOURCE: TransferBuffer = TransferBuffer([0; TRANSFER]);
-static mut CONFIG_DESCRIPTOR: [u8; 64] = [0; 64];
-static mut BOS_DESCRIPTOR: [u8; 32] = [0; 32];
-static mut MSOS_DESCRIPTOR: [u8; 32] = [0; 32];
-static mut CONTROL_BUFFER: [u8; 64] = [0; 64];
+static EP0_MEMORY: ConstStaticCell<Ep0Memory> = ConstStaticCell::new(Ep0Memory([0; 512]));
+static SINK: ConstStaticCell<[u8; TRANSFER]> = ConstStaticCell::new([0; TRANSFER]);
+static SOURCE: ConstStaticCell<[u8; TRANSFER]> = ConstStaticCell::new([0; TRANSFER]);
+static CONFIG_DESCRIPTOR: ConstStaticCell<[u8; 64]> = ConstStaticCell::new([0; 64]);
+static BOS_DESCRIPTOR: ConstStaticCell<[u8; 32]> = ConstStaticCell::new([0; 32]);
+static CONTROL_BUFFER: ConstStaticCell<[u8; 64]> = ConstStaticCell::new([0; 64]);
 
 static SOURCE_ON: AtomicBool = AtomicBool::new(true);
 
@@ -73,11 +68,11 @@ impl Handler for SourceSwitch {
     }
 }
 
-static mut SOURCE_SWITCH: SourceSwitch = SourceSwitch;
+static SOURCE_SWITCH: ConstStaticCell<SourceSwitch> = ConstStaticCell::new(SourceSwitch);
 
 #[embassy_executor::task]
 async fn sink(mut ep: BulkOut) {
-    let buffer = unsafe { &mut (*core::ptr::addr_of_mut!(SINK)).0 };
+    let buffer = SINK.take();
     loop {
         ep.wait_enabled().await;
         while ep.read_transfer(buffer).await.is_ok() {}
@@ -86,7 +81,7 @@ async fn sink(mut ep: BulkOut) {
 
 #[embassy_executor::task]
 async fn source(mut ep: BulkIn) {
-    let buffer = unsafe { &mut (*core::ptr::addr_of_mut!(SOURCE)).0 };
+    let buffer = SOURCE.take();
     for (i, byte) in buffer.iter_mut().enumerate() {
         *byte = i as u8;
     }
@@ -113,8 +108,7 @@ async fn main(spawner: Spawner) -> ! {
     });
     let p = hal::init(config);
 
-    let memory = unsafe { &mut *core::ptr::addr_of_mut!(ENDPOINT_MEMORY) };
-    let driver = Driver::new(p.USBSS, Irqs, &mut memory.0).unwrap();
+    let driver = Driver::new(p.USBSS, Irqs, &mut EP0_MEMORY.take().0).unwrap();
 
     let mut usb_config = embassy_usb::Config::new(0xc0de, 0xcaff);
     usb_config.manufacturer = Some("ch32-hal");
@@ -127,12 +121,12 @@ async fn main(spawner: Spawner) -> ! {
     let mut builder = Builder::new(
         driver,
         usb_config,
-        unsafe { &mut *core::ptr::addr_of_mut!(CONFIG_DESCRIPTOR) },
-        unsafe { &mut *core::ptr::addr_of_mut!(BOS_DESCRIPTOR) },
-        unsafe { &mut *core::ptr::addr_of_mut!(MSOS_DESCRIPTOR) },
-        unsafe { &mut *core::ptr::addr_of_mut!(CONTROL_BUFFER) },
+        CONFIG_DESCRIPTOR.take(),
+        BOS_DESCRIPTOR.take(),
+        &mut [],
+        CONTROL_BUFFER.take(),
     );
-    builder.handler(unsafe { &mut *core::ptr::addr_of_mut!(SOURCE_SWITCH) });
+    builder.handler(SOURCE_SWITCH.take());
     let mut function = builder.function(0xff, 0, 0);
     let mut interface = function.interface();
     let mut alt = interface.alt_setting(0xff, 0, 0, None);
