@@ -42,7 +42,7 @@ For a full list of chip capabilities and peripherals, check the [ch32-data](http
 | UART\*     | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ❓    | ❓    | ✅    |
 | SPI\*      | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | N/A   | ❓    | ✅\*  |
 | I2C        | ✅    | ✅  | ✅   | ❓   | ❓   | ❓   | ❓    | ❓    | ✅    |
-| ADC        | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
+| ADC\*      | ✅    | ✅  | ✅   | ✅   | ✅   | ✅   | ✅    | ✅    | ✅    |
 | Timer(PWM) | ✅    | ✅  | ✅   | ❓   | ✅   | ✅   | ✅    | ✅    | ✅    |
 | IWDG       | ✅    | N/A | N/A  | ❓   | N/A  | N/A  | N/A   | N/A   | ❓    |
 | WWDG       | ✅    | N/A | N/A  | ❓   | N/A  | N/A  | N/A   | N/A   | ❓    |
