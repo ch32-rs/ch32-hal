@@ -7,6 +7,9 @@
 //! DMA never accesses a caller's temporary read/write slice. Canceling an IN
 //! write may leave its owned packet queued until the host consumes it or the
 //! endpoint is disabled. A subsequent write drains that packet before reuse.
+//! Bulk OUT uses one pending packet per endpoint and stays at NAK until the
+//! consumer requests another packet. The DMA buffer is copied directly into
+//! the caller's read buffer; there is no additional IRQ copy or backup buffer.
 //!
 //! Configure the shared 480 MHz USBHS PLL through RCC before constructing the
 //! driver. Full speed is the default. High-speed descriptors and full-speed
@@ -60,7 +63,6 @@ const SUSPEND: u8 = 2;
 const RESUME: u8 = 4;
 const POWER: u8 = 8;
 const INTERRUPTS: u8 = 0xd7;
-
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct Config {
@@ -574,7 +576,16 @@ fn set_endpoint_stalled<T: Instance>(address: EndpointAddress, stalled: bool) {
         endpoint.tx_busy = false;
         endpoint.tx_done = false;
         endpoint.overflow = false;
-        Registers(T::REGS).control(index, incoming).write_value(if stalled {
+        let regs = Registers(T::REGS);
+        let auto = !incoming && endpoint.config.is_some_and(|c| c.info.ep_type == EndpointType::Bulk);
+        if auto {
+            // Reset the expected PID with automatic toggling temporarily disabled.
+            regs.control(index, false).write_value(NAK);
+            regs.rx_auto_toggle().modify(|mask| *mask &= !(1 << index));
+            regs.control(index, false).write_value(NAK);
+            regs.rx_auto_toggle().modify(|mask| *mask |= 1 << index);
+        }
+        regs.control(index, incoming).write_value(if stalled {
             STALL
         } else if incoming {
             NAK
@@ -609,12 +620,19 @@ fn change_endpoint<T: Instance>(address: EndpointAddress, enabled: bool, stalled
         }
         let regs = Registers(T::REGS);
         regs.enables(incoming).modify(|value| *value &= !(1 << index));
+        if !incoming {
+            // In manual mode the PID stays writable while the endpoint is disabled.
+            regs.rx_auto_toggle().modify(|mask| *mask &= !(1 << index));
+        }
         endpoint.invalidate();
         endpoint.enabled = enabled;
         endpoint.stalled = stalled;
         regs.control(index, incoming)
             .write_value(if !enabled || incoming { NAK } else { ACK });
         if enabled {
+            if !incoming && endpoint.config.is_some_and(|c| c.info.ep_type == EndpointType::Bulk) {
+                regs.rx_auto_toggle().modify(|mask| *mask |= 1 << index);
+            }
             regs.enables(incoming).modify(|value| *value |= 1 << index);
         }
     });
@@ -625,6 +643,7 @@ fn reset_endpoints<T: Instance>(inner: &mut Inner) {
     let regs = Registers(T::REGS);
     regs.enables(true).write_value(1);
     regs.enables(false).write_value(1);
+    regs.rx_auto_toggle().write_value(0);
     T::REGS.usb_dev_ad().write_value(pac::usbhs::regs::UsbDevAd(0));
     inner.setup = None;
     inner.suspended = false;
@@ -676,66 +695,76 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 }
                 wake = u16::MAX;
             }
-            let rx0 = regs.control(0, false).read();
-            let setup = rx0 & (DONE | 8) == (DONE | 8);
-            if setup {
-                let mut bytes = [0; 8];
-                let length = regs.rx_length(0).read();
-                if let Some(config) = inner.endpoints[0].config {
-                    config.buffer.read(&mut bytes);
-                }
-                for incoming in [false, true] {
-                    let endpoint = &mut inner.endpoints[slot(0, incoming)];
-                    endpoint.invalidate();
-                    endpoint.enabled = true;
-                    regs.control(0, incoming).write_value(4);
-                }
-                inner.setup = if length == 8 { Some(bytes) } else { None };
-                if length != 8 {
-                    regs.control(0, true).write_value(STALL);
-                    regs.control(0, false).write_value(STALL);
-                }
-                wake |= 3;
-            }
-            for index in 0..ENDPOINTS {
-                if index == 0 && setup {
-                    continue;
-                }
-                for incoming in [false, true] {
-                    let control = if index == 0 && !incoming {
-                        rx0
-                    } else {
-                        regs.control(index, incoming).read()
-                    };
-                    if control & DONE == 0 {
-                        if control & 0x40 != 0 {
-                            regs.control(index, incoming).write_value((control & !0x40) | DONE);
-                        }
-                        continue;
-                    }
+            if flags & 0x10 != 0 {
+                // INT_ST identifies the transaction owning this DONE flag.
+                // Leave the handshake on every other endpoint untouched.
+                let transaction = T::REGS.usb_int_st().read().0;
+                let index = usize::from(transaction & 7);
+                let incoming = transaction & 0x10 != 0;
+                let ctrl = regs.control(index, incoming);
+                let control = ctrl.read();
+                if control & DONE != 0 {
                     let endpoint = &mut inner.endpoints[slot(index, incoming)];
-                    let isochronous = endpoint
-                        .config
-                        .is_some_and(|config| config.info.ep_type == EndpointType::Isochronous);
-                    if !endpoint.enabled || endpoint.stalled {
-                        regs.control(index, incoming)
-                            .write_value((control & 0x0c) | if endpoint.stalled { STALL } else { NAK });
-                        continue;
-                    }
-                    if incoming {
+                    if index == 0 && !incoming && control & 8 != 0 {
+                        let mut bytes = [0; 8];
+                        let length = regs.rx_length(0).read();
+                        if let Some(config) = inner.endpoints[0].config {
+                            config.buffer.read(&mut bytes);
+                        }
+                        for incoming in [false, true] {
+                            let endpoint = &mut inner.endpoints[slot(0, incoming)];
+                            endpoint.invalidate();
+                            endpoint.enabled = true;
+                            regs.control(0, incoming).write_value(4);
+                        }
+                        inner.setup = if length == 8 { Some(bytes) } else { None };
+                        if length != 8 {
+                            regs.control(0, true).write_value(STALL);
+                            regs.control(0, false).write_value(STALL);
+                        }
+                        wake |= 3;
+                    } else if !endpoint.enabled || endpoint.stalled {
+                        ctrl.modify(|value| {
+                            *value = (*value & !(DONE | 0x03)) | if endpoint.stalled { STALL } else { NAK };
+                        });
+                    } else if incoming {
+                        let iso = endpoint.config.unwrap().info.ep_type == EndpointType::Isochronous;
                         if endpoint.tx_busy {
                             endpoint.tx_busy = false;
                             endpoint.tx_done = true;
                         }
-                        regs.control(index, true)
-                            .write_value(if isochronous { 0 } else { (control ^ 4) & 0x0c });
-                    } else if control & 0x10 != 0 || isochronous {
-                        endpoint.rx_length = regs.rx_length(index).read();
-                        endpoint.rx_ready = true;
-                        regs.control(index, false)
-                            .write_value(if isochronous { 0 } else { (control ^ 4) & 0x0c });
+                        ctrl.write_value(if iso { 0 } else { (control ^ 4) & 0x0c });
                     } else {
-                        regs.control(index, false).write_value((control & 0x0c) | ACK);
+                        let config = endpoint.config.unwrap();
+                        let bulk = config.info.ep_type == EndpointType::Bulk;
+                        let iso = config.info.ep_type == EndpointType::Isochronous;
+                        if bulk {
+                            // Close reception before clearing DONE, so the single DMA
+                            // buffer cannot be reused between the two register writes.
+                            // DONE/NAK_ACT are write-zero-to-clear; preserve both while
+                            // changing only RES, then acknowledge DONE separately.
+                            ctrl.modify(|value| *value = (*value & !0x03) | NAK | PRESERVE_FLAGS);
+                            ctrl.modify(|value| *value &= !DONE);
+                            if control & 0x10 != 0 {
+                                let length = regs.rx_length(index).read();
+                                if endpoint.rx_ready || length > config.buffer.size {
+                                    endpoint.overflow = true;
+                                } else {
+                                    endpoint.rx_length = length;
+                                    endpoint.rx_ready = true;
+                                }
+                            } else if !endpoint.rx_ready && !endpoint.overflow {
+                                // Re-read CTRL after clearing DONE. Automatic TOG is
+                                // hardware-owned; only change the response field.
+                                ctrl.modify(|value| *value = (*value & !0x03) | ACK | PRESERVE_FLAGS);
+                            }
+                        } else if control & 0x10 != 0 || iso {
+                            endpoint.rx_length = regs.rx_length(index).read();
+                            endpoint.rx_ready = true;
+                            ctrl.write_value(if iso { NAK } else { ((control ^ 4) & 0x0c) | NAK });
+                        } else {
+                            ctrl.write_value((control & 0x0c) | ACK);
+                        }
                     }
                     wake |= 1 << slot(index, incoming);
                 }

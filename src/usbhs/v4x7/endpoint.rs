@@ -92,12 +92,15 @@ pub(super) async fn read_packet<T: Instance>(
                 endpoint.overflow = false;
                 return Poll::Ready(Err(EndpointError::BufferOverflow));
             }
+            let config = endpoint.config.unwrap();
+            let bulk = index > 0 && config.info.ep_type == embassy_usb_driver::EndpointType::Bulk;
             if !endpoint.rx_ready {
+                // Preserve hardware TOG and the write-zero-to-clear status flags.
+                // Only RES changes when the consumer re-arms the OUT endpoint.
                 regs.control(index, false)
-                    .modify(|value| *value = (*value & 0x0c) | ACK | PRESERVE_FLAGS);
+                    .modify(|value| *value = (*value & !0x03) | ACK | PRESERVE_FLAGS);
                 return Poll::Pending;
             }
-            let config = endpoint.config.unwrap();
             let length = usize::from(endpoint.rx_length);
             endpoint.rx_ready = false;
             let result = if length > buffer.len() || length > usize::from(config.buffer.size) {
@@ -106,9 +109,12 @@ pub(super) async fn read_packet<T: Instance>(
                 unsafe { config.buffer.read(&mut buffer[..length]) };
                 Ok(length)
             };
-            regs.control(index, false).modify(|value| {
-                *value = (*value & 0x0c) | if index == 0 { NAK } else { ACK } | PRESERVE_FLAGS;
-            });
+            // Bulk OUT stays at NAK until the consumer asks for another packet.
+            if !bulk {
+                regs.control(index, false).modify(|value| {
+                    *value = (*value & 0x0c) | if index == 0 { NAK } else { ACK } | PRESERVE_FLAGS;
+                });
+            }
             Poll::Ready(result)
         })
     })
