@@ -487,6 +487,6 @@ foreach_peripheral!(
 
 macro_rules! impl_dac_pin {
     ($inst:ident, $pin:ident, $ch:expr) => {
-        impl crate::dac::DacPin<peripherals::$inst, $ch> for crate::peripherals::$pin {}
+        impl crate::dac::DacPin<peripherals::$inst, $ch + 1> for crate::peripherals::$pin {}
     };
 }
