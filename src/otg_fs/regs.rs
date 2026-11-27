@@ -36,7 +36,6 @@ pub(crate) struct IntSt {
     pub token: UsbToken,
     pub ep: u8,
     /// `TOG_OK`: the received packet's data toggle matched the endpoint.
-    /// H4's register view has no such bit, so it always reads as `true`.
     pub tog_ok: bool,
 }
 
@@ -71,8 +70,20 @@ mod imp {
         regs.int_fg().write(|v| v.set_bus_rst(true));
     }
 
+    pub(crate) fn clear_fifo_ov(regs: Regs) {
+        regs.int_fg().write(|v| v.set_fifo_ov(true));
+    }
+
     pub(crate) fn clear_hst_sof(regs: Regs) {
         regs.int_fg().write(|v| v.set_hst_sof(true));
+    }
+
+    pub(crate) fn set_bus_rst_ie(regs: Regs, en: bool) {
+        critical_section::with(|_| regs.int_en().modify(|w| w.set_bus_rst(en)));
+    }
+
+    pub(crate) fn set_suspend_ie(regs: Regs, en: bool) {
+        critical_section::with(|_| regs.int_en().modify(|w| w.set_suspend(en)));
     }
 
     pub(crate) fn int_st(regs: Regs) -> IntSt {
@@ -148,18 +159,25 @@ mod imp {
     }
 
     pub(crate) fn ep_tx_ctrl_flip_tog(regs: Regs, ep: usize, res: EpTxResponse) {
-        regs.uep_tx_ctrl(ep).modify(|v| {
-            v.set_t_tog(!v.t_tog());
-            v.set_mask_t_res(res);
+        critical_section::with(|_| {
+            regs.uep_tx_ctrl(ep).modify(|v| {
+                v.set_t_tog(!v.t_tog());
+                v.set_mask_t_res(res);
+            });
         });
     }
 
     pub(crate) fn ep_tx_ctrl_set_res(regs: Regs, ep: usize, res: EpTxResponse) {
-        regs.uep_tx_ctrl(ep).modify(|v| v.set_mask_t_res(res));
+        critical_section::with(|_| {
+            regs.uep_tx_ctrl(ep).modify(|v| v.set_mask_t_res(res));
+        });
     }
 
+    #[allow(dead_code)]
     pub(crate) fn ep_tx_ctrl_set_tog(regs: Regs, ep: usize, tog: bool) {
-        regs.uep_tx_ctrl(ep).modify(|v| v.set_t_tog(tog));
+        critical_section::with(|_| {
+            regs.uep_tx_ctrl(ep).modify(|v| v.set_t_tog(tog));
+        });
     }
 
     pub(crate) fn ep_rx_ctrl_write(regs: Regs, ep: usize, tog: bool, res: EpRxResponse) {
@@ -170,18 +188,25 @@ mod imp {
     }
 
     pub(crate) fn ep_rx_ctrl_flip_tog(regs: Regs, ep: usize, res: EpRxResponse) {
-        regs.uep_rx_ctrl(ep).modify(|v| {
-            v.set_r_tog(!v.r_tog());
-            v.set_mask_r_res(res);
+        critical_section::with(|_| {
+            regs.uep_rx_ctrl(ep).modify(|v| {
+                v.set_r_tog(!v.r_tog());
+                v.set_mask_r_res(res);
+            });
         });
     }
 
     pub(crate) fn ep_rx_ctrl_set_res(regs: Regs, ep: usize, res: EpRxResponse) {
-        regs.uep_rx_ctrl(ep).modify(|v| v.set_mask_r_res(res));
+        critical_section::with(|_| {
+            regs.uep_rx_ctrl(ep).modify(|v| v.set_mask_r_res(res));
+        });
     }
 
+    #[allow(dead_code)]
     pub(crate) fn ep_rx_ctrl_set_tog(regs: Regs, ep: usize, tog: bool) {
-        regs.uep_rx_ctrl(ep).modify(|v| v.set_r_tog(tog));
+        critical_section::with(|_| {
+            regs.uep_rx_ctrl(ep).modify(|v| v.set_r_tog(tog));
+        });
     }
 
     // A mode register serves two endpoints, indexed in the order of its name:
@@ -207,7 +232,7 @@ mod imp {
     }
 
     pub(crate) fn ep_set_enabled(regs: Regs, ep: usize, dir: Direction, enabled: bool) {
-        match (ep, dir) {
+        critical_section::with(|_| match (ep, dir) {
             (4, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_tx_en(0, enabled)),
             (4, Direction::Out) => regs.uep4_1_mod().modify(|v| v.set_rx_en(0, enabled)),
             (1, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_tx_en(1, enabled)),
@@ -223,7 +248,7 @@ mod imp {
             (7, Direction::In) => regs.uep7_mod().modify(|v| v.set_tx_en(enabled)),
             (7, Direction::Out) => regs.uep7_mod().modify(|v| v.set_rx_en(enabled)),
             _ => panic!("setting non-existent endpoint"),
-        }
+        });
     }
 }
 
@@ -257,8 +282,20 @@ mod imp {
         regs.usb_int_fg().write(|v| v.set_uif_bus_rst(true));
     }
 
+    pub(crate) fn clear_fifo_ov(regs: Regs) {
+        regs.usb_int_fg().write(|v| v.set_uif_fifo_ov(true));
+    }
+
     pub(crate) fn clear_hst_sof(regs: Regs) {
         regs.usb_int_fg().write(|v| v.set_uif_hst_sof(true));
+    }
+
+    pub(crate) fn set_bus_rst_ie(regs: Regs, en: bool) {
+        critical_section::with(|_| regs.usb_int_en().modify(|w| w.set_uie_bus_rst(en)));
+    }
+
+    pub(crate) fn set_suspend_ie(regs: Regs, en: bool) {
+        critical_section::with(|_| regs.usb_int_en().modify(|w| w.set_uie_suspend(en)));
     }
 
     pub(crate) fn int_st(regs: Regs) -> IntSt {
@@ -266,8 +303,7 @@ mod imp {
         IntSt {
             token: v.mask_uis_token(),
             ep: v.mask_uis_endp(),
-            // H4's USBFS register view has no TOG_OK field.
-            tog_ok: true,
+            tog_ok: v.uis_tog_ok(),
         }
     }
 
@@ -335,18 +371,25 @@ mod imp {
     }
 
     pub(crate) fn ep_tx_ctrl_flip_tog(regs: Regs, ep: usize, res: EpTxResponse) {
-        regs.uep_tx_ctrl(ep).modify(|v| {
-            v.set_uep_t_tog(!v.uep_t_tog());
-            v.set_mask_uep_t_res(res);
+        critical_section::with(|_| {
+            regs.uep_tx_ctrl(ep).modify(|v| {
+                v.set_uep_t_tog(!v.uep_t_tog());
+                v.set_mask_uep_t_res(res);
+            });
         });
     }
 
     pub(crate) fn ep_tx_ctrl_set_res(regs: Regs, ep: usize, res: EpTxResponse) {
-        regs.uep_tx_ctrl(ep).modify(|v| v.set_mask_uep_t_res(res));
+        critical_section::with(|_| {
+            regs.uep_tx_ctrl(ep).modify(|v| v.set_mask_uep_t_res(res));
+        });
     }
 
+    #[allow(dead_code)]
     pub(crate) fn ep_tx_ctrl_set_tog(regs: Regs, ep: usize, tog: bool) {
-        regs.uep_tx_ctrl(ep).modify(|v| v.set_uep_t_tog(tog));
+        critical_section::with(|_| {
+            regs.uep_tx_ctrl(ep).modify(|v| v.set_uep_t_tog(tog));
+        });
     }
 
     pub(crate) fn ep_rx_ctrl_write(regs: Regs, ep: usize, tog: bool, res: EpRxResponse) {
@@ -357,18 +400,25 @@ mod imp {
     }
 
     pub(crate) fn ep_rx_ctrl_flip_tog(regs: Regs, ep: usize, res: EpRxResponse) {
-        regs.uep_rx_ctrl(ep).modify(|v| {
-            v.set_uep_r_tog(!v.uep_r_tog());
-            v.set_mask_uep_r_res(res);
+        critical_section::with(|_| {
+            regs.uep_rx_ctrl(ep).modify(|v| {
+                v.set_uep_r_tog(!v.uep_r_tog());
+                v.set_mask_uep_r_res(res);
+            });
         });
     }
 
     pub(crate) fn ep_rx_ctrl_set_res(regs: Regs, ep: usize, res: EpRxResponse) {
-        regs.uep_rx_ctrl(ep).modify(|v| v.set_mask_uep_r_res(res));
+        critical_section::with(|_| {
+            regs.uep_rx_ctrl(ep).modify(|v| v.set_mask_uep_r_res(res));
+        });
     }
 
+    #[allow(dead_code)]
     pub(crate) fn ep_rx_ctrl_set_tog(regs: Regs, ep: usize, tog: bool) {
-        regs.uep_rx_ctrl(ep).modify(|v| v.set_uep_r_tog(tog));
+        critical_section::with(|_| {
+            regs.uep_rx_ctrl(ep).modify(|v| v.set_uep_r_tog(tog));
+        });
     }
 
     pub(crate) fn ep_is_enabled(regs: Regs, ep: usize, dir: Direction) -> bool {
@@ -392,7 +442,7 @@ mod imp {
     }
 
     pub(crate) fn ep_set_enabled(regs: Regs, ep: usize, dir: Direction, enabled: bool) {
-        match (ep, dir) {
+        critical_section::with(|_| match (ep, dir) {
             (4, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_uep4_tx_en(enabled)),
             (4, Direction::Out) => regs.uep4_1_mod().modify(|v| v.set_uep4_rx_en(enabled)),
             (1, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_uep1_tx_en(enabled)),
@@ -408,7 +458,7 @@ mod imp {
             (7, Direction::In) => regs.uep7_mod().modify(|v| v.set_uep7_tx_en(enabled)),
             (7, Direction::Out) => regs.uep7_mod().modify(|v| v.set_uep7_rx_en(enabled)),
             _ => panic!("setting non-existent endpoint"),
-        }
+        });
     }
 }
 
@@ -445,8 +495,20 @@ mod imp {
         regs.int_fg().write(|v| v.set_bus_rst(true));
     }
 
+    pub(crate) fn clear_fifo_ov(regs: Regs) {
+        regs.int_fg().write(|v| v.set_fifo_ov(true));
+    }
+
     pub(crate) fn clear_hst_sof(regs: Regs) {
         regs.int_fg().write(|v| v.set_hst_sof(true));
+    }
+
+    pub(crate) fn set_bus_rst_ie(regs: Regs, en: bool) {
+        critical_section::with(|_| regs.int_en().modify(|w| w.set_bus_rst(en)));
+    }
+
+    pub(crate) fn set_suspend_ie(regs: Regs, en: bool) {
+        critical_section::with(|_| regs.int_en().modify(|w| w.set_suspend(en)));
     }
 
     pub(crate) fn int_st(regs: Regs) -> IntSt {
@@ -559,6 +621,7 @@ mod imp {
         modify_ep_ctrl(regs, ep, |v| v.set_t_res(res));
     }
 
+    #[allow(dead_code)]
     pub(crate) fn ep_tx_ctrl_set_tog(regs: Regs, ep: usize, tog: bool) {
         modify_ep_ctrl(regs, ep, |v| v.set_t_tog(tog));
     }
@@ -581,6 +644,7 @@ mod imp {
         modify_ep_ctrl(regs, ep, |v| v.set_r_res(res));
     }
 
+    #[allow(dead_code)]
     pub(crate) fn ep_rx_ctrl_set_tog(regs: Regs, ep: usize, tog: bool) {
         modify_ep_ctrl(regs, ep, |v| v.set_r_tog(tog));
     }
@@ -606,7 +670,7 @@ mod imp {
     }
 
     pub(crate) fn ep_set_enabled(regs: Regs, ep: usize, dir: Direction, enabled: bool) {
-        match (ep, dir) {
+        critical_section::with(|_| match (ep, dir) {
             (4, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_tx_en(0, enabled)),
             (4, Direction::Out) => regs.uep4_1_mod().modify(|v| v.set_rx_en(0, enabled)),
             (1, Direction::In) => regs.uep4_1_mod().modify(|v| v.set_tx_en(1, enabled)),
@@ -622,15 +686,15 @@ mod imp {
             (7, Direction::In) => regs.uep567_mod().modify(|v| v.set_tx_en(2, enabled)),
             (7, Direction::Out) => regs.uep567_mod().modify(|v| v.set_rx_en(2, enabled)),
             _ => panic!("setting non-existent endpoint"),
-        }
+        });
     }
 
     fn modify_ep_ctrl(regs: Regs, ep: usize, f: impl FnOnce(&mut UepCtrl)) {
-        match ep {
+        critical_section::with(|_| match ep {
             0..=4 => regs.uep01234_ctrl(ep).modify(f),
             5..=7 => regs.uep567_ctrl(ep - 5).modify(f),
             _ => panic!("unsupported USBFS endpoint"),
-        }
+        });
     }
 }
 
