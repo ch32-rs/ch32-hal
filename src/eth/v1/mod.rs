@@ -503,14 +503,15 @@ fn configure_mac_dma<T: Instance>(
         core::ptr::write_volatile(mac.add(0x110).cast::<u32>(), 1 << 21);
     }
 
-    // 4. Select SMI clock divider — div42 for HCLK 60-100MHz+
+    // 4. Select SMI clock divider — 0b000 divides by 58 on a CH32V307 (measured; the RM says 42),
+    // so MDC is 2.48 MHz at 144 MHz
     let hclk = crate::rcc::clocks().hclk.0;
     let clock_range: u8 = if hclk < 35_000_000 {
         0b010 // div16
     } else if hclk < 60_000_000 {
         0b011 // div26
     } else {
-        0b000 // div42
+        0b000 // div58
     };
     e.macmiiar().write(|w| w.set_cr(clock_range));
 
