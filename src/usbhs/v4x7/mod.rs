@@ -7,6 +7,9 @@
 //! DMA never accesses a caller's temporary read/write slice. Canceling an IN
 //! write may leave its owned packet queued until the host consumes it or the
 //! endpoint is disabled. A subsequent write drains that packet before reuse.
+//! Bulk OUT uses one pending packet per endpoint and stays at NAK until the
+//! consumer requests another packet. The DMA buffer is copied directly into
+//! the caller's read buffer; there is no additional IRQ copy or backup buffer.
 //!
 //! Configure the shared 480 MHz USBHS PLL through RCC before constructing the
 //! driver. Full speed is the default. High-speed descriptors and full-speed
@@ -64,14 +67,11 @@ const INTERRUPTS: u8 = 0xd7;
 #[non_exhaustive]
 pub struct Config {
     pub speed: Speed,
-    /// Copy each completed bulk OUT packet out of DMA memory in the IRQ.
-    /// Requires one extra max-packet-sized buffer per bulk OUT endpoint.
-    pub buffer_bulk_out: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { speed: Speed::Full, buffer_bulk_out: false }
+        Self { speed: Speed::Full }
     }
 }
 
@@ -100,19 +100,12 @@ impl Buffer {
         core::ptr::copy_nonoverlapping(source.as_ptr(), self.address as *mut u8, source.len());
         fence(Ordering::Release);
     }
-
-    unsafe fn copy_to(self, target: Buffer, length: usize) {
-        fence(Ordering::Acquire);
-        core::ptr::copy_nonoverlapping(self.address as *const u8, target.address as *mut u8, length);
-        fence(Ordering::Release);
-    }
 }
 
 #[derive(Clone, Copy)]
 struct EndpointConfig {
     info: EndpointInfo,
     buffer: Buffer,
-    backup: Option<Buffer>,
 }
 
 #[derive(Clone, Copy)]
@@ -311,12 +304,10 @@ impl<'d, T: Instance> Driver<'d, T> {
                         .is_none_or(|other| other.info.max_packet_size == max_packet_size)
             })
             .ok_or(EndpointAllocError)?;
-        let buffered = !IN && ep_type == EndpointType::Bulk && self.config.buffer_bulk_out;
         let start = (self.used + 3) & !3;
-        let allocation = usize::from(max_packet_size)
-            .checked_mul(1 + usize::from(buffered))
+        let end = start
+            .checked_add(usize::from(max_packet_size))
             .ok_or(EndpointAllocError)?;
-        let end = start.checked_add(allocation).ok_or(EndpointAllocError)?;
         if end > self.capacity {
             return Err(EndpointAllocError);
         }
@@ -333,10 +324,6 @@ impl<'d, T: Instance> Driver<'d, T> {
                 address: self.memory + start,
                 size: max_packet_size,
             },
-            backup: buffered.then(|| Buffer {
-                address: self.memory + start + usize::from(max_packet_size),
-                size: max_packet_size,
-            }),
         });
         self.used = end;
         Ok(Endpoint::new(info))
@@ -381,7 +368,6 @@ impl<'d, T: Instance> embassy_usb_driver::Driver<'d> for Driver<'d, T> {
                     address: self.memory,
                     size: 64,
                 },
-                backup: None,
             });
         }
         T::state().inner.lock(|inner| {
@@ -718,7 +704,6 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                 let ctrl = regs.control(index, incoming);
                 let control = ctrl.read();
                 if control & DONE != 0 {
-                    let toggle = control & 0x0c;
                     let endpoint = &mut inner.endpoints[slot(index, incoming)];
                     if index == 0 && !incoming && control & 8 != 0 {
                         let mut bytes = [0; 8];
@@ -739,7 +724,9 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                         }
                         wake |= 3;
                     } else if !endpoint.enabled || endpoint.stalled {
-                        ctrl.write_value(toggle | if endpoint.stalled { STALL } else { NAK });
+                        ctrl.modify(|value| {
+                            *value = (*value & !(DONE | 0x03)) | if endpoint.stalled { STALL } else { NAK };
+                        });
                     } else if incoming {
                         let iso = endpoint.config.unwrap().info.ep_type == EndpointType::Isochronous;
                         if endpoint.tx_busy {
@@ -752,29 +739,31 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
                         let bulk = config.info.ep_type == EndpointType::Bulk;
                         let iso = config.info.ep_type == EndpointType::Isochronous;
                         if bulk {
-                            // Close the single DMA buffer and acknowledge this DONE together.
-                            // A subsequent ACK is only issued after the bytes are safe.
-                            ctrl.write_value(toggle | NAK);
+                            // Close reception before clearing DONE, so the single DMA
+                            // buffer cannot be reused between the two register writes.
+                            // DONE/NAK_ACT are write-zero-to-clear; preserve both while
+                            // changing only RES, then acknowledge DONE separately.
+                            ctrl.modify(|value| *value = (*value & !0x03) | NAK | PRESERVE_FLAGS);
+                            ctrl.modify(|value| *value &= !DONE);
                             if control & 0x10 != 0 {
                                 let length = regs.rx_length(index).read();
                                 if endpoint.rx_ready || length > config.buffer.size {
                                     endpoint.overflow = true;
                                 } else {
-                                    if let Some(backup) = config.backup {
-                                        config.buffer.copy_to(backup, usize::from(length));
-                                    }
                                     endpoint.rx_length = length;
                                     endpoint.rx_ready = true;
                                 }
                             } else if !endpoint.rx_ready && !endpoint.overflow {
-                                ctrl.write_value(toggle | ACK | PRESERVE_FLAGS);
+                                // Re-read CTRL after clearing DONE. Automatic TOG is
+                                // hardware-owned; only change the response field.
+                                ctrl.modify(|value| *value = (*value & !0x03) | ACK | PRESERVE_FLAGS);
                             }
                         } else if control & 0x10 != 0 || iso {
                             endpoint.rx_length = regs.rx_length(index).read();
                             endpoint.rx_ready = true;
                             ctrl.write_value(if iso { NAK } else { ((control ^ 4) & 0x0c) | NAK });
                         } else {
-                            ctrl.write_value(toggle | ACK);
+                            ctrl.write_value((control & 0x0c) | ACK);
                         }
                     }
                     wake |= 1 << slot(index, incoming);

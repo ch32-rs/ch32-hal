@@ -95,8 +95,10 @@ pub(super) async fn read_packet<T: Instance>(
             let config = endpoint.config.unwrap();
             let bulk = index > 0 && config.info.ep_type == embassy_usb_driver::EndpointType::Bulk;
             if !endpoint.rx_ready {
+                // Preserve hardware TOG and the write-zero-to-clear status flags.
+                // Only RES changes when the consumer re-arms the OUT endpoint.
                 regs.control(index, false)
-                    .modify(|value| *value = (*value & 0x0c) | ACK | PRESERVE_FLAGS);
+                    .modify(|value| *value = (*value & !0x03) | ACK | PRESERVE_FLAGS);
                 return Poll::Pending;
             }
             let length = usize::from(endpoint.rx_length);
@@ -104,7 +106,7 @@ pub(super) async fn read_packet<T: Instance>(
             let result = if length > buffer.len() || length > usize::from(config.buffer.size) {
                 Err(EndpointError::BufferOverflow)
             } else {
-                unsafe { config.backup.unwrap_or(config.buffer).read(&mut buffer[..length]) };
+                unsafe { config.buffer.read(&mut buffer[..length]) };
                 Ok(length)
             };
             // Bulk OUT stays at NAK until the consumer asks for another packet.
