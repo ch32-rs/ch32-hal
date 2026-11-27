@@ -126,6 +126,9 @@ impl SystickDriver {
 }
 
 impl Driver for SystickDriver {
+    // Out of line: with LTO, the reciprocal multiply can otherwise be copied into
+    // `Instant::now()` call sites, about 80 bytes each on RV32.
+    #[inline(never)]
     fn now(&self) -> u64 {
         let cnt_per_tick = self.cnt_per_tick.load(Ordering::Relaxed) as u64;
         let reciprocal = u64::from(self.reciprocal[1].load(Ordering::Relaxed)) << 32
