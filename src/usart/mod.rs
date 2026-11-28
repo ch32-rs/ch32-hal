@@ -13,7 +13,7 @@ Multiple interrupt sources
 
 use core::future::poll_fn;
 use core::marker::PhantomData;
-use core::sync::atomic::{compiler_fence, AtomicU32, Ordering};
+use core::sync::atomic::{compiler_fence, AtomicBool, AtomicU32, Ordering};
 #[cfg(usart_v4x7)]
 use core::sync::atomic::AtomicUsize;
 use core::task::Poll;
@@ -42,56 +42,100 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
         let r = T::regs();
         let s = T::state();
 
-        let (sr, cr1, cr3) = (r.statr().read(), r.ctlr1().read(), r.ctlr3().read());
-
-        let has_errors = (sr.pe() && cr1.peie()) || ((sr.fe() || sr.ne() || sr.ore()) && cr3.eie());
-        if has_errors {
-            // Latch the receive error bits: this `STATR` read plus the DMA's
-            // `DATAR` read can clear them before the reader gets to poll, and
-            // the reader would then wait forever for a transfer that the
-            // disabled DMA request can no longer complete.
-            critical_section::with(|_| {
+        // One critical section from the first register read to the last write. The ring-buffered
+        // receiver and the transmitter change CTLR1 and CTLR3 in critical sections too: one that
+        // preempts this handler (from a higher-priority interrupt executor) must not have its
+        // change undone by a write based on what was read before it. It also keeps the idle
+        // branch's `STATR` and `DATAR` reads a few instructions apart, whatever the other
+        // interrupts do.
+        let wake = critical_section::with(|_| {
+            let (cr1, cr3) = (r.ctlr1().read(), r.ctlr3().read());
+            // Status last, just before it is acted on.
+            let sr = r.statr().read();
+            if (sr.pe() && cr1.peie()) || ((sr.fe() || sr.ne() || sr.ore()) && cr3.eie()) {
+                // Latch the receive error bits: this `STATR` read plus the DMA's
+                // `DATAR` read can clear them before the reader gets to poll, and
+                // the reader would then wait forever for a transfer that the
+                // disabled DMA request can no longer complete.
                 // PE/FE/NE/ORE are `STATR` bits 0..=3.
-                let error_bits = sr.0 & 0xf;
                 let latched = s.rx_errors.load(Ordering::Relaxed);
-                s.rx_errors.store(latched | error_bits, Ordering::Release);
-            });
+                s.rx_errors.store(latched | (sr.0 & 0xf), Ordering::Release);
 
-            // clear all interrupts and DMA Rx Request
-            r.ctlr1().modify(|w| {
-                // disable RXNE interrupt
-                w.set_rxneie(false);
-                // disable parity interrupt
-                w.set_peie(false);
-                // disable idle line interrupt
-                w.set_idleie(false);
-            });
-            r.ctlr3().modify(|w| {
-                // disable Error Interrupt: (Frame error, Noise error, Overrun error)
-                w.set_eie(false);
-                // disable DMA Rx Request
-                w.set_dmar(false);
-            });
-        } else if cr1.idleie() && sr.idle() {
-            // IDLE detected: no more data will come. Keep DMAR set: a
-            // one-shot read stops the DMA itself once it sees this flag, and
-            // the ring-buffered receiver must keep receiving across idle
-            // gaps, because an idle bus is not the end of the stream.
-            r.ctlr1().modify(|w| {
-                // disable idle line detection
-                w.set_idleie(false);
-            });
-        } else if cr1.tcie() && sr.tc() {
-            // Transmission complete detected
-            r.ctlr1().modify(|w| {
-                // disable Transmission complete interrupt
-                w.set_tcie(false);
-            });
-        } else if cr1.rxneie() {
-            // We cannot check the RXNE flag as it is auto-cleared by the DMA controller
+                // clear all interrupts and DMA Rx Request
+                r.ctlr1().modify(|w| {
+                    // disable RXNE interrupt
+                    w.set_rxneie(false);
+                    // disable parity interrupt
+                    w.set_peie(false);
+                    // disable idle line interrupt
+                    w.set_idleie(false);
+                });
+                r.ctlr3().modify(|w| {
+                    // disable Error Interrupt: (Frame error, Noise error, Overrun error)
+                    w.set_eie(false);
+                    // disable DMA Rx Request
+                    w.set_dmar(false);
+                });
+            } else if cr1.idleie() && sr.idle() {
+                // IDLE signals a gap in reception. Keep DMAR set: a one-shot
+                // read stops the DMA itself once it sees this, and the
+                // ring-buffered receiver must keep receiving across idle gaps,
+                // because an idle bus is not the end of the stream.
+                if s.ring_idle.load(Ordering::Relaxed) {
+                    // The `STATR` read above started the RM §17.10.1 clear
+                    // sequence. End it at once with a `DATAR` read, which also
+                    // clears IDLE: left started, it would be ended by the DMA's
+                    // read of the next byte, clearing that byte's error bits
+                    // before this handler sees them. RXNE was clear in that read,
+                    // so no byte was waiting. A byte that completes in the few
+                    // instructions between the two reads is either taken from the
+                    // DMA by this read, or, if the DMA reads it first, stored
+                    // without its error, which that read clears. A request the
+                    // channel still holds (the DMA busy with other channels) is
+                    // served after this read too, and copies what DATAR holds by
+                    // then. If RXNE was set, the DMA's read of that byte ends the
+                    // sequence, and that read showed no error. (A one-shot read
+                    // stops its DMA when its task handles the idle line, and clears
+                    // the flags itself before the next one.)
+                    if !sr.rxne() {
+                        let _ = r.datar().read();
+                    }
+                    // A ring-buffered receiver keeps the interrupt armed, so that
+                    // IDLE is cleared here at the idle line. Left set while its task
+                    // is away, IDLE would fire when the interrupt is armed again, in
+                    // the middle of the next burst, and the DATAR read above could
+                    // then take a byte from the DMA (seen on a CH32V203 at 2 Mbaud,
+                    // with a reader that waited between reads). With a byte still
+                    // waiting for the DMA (busy with other channels), IDLE stays set
+                    // until the DMA's read of it, and the interrupt would fire again
+                    // and again: disarmed then, and `read()` arms it again.
+                    let latched = s.rx_errors.load(Ordering::Relaxed);
+                    s.rx_errors.store(latched | IDLE_LATCHED, Ordering::Release);
+                    if sr.rxne() {
+                        r.ctlr1().modify(|w| w.set_idleie(false));
+                    }
+                } else {
+                    r.ctlr1().modify(|w| {
+                        // disable idle line detection
+                        w.set_idleie(false);
+                    });
+                }
+            } else if cr1.tcie() && sr.tc() {
+                // Transmission complete detected
+                r.ctlr1().modify(|w| {
+                    // disable Transmission complete interrupt
+                    w.set_tcie(false);
+                });
+            } else if cr1.rxneie() {
+                // We cannot check the RXNE flag as it is auto-cleared by the DMA controller
 
-            // It is up to the listener to determine if this in fact was a RX event and disable the RXNE detection
-        } else {
+                // It is up to the listener to determine if this in fact was a RX event and disable the RXNE detection
+            } else {
+                return false;
+            }
+            true
+        });
+        if !wake {
             return;
         }
 
@@ -312,14 +356,20 @@ impl<'d, T: Instance> UartTx<'d, T, Async> {
             return Err(Error::BufferTooLong);
         }
         let registers = T::regs();
-        let cleanup = OnDrop::new(move || registers.ctlr3().modify(|register| register.set_dmat(false)));
+        // CTLR1 and CTLR3 are shared with the receiver's interrupt handler: a read-modify-write
+        // here must not undo what the handler changed in between (DMAR and EIE after an error).
+        let cleanup = OnDrop::new(move || {
+            critical_section::with(|_| registers.ctlr3().modify(|register| register.set_dmat(false)))
+        });
         registers.statr().write(|register| {
             register.0 = u32::from(u16::MAX);
             register.set_tc(false);
         });
         let ch = self.tx_dma.as_mut().unwrap();
-        T::regs().ctlr3().modify(|reg| {
-            reg.set_dmat(true);
+        critical_section::with(|_| {
+            T::regs().ctlr3().modify(|reg| {
+                reg.set_dmat(true);
+            })
         });
         // If we don't assign future to a variable, the data register pointer
         // is held across an await and makes the future non-Send.
@@ -332,11 +382,16 @@ impl<'d, T: Instance> UartTx<'d, T, Async> {
     /// Wait until transmission complete
     pub async fn flush(&mut self) -> Result<(), Error> {
         let r = T::regs();
-        let cleanup = OnDrop::new(move || r.ctlr1().modify(|register| register.set_tcie(false)));
+        // CTLR1 is shared with the receiver's interrupt handler, which clears IDLEIE to report an
+        // idle line: a read-modify-write here must not set it again.
+        let cleanup =
+            OnDrop::new(move || critical_section::with(|_| r.ctlr1().modify(|register| register.set_tcie(false))));
         if r.ctlr1().read().te() && !r.statr().read().tc() {
-            r.ctlr1().modify(|w| {
-                // enable Transmission Complete interrupt
-                w.set_tcie(true);
+            critical_section::with(|_| {
+                r.ctlr1().modify(|w| {
+                    // enable Transmission Complete interrupt
+                    w.set_tcie(true);
+                })
             });
 
             compiler_fence(Ordering::SeqCst);
@@ -732,8 +787,11 @@ impl<'d, T: Instance> UartRx<'d, T, Blocking> {
 // ## Common part, Drop impl
 impl<'d, T: Instance, M: Mode> Drop for UartTx<'d, T, M> {
     fn drop(&mut self) {
+        // In a critical section, like the transmitter's and the ring-buffered receiver's other
+        // changes to CTLR1 and CTLR3: the interrupt handler may clear IDLEIE in between, to report
+        // an idle line to the receiver.
         #[cfg(usart_v4x7)]
-        {
+        critical_section::with(|_| {
             T::regs().ctlr1().modify(|register| {
                 register.set_te(false);
                 register.set_tcie(false);
@@ -742,7 +800,7 @@ impl<'d, T: Instance, M: Mode> Drop for UartTx<'d, T, M> {
                 register.set_dmat(false);
                 register.set_ctse(false);
             });
-        }
+        });
         self.tx.as_ref().map(|x| x.set_as_disconnected());
         self.cts.as_ref().map(|x| x.set_as_disconnected());
         disable_peripheral::<T>();
@@ -752,7 +810,7 @@ impl<'d, T: Instance, M: Mode> Drop for UartTx<'d, T, M> {
 impl<'d, T: Instance, M: Mode> Drop for UartRx<'d, T, M> {
     fn drop(&mut self) {
         #[cfg(usart_v4x7)]
-        {
+        critical_section::with(|_| {
             T::regs().ctlr1().modify(|register| {
                 register.set_re(false);
                 register.set_rxneie(false);
@@ -764,7 +822,7 @@ impl<'d, T: Instance, M: Mode> Drop for UartRx<'d, T, M> {
                 register.set_eie(false);
                 register.set_rtse(false);
             });
-        }
+        });
         self.rx.as_ref().map(|x| x.set_as_disconnected());
         self.rts.as_ref().map(|x| x.set_as_disconnected());
         disable_peripheral::<T>();
@@ -1084,6 +1142,10 @@ fn baudrate_divisor(clock_hz: u32, baudrate: u32) -> Result<u32, ConfigError> {
     Ok(divisor as u32)
 }
 
+/// An idle line the handler saw for a ring-buffered receiver, in `State::rx_errors` (STATR's
+/// IDLE bit, which `receive_error` ignores).
+const IDLE_LATCHED: u32 = 1 << 4;
+
 fn receive_error(status: pac::usart::regs::Statr) -> Option<Error> {
     if status.pe() {
         Some(Error::Parity)
@@ -1151,7 +1213,11 @@ struct State {
     tx_waker: AtomicWaker,
     /// PE/FE/NE/ORE bits the interrupt handler observed, latched for the
     /// reader because clearing them from the register races with the DMA.
+    /// Also `IDLE_LATCHED` for a ring-buffered receiver.
     rx_errors: AtomicU32,
+    /// Set while a ring-buffered receiver runs: it keeps the idle line interrupt
+    /// armed, and the handler latches idle lines instead of clearing `IDLEIE`.
+    ring_idle: AtomicBool,
 }
 
 impl State {
@@ -1162,6 +1228,7 @@ impl State {
             rx_waker: AtomicWaker::new(),
             tx_waker: AtomicWaker::new(),
             rx_errors: AtomicU32::new(0),
+            ring_idle: AtomicBool::new(false),
         }
     }
 }

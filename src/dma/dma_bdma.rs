@@ -278,77 +278,93 @@ impl AnyChannel {
     pub(crate) unsafe fn on_irq(&self) {
         let info = self.info();
         let state = &STATE[self.id as usize];
+        enum Irq {
+            Nothing,
+            Wake,
+            Error,
+        }
         match self.info().dma {
             DmaInfo::Dma(r) => {
-                // V1 calls the flag registers ISR/IFCR and the channel
-                // configuration CR; H4 calls them INTFR/INTFCR and CFGR. The
-                // bit positions are identical.
-                #[cfg(not(ch32h4))]
-                let (teif, htif, htie, tcif, tcie) = {
-                    let isr = r.isr().read();
-                    let cr = r.ch(info.num).cr().read();
-                    (
-                        isr.teif(info.num),
-                        isr.htif(info.num),
-                        cr.htie(),
-                        isr.tcif(info.num),
-                        cr.tcie(),
-                    )
-                };
-                #[cfg(ch32h4)]
-                let (teif, htif, htie, tcif, tcie) = {
-                    let isr = r.intfr().read();
-                    let cr = r.ch(info.num).cfgr().read();
-                    (
-                        isr.teif(info.num),
-                        isr.htif(info.num),
-                        cr.htie(),
-                        isr.tcif(info.num),
-                        cr.tcie(),
-                    )
-                };
-
-                if teif {
-                    if !state.soft_error.load(Ordering::Relaxed) {
-                        panic!("DMA: error on DMA@{:08x} channel {}", r.as_ptr() as u32, info.num);
-                    }
-                    // the hardware has cleared EN; the owner sees the error and restarts
+                // One critical section from the flag read to the count. `RingPositionReader::read`
+                // needs TCIF cleared and counted together. A ring buffer's `clear()`, from a task
+                // that preempts this handler (a higher-priority interrupt executor), would
+                // otherwise find a lap neither flagged nor counted, or clear a flag this handler had
+                // already read, and the lap counted afterwards would be one of the new data. A
+                // transfer error is acknowledged in it too, so that it is not reported against a
+                // transfer started in between.
+                let irq = critical_section::with(|_| {
+                    // V1 calls the flag registers ISR/IFCR and the channel
+                    // configuration CR; H4 calls them INTFR/INTFCR and CFGR. The
+                    // bit positions are identical.
                     #[cfg(not(ch32h4))]
-                    r.ifcr().write(|w| w.set_teif(info.num, true));
+                    let (teif, htif, htie, tcif, tcie) = {
+                        let isr = r.isr().read();
+                        let cr = r.ch(info.num).cr().read();
+                        (
+                            isr.teif(info.num),
+                            isr.htif(info.num),
+                            cr.htie(),
+                            isr.tcif(info.num),
+                            cr.tcie(),
+                        )
+                    };
                     #[cfg(ch32h4)]
-                    r.intfcr().write(|w| w.set_cteif(info.num, true));
-                    state.error.store(true, Ordering::Release);
-                    state.waker.wake();
-                    return;
-                }
+                    let (teif, htif, htie, tcif, tcie) = {
+                        let isr = r.intfr().read();
+                        let cr = r.ch(info.num).cfgr().read();
+                        (
+                            isr.teif(info.num),
+                            isr.htif(info.num),
+                            cr.htie(),
+                            isr.tcif(info.num),
+                            cr.tcie(),
+                        )
+                    };
 
-                let half = htif && htie;
-                let complete = tcif && tcie;
-                if half {
-                    // Acknowledge half transfer complete interrupt
-                    #[cfg(not(ch32h4))]
-                    r.ifcr().write(|w| w.set_htif(info.num, true));
-                    #[cfg(ch32h4)]
-                    r.intfcr().write(|w| w.set_chtif(info.num, true));
-                }
-                if complete {
-                    // Acknowledge and count in one critical section, so that
-                    // `CircularTransfer::position` (possibly in a higher priority interrupt)
-                    // never sees the flag cleared but the transfer not yet counted
-                    critical_section::with(|_| {
+                    if teif {
+                        if !state.soft_error.load(Ordering::Relaxed) {
+                            return Irq::Error;
+                        }
+                        // the hardware has cleared EN; the owner sees the error and restarts
                         #[cfg(not(ch32h4))]
-                        r.ifcr().write(|w| w.set_tcif(info.num, true));
+                        r.ifcr().write(|w| w.set_teif(info.num, true));
                         #[cfg(ch32h4)]
-                        r.intfcr().write(|w| w.set_ctcif(info.num, true));
+                        r.intfcr().write(|w| w.set_cteif(info.num, true));
+                        state.error.store(true, Ordering::Release);
+                        return Irq::Wake;
+                    }
+
+                    // Both flags in one entry: a ring buffer counts a lap only when this handler
+                    // sees TC, so TC must not wait for another entry behind HT.
+                    let half = htif && htie;
+                    let complete = tcif && tcie;
+                    if !(half || complete) {
+                        return Irq::Nothing;
+                    }
+                    #[cfg(not(ch32h4))]
+                    r.ifcr().write(|w| {
+                        w.set_htif(info.num, half);
+                        w.set_tcif(info.num, complete);
+                    });
+                    #[cfg(ch32h4)]
+                    r.intfcr().write(|w| {
+                        w.set_chtif(info.num, half);
+                        w.set_ctcif(info.num, complete);
+                    });
+                    if complete {
+                        // Wraps: `RingPositionReader` reads it free-running; a ring buffer takes
+                        // and clears it at each look.
                         let cnt = state.complete_count.load(Ordering::Acquire);
                         state.complete_count.store(cnt.wrapping_add(1), Ordering::Release);
-                    });
-                }
-                if !(half || complete) {
-                    return;
-                }
+                    }
+                    Irq::Wake
+                });
 
-                state.waker.wake();
+                match irq {
+                    Irq::Nothing => {}
+                    Irq::Wake => state.waker.wake(),
+                    Irq::Error => panic!("DMA: error on DMA@{:08x} channel {}", r.as_ptr() as u32, info.num),
+                }
             }
         }
     }
@@ -442,6 +458,25 @@ impl AnyChannel {
                     w.set_cteif(info.num, true);
                 });
             }
+        }
+    }
+
+    /// Whether the transfer-complete flag is set: its interrupt has not acknowledged it yet.
+    fn complete_pending(&self) -> bool {
+        let info = self.info();
+        match info.dma {
+            DmaInfo::Dma(r) => tcif(r, info.num),
+        }
+    }
+
+    /// Clear the transfer-complete flag.
+    fn clear_complete(&self) {
+        let info = self.info();
+        match info.dma {
+            #[cfg(not(ch32h4))]
+            DmaInfo::Dma(r) => r.ifcr().write(|w| w.set_tcif(info.num, true)),
+            #[cfg(ch32h4)]
+            DmaInfo::Dma(r) => r.intfcr().write(|w| w.set_ctcif(info.num, true)),
         }
     }
 
@@ -782,6 +817,13 @@ impl<'a> DmaCtrl for DmaCtrlImpl<'a> {
 
     fn reset_complete_count(&mut self) -> usize {
         let state = &STATE[self.0.id as usize];
+        // Only the interrupt adds to the count, and only the channel's owner clears it (here, or
+        // when it sets the channel up): read as 0, there is nothing to clear, and a lap the
+        // interrupt counts right after stays counted. That is the common case, and it skips the
+        // critical section, which emulates the swap on cores without atomic instructions.
+        if state.complete_count.load(Ordering::Acquire) == 0 {
+            return 0;
+        }
         critical_section::with(|_| {
             let old_val = state.complete_count.load(Ordering::Acquire);
             state.complete_count.store(0, Ordering::Release);
@@ -792,9 +834,23 @@ impl<'a> DmaCtrl for DmaCtrlImpl<'a> {
     fn set_waker(&mut self, waker: &Waker) {
         STATE[self.0.id as usize].waker.register(waker);
     }
+
+    fn complete_pending(&self) -> bool {
+        self.0.complete_pending()
+    }
+
+    fn clear_complete(&mut self) {
+        self.0.clear_complete()
+    }
 }
 
 /// Ringbuffer for receiving data using DMA circular mode.
+///
+/// Laps are counted by the channel's transfer-complete interrupt, which has to run once for every
+/// lap: use the buffer from code that interrupt can preempt, do not hold it off (critical section,
+/// higher-priority interrupt) across the end of a lap and the next read, and make the buffer long
+/// enough that a lap lasts longer than that interrupt takes to run. Otherwise a lap can go
+/// uncounted and the buffer can return data the DMA has overwritten.
 pub struct ReadableRingBuffer<'a, W: Word> {
     channel: Peri<'a, AnyChannel>,
     ringbuf: ReadableDmaRingBuffer<'a, W>,
@@ -866,6 +922,8 @@ impl<'a, W: Word> ReadableRingBuffer<'a, W> {
     /// If not all of the elements were read, then there will be some elements in the buffer remaining
     /// The length remaining is the capacity, ring_buf.len(), less the elements remaining after the read
     /// OverrunError is returned if the portion to be read was overwritten by the DMA controller.
+    ///
+    /// See the type's documentation for what the channel's interrupt needs.
     pub fn read(&mut self, buf: &mut [W]) -> Result<(usize, usize), OverrunError> {
         self.ringbuf.read(&mut DmaCtrlImpl(self.channel.reborrow()), buf)
     }
@@ -881,6 +939,8 @@ impl<'a, W: Word> ReadableRingBuffer<'a, W> {
     /// ring buffer was created with a buffer of size 'N':
     /// - If M equals N/2 or N/2 divides evenly into M, this function will return every N/2 elements read on the DMA source.
     /// - Otherwise, this function may need up to N/2 extra elements to arrive before returning.
+    ///
+    /// See the type's documentation for what the channel's interrupt needs.
     pub async fn read_exact(&mut self, buffer: &mut [W]) -> Result<usize, OverrunError> {
         self.ringbuf
             .read_exact(&mut DmaCtrlImpl(self.channel.reborrow()), buffer)

@@ -53,11 +53,31 @@ impl AnyChannel {
 
     pub(crate) unsafe fn on_irq(&self) {
         let info = self.info();
-        let flags = info.flags();
-        let config = info.regs().cfgr().read();
-        if flags & 8 != 0 && config.teie() {
+        let state = &STATE[self.id as usize];
+        // The flags are read, cleared and counted in one critical section (see the bdma handler).
+        let (error, half, complete) = critical_section::with(|_| {
+            let flags = info.flags();
+            let config = info.regs().cfgr().read();
+            if flags & 8 != 0 && config.teie() {
+                return (true, false, false);
+            }
+            let half = flags & 4 != 0 && config.htie();
+            let complete = flags & 2 != 0 && config.tcie();
+            if half || complete {
+                info.clear_flags(if half { 4 } else { 0 } | if complete { 2 } else { 0 });
+            }
+            if complete {
+                let count = state.complete_count.load(Ordering::Acquire);
+                state.complete_count.store(count.wrapping_add(1), Ordering::Release);
+                if state.stop_at_complete.load(Ordering::Acquire) {
+                    state.stop_at_complete.store(false, Ordering::Release);
+                    self.request_stop();
+                }
+            }
+            (false, half, complete)
+        });
+        if error {
             self.request_stop();
-            let state = &STATE[self.id as usize];
             if state.report_error.load(Ordering::Acquire) {
                 state.transfer_error.store(true, Ordering::Release);
                 state.waker.wake();
@@ -65,22 +85,8 @@ impl AnyChannel {
             }
             panic!("DMA: transfer error on channel {}", self.id);
         }
-        let half = flags & 4 != 0 && config.htie();
-        let complete = flags & 2 != 0 && config.tcie();
         if !half && !complete {
             return;
-        }
-        info.clear_flags(if half { 4 } else { 0 } | if complete { 2 } else { 0 });
-        let state = &STATE[self.id as usize];
-        if complete {
-            critical_section::with(|_| {
-                let count = state.complete_count.load(Ordering::Acquire);
-                state.complete_count.store(count.wrapping_add(1), Ordering::Release);
-                if state.stop_at_complete.load(Ordering::Acquire) {
-                    state.stop_at_complete.store(false, Ordering::Release);
-                    self.request_stop();
-                }
-            });
         }
         state.waker.wake();
     }
@@ -143,6 +149,16 @@ impl AnyChannel {
         info.regs().cfgr().write(|register| register.set_en(false));
         while info.regs().cfgr().read().en() {}
         info.clear_flags(0xf);
+    }
+
+    /// Whether the transfer-complete flag is set: its interrupt has not acknowledged it yet.
+    pub(super) fn complete_pending(&self) -> bool {
+        self.info().flags() & 2 != 0
+    }
+
+    /// Clear the transfer-complete flag.
+    pub(super) fn clear_complete(&self) {
+        self.info().clear_flags(2);
     }
 
     /// Clear only EN: the configuration stays, so `start` resumes the channel.
