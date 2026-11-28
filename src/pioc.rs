@@ -3,7 +3,7 @@
 //! A small 8-bit core that runs firmware out of a 4 KiB program SRAM and
 //! talks to the host through 32 shared bytes (`d0..d31`) plus two host
 //! registers: `CTRL_WR` starts a command, `CTRL_RD` returns the firmware
-//! status byte and acknowledges the interrupt. This driver is the host side
+//! status byte. This driver is the host side
 //! only; the firmware image, its command set and the payload layout are the
 //! application's business and live in a protocol crate.
 //!
@@ -15,7 +15,8 @@
 //! 3. Shared registers or program SRAM carry the payload, then writing
 //!    `CTRL_WR` starts one operation.
 //! 4. The firmware raises `SYS_CFG.INT_REQ` when it is done; reading
-//!    `CTRL_RD` returns the status and clears the request.
+//!    `CTRL_RD` returns the status, and a write to `CTRL_RD` (data ignored)
+//!    clears the request. The read alone does **not** clear it.
 //!
 //! `SYS_CFG` mixes control and status bits (`INT_REQ`, `DATA_MW_SR`,
 //! `DATA_SW_MR`), so it is always written as a whole byte. A read-modify-write
@@ -24,8 +25,9 @@
 //! # Interrupt
 //!
 //! With the `embassy` feature the module owns the `PIOC` interrupt and wakes
-//! the waiting task; the handler reads `CTRL_RD` because that read is the
-//! acknowledge. The transfer methods are also available without Embassy:
+//! the waiting task; the handler reads the status from `CTRL_RD` and then
+//! writes it to clear the request. The transfer methods are also available
+//! without Embassy:
 //! [`Pioc::write_data`], [`Pioc::start_command`] and [`Pioc::wait_blocking`]
 //! form the synchronous command path.
 //!
@@ -191,9 +193,9 @@ impl<'d, T: Instance> Pioc<'d, T> {
         };
 
         driver.write_sys_cfg();
-        // A previous owner may have left a request pending; the read is the
-        // only way to clear it.
-        let _ = T::regs().ctrl_rd().read();
+        // A previous owner may have left a request pending; a write to
+        // `CTRL_RD` is the only way to clear it.
+        T::regs().ctrl_rd().write(|w| *w = 0);
 
         #[cfg(feature = "embassy")]
         irq::init();
@@ -251,7 +253,7 @@ impl<'d, T: Instance> Pioc<'d, T> {
                     return Some(status);
                 }
                 if T::regs().sys_cfg().read().int_req() {
-                    return Some(T::regs().ctrl_rd().read());
+                    return Some(self.read_status());
                 }
                 None
             })
@@ -259,7 +261,7 @@ impl<'d, T: Instance> Pioc<'d, T> {
         #[cfg(not(feature = "embassy"))]
         {
             if T::regs().sys_cfg().read().int_req() {
-                Some(T::regs().ctrl_rd().read())
+                Some(self.read_status())
             } else {
                 None
             }
@@ -384,11 +386,22 @@ impl<'d, T: Instance> Pioc<'d, T> {
         Ok(())
     }
 
+    /// Read the status byte and acknowledge the request.
+    ///
+    /// Reading `CTRL_RD` returns the status and clears `DATA_SW_MR`, but it
+    /// does **not** clear `INT_REQ` on silicon. Only a write to `CTRL_RD`
+    /// (data ignored) clears the request, so the write has to follow every
+    /// read; skipping it makes the interrupt fire again immediately.
+    fn read_status(&self) -> u8 {
+        let status = T::regs().ctrl_rd().read();
+        T::regs().ctrl_rd().write(|w| *w = 0);
+        status
+    }
+
     /// Acknowledge a completion left behind by a cancelled or unclaimed wait.
     fn acknowledge_pending(&self) {
         if T::regs().sys_cfg().read().int_req() {
-            // Reading `CTRL_RD` is the acknowledge.
-            let _ = T::regs().ctrl_rd().read();
+            self.read_status();
         }
     }
 
@@ -486,8 +499,10 @@ impl<'d, T: Instance> pioc_programs::CommandPort for Pioc<'d, T> {
                     return Poll::Ready(Ok(status));
                 }
                 if T::regs().sys_cfg().read().int_req() {
-                    // Reading `CTRL_RD` is the acknowledge.
-                    return Poll::Ready(Ok(T::regs().ctrl_rd().read()));
+                    // The write in `read_status` is the acknowledge; it runs
+                    // under the lock so the handler cannot acknowledge the
+                    // same request a second time in between.
+                    return Poll::Ready(Ok(self.read_status()));
                 }
                 state.waker = Some(cx.waker().clone());
                 Poll::Pending
@@ -534,9 +549,11 @@ mod irq {
         if !pac::PIOC.sys_cfg().read().int_req() {
             return;
         }
-        // Reading `CTRL_RD` returns the status and clears `INT_REQ`: the read
-        // is the acknowledge, so it has to happen here and not in the future.
+        // Reading `CTRL_RD` returns the status but does not clear `INT_REQ`;
+        // the write after the read is the acknowledge, so both have to happen
+        // here and not in the future.
         let status = pac::PIOC.ctrl_rd().read();
+        pac::PIOC.ctrl_rd().write(|w| *w = 0);
         let waker = STATE.lock(|state| {
             let mut state = state.borrow_mut();
             state.status = Some(status);
