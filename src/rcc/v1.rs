@@ -358,6 +358,7 @@ impl ops::Div<AHBPrescaler> for Hertz {
             AHBPrescaler::DIV128 => Hertz(self.0 >> 7),
             AHBPrescaler::DIV256 => Hertz(self.0 >> 8),
             AHBPrescaler::DIV512 => Hertz(self.0 >> 9),
+            _ => self,
         }
     }
 }
