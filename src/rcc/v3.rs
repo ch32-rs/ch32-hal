@@ -113,7 +113,7 @@ impl Config {
             pll_src: PllSource::HSE,
             pll: Some(Pll {
                 prediv: PllPreDiv::DIV1,
-                mul: PllMul::MUL6,
+                mul: PllMul::MUL12,
             }),
 
             pllx: None,
