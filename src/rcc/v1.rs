@@ -348,14 +348,16 @@ impl ops::Mul<PllMul> for Hertz {
 impl ops::Div<AHBPrescaler> for Hertz {
     type Output = Hertz;
     fn div(self, rhs: AHBPrescaler) -> Hertz {
-        let raw = rhs as u32;
-        if raw >= 0b1000 {
-            // 2, 4, 8
-            let d = raw - 0b1000 + 1;
-            Hertz(self.0 >> d)
-        } else {
-            // DIV1
-            self
+        match rhs {
+            AHBPrescaler::DIV1 => self,
+            AHBPrescaler::DIV2 => Hertz(self.0 >> 1),
+            AHBPrescaler::DIV4 => Hertz(self.0 >> 2),
+            AHBPrescaler::DIV8 => Hertz(self.0 >> 3),
+            AHBPrescaler::DIV16 => Hertz(self.0 >> 4),
+            AHBPrescaler::DIV64 => Hertz(self.0 >> 6),
+            AHBPrescaler::DIV128 => Hertz(self.0 >> 7),
+            AHBPrescaler::DIV256 => Hertz(self.0 >> 8),
+            AHBPrescaler::DIV512 => Hertz(self.0 >> 9),
         }
     }
 }
