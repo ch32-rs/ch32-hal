@@ -68,6 +68,7 @@ fn main() {
             "03" => Some(""),  // General purpose
             "05" => Some("C"), // Connectivity
             "07" => Some("C"), // Interconnectivity
+            "17" => Some("C"), // Interconnectivity
             "08" => Some("W"), // Wireless
             _ => None,         // 35: Connectivity of USBPD
         };

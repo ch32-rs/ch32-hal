@@ -66,6 +66,9 @@ fn chip_id_to_name(id: u32) -> &'static str {
     // CH32V307FBP6-0x307205x8
     // CH32V307RCT6-0x307105x8
     // CH32V307VCT6-0x307005x8
+    // CH32V317VCT6-0x3170B5X8
+    // CH32V317WCU6-0x3173B5X8
+    // CH32V317TCU6-0x3175B5X8
 
     // CH32V203C8U6-0x203005x0
     // CH32V203C8T6-0x203105x0
@@ -160,6 +163,9 @@ fn chip_id_to_name(id: u32) -> &'static str {
         0x3072 => "CH32V307FBP6",
         0x3071 => "CH32V307RCT6",
         0x3070 => "CH32V307VCT6",
+        0x3170 => "CH32V317VCT6",
+        0x3173 => "CH32V317WCU6",
+        0x3175 => "CH32V317TCU6",
 
         0x2030 => "CH32V203C8U6",
         0x2031 => "CH32V203C8T6",

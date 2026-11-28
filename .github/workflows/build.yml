@@ -30,6 +30,7 @@ jobs:
           - ch32v303cbt6
           - ch32v305fbp6
           - ch32v307vct6
+          - ch32v317vct6
           - ch32x035f7p6
           - ch641
           - ch643
@@ -53,6 +54,8 @@ jobs:
           - chip: ch32v305fbp6
             target: riscv32imc-unknown-none-elf
           - chip: ch32v307vct6
+            target: riscv32imc-unknown-none-elf
+          - chip: ch32v317vct6
             target: riscv32imc-unknown-none-elf
           - chip: ch32x035f7p6
             target: riscv32imc-unknown-none-elf
@@ -93,6 +96,7 @@ jobs:
           - ch32v208
           - ch32v305
           - ch32v307
+          - ch32v317
           - ch32x035
           - ch641
           - ch643
